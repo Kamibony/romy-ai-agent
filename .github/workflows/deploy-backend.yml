@@ -1,0 +1,50 @@
+name: Deploy Backend to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./backend
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # TODO: Configure Google Cloud Authentication (Workload Identity Federation)
+      # - id: 'auth'
+      #   name: 'Authenticate to Google Cloud'
+      #   uses: 'google-github-actions/auth@v2'
+      #   with:
+      #     workload_identity_provider: 'projects/123456789/locations/global/workloadIdentityPools/my-pool/providers/my-provider'
+      #     service_account: 'my-service-account@my-project.iam.gserviceaccount.com'
+
+      # TODO: Configure Docker to authenticate with Google Artifact Registry
+      # - name: 'Docker Auth'
+      #   run: |-
+      #     gcloud auth configure-docker REGION-docker.pkg.dev
+
+      # TODO: Build and Push Docker Image to Google Artifact Registry
+      # - name: Build and Push Container
+      #   run: |-
+      #     docker build -t REGION-docker.pkg.dev/PROJECT_ID/REPOSITORY/IMAGE:TAG .
+      #     docker push REGION-docker.pkg.dev/PROJECT_ID/REPOSITORY/IMAGE:TAG
+
+      # TODO: Deploy to Google Cloud Run
+      # - name: Deploy to Cloud Run
+      #   id: deploy
+      #   uses: google-github-actions/deploy-cloudrun@v2
+      #   with:
+      #     service: backend-service
+      #     region: REGION
+      #     image: REGION-docker.pkg.dev/PROJECT_ID/REPOSITORY/IMAGE:TAG
+      #     env_vars: |-
+      #       FIREBASE_CREDENTIALS_JSON=${{ secrets.FIREBASE_CREDENTIALS_JSON }}

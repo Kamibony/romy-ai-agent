@@ -21,9 +21,7 @@ def verify_firebase_token(credentials: HTTPAuthorizationCredentials = Depends(se
     token = credentials.credentials
 
     try:
-        # Verify the ID token while checking if the token is revoked by
-        # passing check_revoked=True.
-        decoded_token = auth.verify_id_token(token, app=firebase_app, check_revoked=True)
+        decoded_token = auth.verify_id_token(token)
         uid: str = decoded_token.get("uid")
 
         if not uid:
@@ -34,26 +32,7 @@ def verify_firebase_token(credentials: HTTPAuthorizationCredentials = Depends(se
             )
 
         return uid
-    except auth.RevokedIdTokenError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has been revoked",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    except auth.ExpiredIdTokenError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    except auth.InvalidIdTokenError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
     except Exception as e:
-        # Catch any other generic exceptions from firebase_admin or elsewhere
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Token verification failed: {str(e)}",
