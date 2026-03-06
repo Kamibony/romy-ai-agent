@@ -1,9 +1,14 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from auth import verify_firebase_token
 from db import check_user_license
 from pydantic import BaseModel
 from typing import Optional
+
+class AgentCommandRequest(BaseModel):
+    image_base64: str
+    audio_base64: str
 
 app = FastAPI(title="ROMY AI Agent Backend")
 
