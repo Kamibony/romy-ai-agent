@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from .auth import verify_firebase_token
-from .db import check_user_license
+from auth import verify_firebase_token
+from db import check_user_license
 
 app = FastAPI(title="ROMY AI Agent Backend")
 
