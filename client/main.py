@@ -1,15 +1,29 @@
 import threading
+import sys
 from tray_manager import run_tray_icon
 from hotkey_manager import start_hotkey_listener
+from auth_window import login_window
+from agent import set_firebase_token
 
 def main() -> None:
     """
     Main entry point for the local client application.
-    Starts the hotkey listener in a daemon thread and then
-    runs the system tray icon on the main thread.
+    Shows the login window, then starts the hotkey listener
+    in a daemon thread and runs the system tray icon on the main thread.
     """
     try:
         print("Starting B2B AI Agent MVP Client...")
+
+        # Show login window and get token
+        token = login_window()
+        if not token:
+            print("Login failed or window closed. Exiting...")
+            sys.exit(0)
+
+        # Set the token for the agent
+        set_firebase_token(token)
+
+        print("Login successful. Starting background tasks...")
 
         # Start the hotkey listener in a daemon thread so it doesn't
         # block the main thread and will automatically exit when the

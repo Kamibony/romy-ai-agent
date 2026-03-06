@@ -3,18 +3,20 @@ import io
 import time
 import os
 import requests
-from dotenv import load_dotenv
 
 import mss
 import mss.tools
 import sounddevice as sd
 from scipy.io.wavfile import write as wav_write
 
-load_dotenv()
-
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000/api/v1/agent/command")
-# For MVP, user token might be stored in environment or file
-FIREBASE_TOKEN = os.environ.get("FIREBASE_TOKEN", "DUMMY_TOKEN_FOR_NOW")
+
+CURRENT_TOKEN = None
+
+def set_firebase_token(token: str) -> None:
+    """Sets the global Firebase token."""
+    global CURRENT_TOKEN
+    CURRENT_TOKEN = token
 
 
 def capture_screen() -> str:
@@ -70,6 +72,10 @@ def activate_agent() -> None:
     Activates the agent. Captures initial audio command, then enters the
     Agentic Loop, sending screen and audio data to the backend until DONE.
     """
+    if not CURRENT_TOKEN:
+        print("Error: Missing Firebase Token. Please log in first.")
+        return
+
     try:
         print("=== Agent Activated: Ready for commands ===")
 
@@ -93,7 +99,7 @@ def activate_agent() -> None:
 
             # 5. Send POST to backend
             headers = {
-                "Authorization": f"Bearer {FIREBASE_TOKEN}",
+                "Authorization": f"Bearer {CURRENT_TOKEN}",
                 "Content-Type": "application/json"
             }
 
