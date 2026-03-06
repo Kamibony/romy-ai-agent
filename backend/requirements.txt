@@ -3,3 +3,5 @@ uvicorn
 firebase-admin
 pydantic
 python-dotenv
+google-genai
+anthropic

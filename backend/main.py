@@ -1,14 +1,11 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from auth import verify_firebase_token
-from db import check_user_license
-from pydantic import BaseModel
 from typing import Optional
 
-class AgentCommandRequest(BaseModel):
-    image_base64: str
-    audio_base64: str
+from auth import verify_firebase_token
+from db import check_user_license
+from ai_service import process_with_gemini, get_action_from_claude
 
 app = FastAPI(title="ROMY AI Agent Backend")
 
@@ -47,4 +44,23 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
     print(f"Received image length: {image_len}")
     print(f"Received audio length: {audio_len}")
 
-    return {"status": "success", "action": "DONE"}
+    try:
+        context_text = process_with_gemini(
+            image_b64=request.image_base64,
+            audio_b64=request.audio_base64
+        )
+        print(f"Gemini context: {context_text}")
+
+        action_dict = get_action_from_claude(
+            image_b64=request.image_base64,
+            context_text=context_text
+        )
+        print(f"Claude action: {action_dict}")
+
+        # Ensure 'status' is returned alongside 'action'
+        result = {"status": "success"}
+        result.update(action_dict)
+        return result
+    except Exception as e:
+        print(f"Error in AI pipeline: {e}")
+        return {"status": "error", "action": "DONE"}
