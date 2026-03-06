@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ROMY Control Room & Sandbox</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        // Simple scripts to provide visual feedback for clicks
+        function logAction(actionName) {
+            const logArea = document.getElementById('action-log');
+            const time = new Date().toLocaleTimeString();
+            logArea.innerHTML = `<p class="text-sm text-green-600">[${time}] Action executed: <strong>${actionName}</strong></p>` + logArea.innerHTML;
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('login-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const email = document.getElementById('email').value;
+                logAction(`Login attempted for ${email}`);
+            });
+
+            document.getElementById('delete-btn').addEventListener('click', () => {
+                logAction('Delete Record clicked');
+            });
+
+            document.getElementById('approve-btn').addEventListener('click', () => {
+                logAction('Approve Request clicked');
+            });
+
+             document.getElementById('terms-checkbox').addEventListener('change', (e) => {
+                logAction(`Terms accepted: ${e.target.checked}`);
+            });
+        });
+    </script>
+</head>
+<body class="bg-gray-100 font-sans leading-normal tracking-normal text-gray-800">
+
+    <!-- Navigation -->
+    <nav class="bg-indigo-900 text-white shadow-md mb-8">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center">
+                    <span class="font-bold text-xl tracking-wide">ROMY Control Room & Sandbox</span>
+                </div>
+                <div>
+                    <a href="index.html" class="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Back to Home</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 md:grid-cols-3 gap-8 pb-12">
+
+        <!-- Left Column: Forms -->
+        <div class="md:col-span-2 space-y-8">
+
+            <!-- Login Form Mockup -->
+            <section class="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+                <h2 class="text-2xl font-semibold mb-4 text-gray-800 border-b pb-2">System Authentication</h2>
+                <form id="login-form" class="space-y-4">
+                    <div>
+                        <label for="email" class="block text-sm font-medium text-gray-700">Email address</label>
+                        <input type="email" id="email" name="email" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2" placeholder="admin@example.com">
+                    </div>
+                    <div>
+                        <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+                        <input type="password" id="password" name="password" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2" placeholder="••••••••">
+                    </div>
+                    <div class="flex items-center">
+                        <input id="remember-me" name="remember-me" type="checkbox" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                        <label for="remember-me" class="ml-2 block text-sm text-gray-900">
+                            Remember me
+                        </label>
+                    </div>
+                    <div>
+                        <button type="submit" id="login-submit" class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                            Sign in
+                        </button>
+                    </div>
+                </form>
+            </section>
+
+            <!-- Action Buttons Mockup -->
+            <section class="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+                <h2 class="text-2xl font-semibold mb-4 text-gray-800 border-b pb-2">Record Management</h2>
+                <div class="flex flex-col sm:flex-row gap-4 items-center justify-center p-4">
+
+                    <button id="approve-btn" class="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 w-full sm:w-auto">
+                        <!-- Heroicon name: solid/check-circle -->
+                        <svg class="-ml-1 mr-3 h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+                        </svg>
+                        Approve Request
+                    </button>
+
+                    <button id="delete-btn" class="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 w-full sm:w-auto">
+                        <!-- Heroicon name: solid/trash -->
+                        <svg class="-ml-1 mr-3 h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
+                        </svg>
+                        Delete Record
+                    </button>
+
+                </div>
+            </section>
+
+             <!-- Settings Mockup -->
+            <section class="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+                 <h2 class="text-2xl font-semibold mb-4 text-gray-800 border-b pb-2">Preferences</h2>
+                 <div class="space-y-4">
+                     <div class="flex items-start">
+                        <div class="flex items-center h-5">
+                            <input id="terms-checkbox" name="terms" type="checkbox" class="focus:ring-indigo-500 h-4 w-4 text-indigo-600 border-gray-300 rounded">
+                        </div>
+                        <div class="ml-3 text-sm">
+                            <label for="terms-checkbox" class="font-medium text-gray-700">Accept Terms and Conditions</label>
+                            <p class="text-gray-500">You must accept the terms to proceed with operations.</p>
+                        </div>
+                    </div>
+                 </div>
+            </section>
+
+        </div>
+
+        <!-- Right Column: Log/Feedback -->
+        <div class="md:col-span-1">
+            <div class="bg-gray-800 rounded-lg shadow-md p-6 text-gray-200 sticky top-4 h-96 flex flex-col">
+                <h3 class="text-lg font-medium text-white border-b border-gray-600 pb-2 mb-4">Action Log</h3>
+                <div id="action-log" class="flex-1 overflow-y-auto font-mono text-sm space-y-2">
+                    <p class="text-gray-400 italic">Waiting for interactions...</p>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+</body>
+</html>
