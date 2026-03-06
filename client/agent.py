@@ -8,6 +8,9 @@ import mss
 import mss.tools
 import sounddevice as sd
 from scipy.io.wavfile import write as wav_write
+import pyautogui
+
+pyautogui.FAILSAFE = False
 
 BACKEND_URL = os.environ.get("BACKEND_URL", "https://romy-backend-1049976869239.europe-west1.run.app/api/v1/agent/command")
 
@@ -110,11 +113,22 @@ def activate_agent() -> None:
                 data = response.json()
 
                 # 6. Check response
-                if data.get("action") == "DONE":
+                action = data.get("action")
+                if action == "DONE":
                     print("Task finished.")
                     break
+                elif action == "click" and "x" in data and "y" in data:
+                    try:
+                        x = int(data["x"])
+                        y = int(data["y"])
+                        print(f"Moving mouse to ({x}, {y}) and clicking...")
+                        pyautogui.moveTo(x, y, duration=0.5)
+                        pyautogui.click()
+                        print(f"Successfully clicked at ({x}, {y}).")
+                    except ValueError:
+                        print(f"Invalid coordinates received: x={data.get('x')}, y={data.get('y')}")
                 else:
-                    print(f"Received action: {data.get('action')}. Continuing loop...")
+                    print(f"Received action: {action}. Continuing loop...")
             except requests.exceptions.RequestException as req_e:
                 print(f"Request failed: {req_e}")
                 # Break the loop on network failure to avoid infinite errors
