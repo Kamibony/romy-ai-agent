@@ -125,16 +125,74 @@
         </div>
 
         <!-- Right Column: Log/Feedback -->
-        <div class="md:col-span-1">
-            <div class="bg-gray-800 rounded-lg shadow-md p-6 text-gray-200 sticky top-4 h-96 flex flex-col">
+        <div class="md:col-span-1 space-y-8">
+            <div class="bg-gray-800 rounded-lg shadow-md p-6 text-gray-200 h-96 flex flex-col">
                 <h3 class="text-lg font-medium text-white border-b border-gray-600 pb-2 mb-4">Action Log</h3>
                 <div id="action-log" class="flex-1 overflow-y-auto font-mono text-sm space-y-2">
                     <p class="text-gray-400 italic">Waiting for interactions...</p>
+                </div>
+            </div>
+
+            <div class="bg-indigo-900 rounded-lg shadow-md p-6 text-gray-200 flex flex-col" style="height: 500px;">
+                <h3 class="text-lg font-medium text-white border-b border-indigo-700 pb-2 mb-4">Live AI Telemetry (Brain)</h3>
+                <div id="telemetry-log" class="flex-1 overflow-y-auto font-mono text-xs space-y-3">
+                    <p class="text-indigo-300 italic">Listening for AI thoughts...</p>
                 </div>
             </div>
         </div>
 
     </main>
 
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+        import { getFirestore, collection, query, orderBy, limit, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyBF2KBDgfYOzMbdSjFgCrGUygQbFaSfSxI",
+            authDomain: "romy-ai-agent.firebaseapp.com",
+            projectId: "romy-ai-agent"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        const telemetryLog = document.getElementById('telemetry-log');
+        const q = query(collection(db, "telemetry"), orderBy("timestamp", "desc"), limit(10));
+
+        try {
+            onSnapshot(q, (snapshot) => {
+                if (snapshot.empty) {
+                    telemetryLog.innerHTML = '<p class="text-indigo-300 italic">No telemetry data yet.</p>';
+                    return;
+                }
+
+                let html = '';
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    const time = data.timestamp ? data.timestamp.toDate().toLocaleTimeString() : new Date().toLocaleTimeString();
+                    const geminiText = data.gemini_context ? data.gemini_context.substring(0, 100) + (data.gemini_context.length > 100 ? '...' : '') : 'N/A';
+
+                    html += `
+                        <div class="bg-indigo-800 p-3 rounded border border-indigo-700">
+                            <div class="text-indigo-300 text-[10px] mb-1">[${time}]</div>
+                            <div class="mb-2"><span class="font-bold text-indigo-200">Gemini:</span> ${geminiText}</div>
+                            <div><span class="font-bold text-green-400">Claude:</span> ${data.claude_action || 'N/A'}</div>
+                        </div>
+                    `;
+                });
+                telemetryLog.innerHTML = html;
+            }, (error) => {
+                console.warn("Firestore read error (possibly security rules):", error);
+                telemetryLog.innerHTML = `
+                    <div class="bg-red-900/50 p-3 rounded border border-red-700 text-red-200">
+                        <p class="font-bold mb-1">Access Denied</p>
+                        <p>Unable to read live telemetry. Security rules may be blocking access for unauthenticated users.</p>
+                    </div>
+                `;
+            });
+        } catch (error) {
+            console.error("Error setting up Firestore listener:", error);
+        }
+    </script>
 </body>
 </html>

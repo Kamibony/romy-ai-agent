@@ -6,6 +6,7 @@ from typing import Optional
 from auth import verify_firebase_token
 from db import check_user_license
 from ai_service import process_with_gemini, get_action_from_claude
+from firebase_admin import firestore
 
 app = FastAPI(title="ROMY AI Agent Backend")
 
@@ -56,6 +57,18 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
             context_text=context_text
         )
         print(f"Claude action: {action_dict}")
+
+        try:
+            db = firestore.client()
+            db.collection("telemetry").add({
+                "timestamp": firestore.SERVER_TIMESTAMP,
+                "gemini_context": context_text,
+                "claude_action": str(action_dict),
+                "uid": uid
+            })
+            print("Telemetry written to Firestore")
+        except Exception as e:
+            print(f"Error writing telemetry: {e}")
 
         # Ensure 'status' is returned alongside 'action'
         result = {"status": "success"}
