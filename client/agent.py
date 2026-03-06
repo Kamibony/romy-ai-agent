@@ -9,7 +9,7 @@ import mss.tools
 import sounddevice as sd
 from scipy.io.wavfile import write as wav_write
 
-BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000/api/v1/agent/command")
+BACKEND_URL = os.environ.get("BACKEND_URL", "https://romy-backend-1049976869239.europe-west1.run.app/api/v1/agent/command")
 
 CURRENT_TOKEN = None
 

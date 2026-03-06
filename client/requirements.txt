@@ -6,3 +6,4 @@ sounddevice
 scipy
 requests
 python-dotenv
+pyautogui
