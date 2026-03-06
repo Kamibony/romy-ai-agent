@@ -1,10 +1,122 @@
+import base64
+import io
+import time
+import os
+import requests
+from dotenv import load_dotenv
+
+import mss
+import mss.tools
+import sounddevice as sd
+from scipy.io.wavfile import write as wav_write
+
+load_dotenv()
+
+BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000/api/v1/agent/command")
+# For MVP, user token might be stored in environment or file
+FIREBASE_TOKEN = os.environ.get("FIREBASE_TOKEN", "DUMMY_TOKEN_FOR_NOW")
+
+
+def capture_screen() -> str:
+    """
+    Captures the primary monitor using mss, saves it as PNG in memory,
+    and returns the Base64 encoded string.
+    """
+    try:
+        with mss.mss() as sct:
+            # Monitor 1 is usually the primary monitor
+            monitor = sct.monitors[1]
+            sct_img = sct.grab(monitor)
+
+            # Save to an in-memory byte buffer
+            img_bytes = mss.tools.to_png(sct_img.rgb, sct_img.size)
+
+            # Encode to base64
+            b64_str = base64.b64encode(img_bytes).decode('utf-8')
+            return b64_str
+    except Exception as e:
+        print(f"Error capturing screen: {e}")
+        return ""
+
+
+def record_audio(duration: int = 5) -> str:
+    """
+    Records microphone input for `duration` seconds, saves as WAV in memory,
+    and returns the Base64 encoded string.
+    """
+    try:
+        sample_rate = 44100
+        print(f"Recording audio for {duration} seconds...")
+        # Record audio
+        recording = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='int16')
+        sd.wait()  # Wait until recording is finished
+        print("Recording finished.")
+
+        # Save to an in-memory byte buffer
+        wav_io = io.BytesIO()
+        wav_write(wav_io, sample_rate, recording)
+        wav_bytes = wav_io.getvalue()
+
+        # Encode to base64
+        b64_str = base64.b64encode(wav_bytes).decode('utf-8')
+        return b64_str
+    except Exception as e:
+        print(f"Error recording audio: {e}")
+        return ""
+
+
 def activate_agent() -> None:
     """
-    Activates the agent. For the MVP, this just prints to the console.
-    This function acts as the entry point for the agent's logic when
-    triggered by the global hotkey.
+    Activates the agent. Captures initial audio command, then enters the
+    Agentic Loop, sending screen and audio data to the backend until DONE.
     """
     try:
         print("=== Agent Activated: Ready for commands ===")
+
+        # 1. Capture initial audio command
+        audio_b64 = record_audio(duration=5)
+
+        # 2. Start Agentic Loop
+        iteration = 0
+        while True:
+            # 3. Capture screen
+            image_b64 = capture_screen()
+
+            # 4. Construct JSON payload
+            payload = {
+                "image_base64": image_b64
+            }
+            if iteration == 0:
+                payload["audio_base64"] = audio_b64
+            else:
+                payload["audio_base64"] = ""
+
+            # 5. Send POST to backend
+            headers = {
+                "Authorization": f"Bearer {FIREBASE_TOKEN}",
+                "Content-Type": "application/json"
+            }
+
+            print(f"Sending payload to backend (iteration {iteration})...")
+            try:
+                response = requests.post(BACKEND_URL, json=payload, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+
+                # 6. Check response
+                if data.get("action") == "DONE":
+                    print("Task finished.")
+                    break
+                else:
+                    print(f"Received action: {data.get('action')}. Continuing loop...")
+            except requests.exceptions.RequestException as req_e:
+                print(f"Request failed: {req_e}")
+                # Break the loop on network failure to avoid infinite errors
+                break
+
+            # 7. Sleep for 2 seconds before next iteration
+            time.sleep(2)
+            iteration += 1
+
     except Exception as e:
         print(f"Error activating agent: {e}")
