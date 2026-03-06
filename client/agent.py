@@ -9,6 +9,7 @@ import mss.tools
 import sounddevice as sd
 from scipy.io.wavfile import write as wav_write
 import pyautogui
+from plyer import notification
 
 pyautogui.FAILSAFE = False
 
@@ -83,7 +84,9 @@ def activate_agent() -> None:
         print("=== Agent Activated: Ready for commands ===")
 
         # 1. Capture initial audio command
+        notification.notify(title="ROMY AI", message="🎙️ Recording started... Speak your command now.", app_name="ROMY", timeout=2)
         audio_b64 = record_audio(duration=5)
+        notification.notify(title="ROMY AI", message="🧠 Processing command...", app_name="ROMY", timeout=2)
 
         # 2. Start Agentic Loop
         iteration = 0
