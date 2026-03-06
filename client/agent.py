@@ -1,32 +1,48 @@
-import os
-import io
 import base64
+import io
+import time
+import os
 import requests
-import numpy as np
+from dotenv import load_dotenv
+
+import mss
+import mss.tools
 import sounddevice as sd
-import scipy.io.wavfile as wavfile
-from mss import mss
+from scipy.io.wavfile import write as wav_write
+
+load_dotenv()
+
+BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000/api/v1/agent/command")
+# For MVP, user token might be stored in environment or file
+FIREBASE_TOKEN = os.environ.get("FIREBASE_TOKEN", "DUMMY_TOKEN_FOR_NOW")
+
 
 def capture_screen() -> str:
     """
-    Captures the primary monitor using mss, saves it to an in-memory PNG buffer,
-    and returns the Base64 string.
+    Captures the primary monitor using mss, saves it as PNG in memory,
+    and returns the Base64 encoded string.
     """
     try:
-        with mss() as sct:
-            monitor = sct.monitors[1]  # primary monitor
+        with mss.mss() as sct:
+            # Monitor 1 is usually the primary monitor
+            monitor = sct.monitors[1]
             sct_img = sct.grab(monitor)
-            png_bytes = mss.tools.to_png(sct_img.rgb, sct_img.size)
-            return base64.b64encode(png_bytes).decode('utf-8')
+
+            # Save to an in-memory byte buffer
+            img_bytes = mss.tools.to_png(sct_img.rgb, sct_img.size)
+
+            # Encode to base64
+            b64_str = base64.b64encode(img_bytes).decode('utf-8')
+            return b64_str
     except Exception as e:
         print(f"Error capturing screen: {e}")
         return ""
 
+
 def record_audio(duration: int = 5) -> str:
     """
-    Records audio for `duration` seconds using sounddevice,
-    saves it to an in-memory WAV buffer using scipy,
-    and returns the Base64 string.
+    Records microphone input for `duration` seconds, saves as WAV in memory,
+    and returns the Base64 encoded string.
     """
     try:
         sample_rate = 44100
@@ -34,57 +50,73 @@ def record_audio(duration: int = 5) -> str:
         # Record audio
         recording = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='int16')
         sd.wait()  # Wait until recording is finished
-        print("Audio recording complete.")
+        print("Recording finished.")
 
-        # Save to in-memory buffer
-        buffer = io.BytesIO()
-        wavfile.write(buffer, sample_rate, recording)
-        buffer.seek(0)
+        # Save to an in-memory byte buffer
+        wav_io = io.BytesIO()
+        wav_write(wav_io, sample_rate, recording)
+        wav_bytes = wav_io.getvalue()
 
-        return base64.b64encode(buffer.read()).decode('utf-8')
+        # Encode to base64
+        b64_str = base64.b64encode(wav_bytes).decode('utf-8')
+        return b64_str
     except Exception as e:
         print(f"Error recording audio: {e}")
         return ""
 
+
 def activate_agent() -> None:
     """
-    Activates the agent.
-    Captures screen and records audio, then sends to the backend.
+    Activates the agent. Captures initial audio command, then enters the
+    Agentic Loop, sending screen and audio data to the backend until DONE.
     """
     try:
-        print("=== Agent Activated: Processing commands ===")
+        print("=== Agent Activated: Ready for commands ===")
 
-        # Capture screen and record audio
-        image_base64 = capture_screen()
-        audio_base64 = record_audio()
+        # 1. Capture initial audio command
+        audio_b64 = record_audio(duration=5)
 
-        payload = {
-            "image_base64": image_base64,
-            "audio_base64": audio_base64
-        }
+        # 2. Start Agentic Loop
+        iteration = 0
+        while True:
+            # 3. Capture screen
+            image_b64 = capture_screen()
 
-        # Fetch environment variables
-        backend_url = os.environ.get("BACKEND_URL", "http://localhost:8000")
-        firebase_token = os.environ.get("FIREBASE_TOKEN", "")
+            # 4. Construct JSON payload
+            payload = {
+                "image_base64": image_b64
+            }
+            if iteration == 0:
+                payload["audio_base64"] = audio_b64
+            else:
+                payload["audio_base64"] = ""
 
-        headers = {
-            "Authorization": f"Bearer {firebase_token}"
-        }
+            # 5. Send POST to backend
+            headers = {
+                "Authorization": f"Bearer {FIREBASE_TOKEN}",
+                "Content-Type": "application/json"
+            }
 
-        endpoint = f"{backend_url}/api/v1/agent/command"
-        print(f"Sending payload to {endpoint}...")
+            print(f"Sending payload to backend (iteration {iteration})...")
+            try:
+                response = requests.post(BACKEND_URL, json=payload, headers=headers)
+                response.raise_for_status()
+                data = response.json()
 
-        # Send POST request
-        response = requests.post(endpoint, json=payload, headers=headers, timeout=10)
+                # 6. Check response
+                if data.get("action") == "DONE":
+                    print("Task finished.")
+                    break
+                else:
+                    print(f"Received action: {data.get('action')}. Continuing loop...")
+            except requests.exceptions.RequestException as req_e:
+                print(f"Request failed: {req_e}")
+                # Break the loop on network failure to avoid infinite errors
+                break
 
-        if response.status_code == 200:
-            print("Successfully sent command to backend:")
-            print(response.json())
-        else:
-            print(f"Failed to send command. Status code: {response.status_code}")
-            print(response.text)
+            # 7. Sleep for 2 seconds before next iteration
+            time.sleep(2)
+            iteration += 1
 
-    except requests.exceptions.RequestException as e:
-        print(f"Connection error: {e}")
     except Exception as e:
         print(f"Error activating agent: {e}")
