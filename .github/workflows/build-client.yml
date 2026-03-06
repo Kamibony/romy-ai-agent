@@ -12,6 +12,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -32,8 +34,14 @@ jobs:
         working-directory: ./client
         run: pyinstaller --noconfirm --onefile --windowed main.py
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+      - name: Rename Executable
+        working-directory: ./client/dist
+        run: Rename-Item -Path "main.exe" -NewName "ROMY-Agent-MVP.exe"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: ROMY-Client-Windows-MVP
-          path: client/dist/
+          tag_name: latest
+          name: Latest Release
+          files: client/dist/ROMY-Agent-MVP.exe
+          make_latest: true
