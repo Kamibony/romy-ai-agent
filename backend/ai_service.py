@@ -79,7 +79,7 @@ def process_with_gemini(image_b64: str, audio_b64: Optional[str] = None, command
 def get_action_from_claude(image_b64: str, context_text: str) -> Dict[str, Any]:
     """
     Uses Claude 3.5 Sonnet to determine the next logical action based on the Gemini context and screen image.
-    Forces strict JSON response.
+    Uses Anthropic's native computer-use tool to get accurate X,Y coordinates.
     """
     if anthropic_client is None:
         print("Anthropic client not initialized.")
@@ -100,25 +100,16 @@ def get_action_from_claude(image_b64: str, context_text: str) -> Dict[str, Any]:
         client = anthropic_client
 
         system_prompt = (
-            "You are a UI automation agent. You MUST extract X and Y coordinates and return "
-            "ONLY a raw JSON object: {\"action\": \"CLICK\", \"x\": <int>, \"y\": <int>}.\n"
-            "You are strictly forbidden from returning 'DONE', conversational text, or Markdown formatting (like ```json).\n"
-            "A coordinate grid is overlaid. Vertical RED lines and text represent the X-axis. Horizontal BLUE lines and text represent the Y-axis. GREEN text at intersections represents 'X,Y'. You MUST look at the nearest green, red, and blue text markers around the target to calculate the exact X and Y pixels.\n\n"
+            "You are a UI automation agent. You MUST use the provided computer tool to perform the next logical action. "
+            "Use the `mouse_move` or `left_click` action with the computer tool to indicate where you want to click based on the user's intent.\n"
         )
         if global_prompt:
             system_prompt += f"Global Instructions:\n{global_prompt}\n\n"
 
-        system_prompt += (
-            "You are an AI executing a computer task. "
-            "You MUST reply with the strict JSON response and NOTHING ELSE. "
-            "Do not wrap the JSON in markdown blocks. "
-            "The JSON must follow this exact format: {\"action\": \"CLICK\", \"x\": <int>, \"y\": <int>}"
-        )
-
         user_content = [
             {
                 "type": "text",
-                "text": f"Context from previous perception layer:\n{context_text}\n\nBased on this context and the screen image, determine the next logical action."
+                "text": f"Context from previous perception layer:\n{context_text}\n\nBased on this context and the screen image, use the computer tool to perform the next logical action (e.g. mouse_move or left_click) on the target."
             }
         ]
 
@@ -133,41 +124,37 @@ def get_action_from_claude(image_b64: str, context_text: str) -> Dict[str, Any]:
             })
 
         response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=256,
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1024,
             system=system_prompt,
             messages=[
                 {"role": "user", "content": user_content}
-            ]
+            ],
+            tools=[
+                {
+                    "type": "computer_20241022",
+                    "name": "computer",
+                    "display_width_px": 1920,
+                    "display_height_px": 1080
+                }
+            ],
+            betas=["computer-use-2024-10-22"]
         )
 
-        response_text = response.content[0].text
+        extracted_x, extracted_y = None, None
 
-        # Robust data extraction: Strip markdown formatting and extraneous whitespace
-        sanitized_text = response_text.strip()
-        if sanitized_text.startswith("```json"):
-            sanitized_text = sanitized_text[len("```json"):].strip()
-        elif sanitized_text.startswith("```"):
-            sanitized_text = sanitized_text[len("```"):].strip()
+        for block in response.content:
+            if block.type == "tool_use" and block.name == "computer":
+                if "coordinate" in block.input:
+                    coords = block.input["coordinate"]
+                    if len(coords) == 2:
+                        extracted_x, extracted_y = coords[0], coords[1]
+                        break
 
-        if sanitized_text.endswith("```"):
-            sanitized_text = sanitized_text[:-len("```")].strip()
+        if extracted_x is not None and extracted_y is not None:
+            return {"action": "CLICK", "x": extracted_x, "y": extracted_y}
 
-        # Also handle potential conversational text before/after JSON by finding { and }
-        start_idx = sanitized_text.find('{')
-        end_idx = sanitized_text.rfind('}')
-        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-            sanitized_text = sanitized_text[start_idx:end_idx+1]
-
-        # Ensure we can parse it as JSON
-        try:
-            action_dict = json.loads(sanitized_text)
-            if "action" not in action_dict:
-                return {"action": "FORMAT_ERROR", "error": "Missing 'action' key in JSON", "raw_response": action_dict}
-            return action_dict
-        except json.JSONDecodeError as e:
-            print(f"Failed to decode Claude response as JSON. Original Response: {response_text}, Sanitized: {sanitized_text}, Error: {e}")
-            return {"action": "PARSE_ERROR", "raw_response": response_text}
+        return {"action": "PARSE_ERROR", "raw_response": str(response.content)}
 
     except Exception as e:
         print(f"Error calling Claude: {e}")

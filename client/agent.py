@@ -11,7 +11,6 @@ from scipy.io.wavfile import write as wav_write
 import pyautogui
 from plyer import notification
 import winsound
-from grid_overlay import create_grid_overlay
 
 pyautogui.FAILSAFE = False
 
@@ -232,17 +231,8 @@ def activate_agent() -> None:
         # 2. Start Agentic Loop
         iteration = 0
         while True:
-            # Show grid right before capturing
-            grid_window = create_grid_overlay(step=100)
-
-            # Wait a brief moment to ensure window is fully rendered on screen
-            time.sleep(1.0)
-
-            # 3. Capture screen WITH the grid visible
+            # 3. Capture screen
             image_b64 = capture_screen()
-
-            # Hide/destroy grid immediately after capture
-            grid_window.destroy()
 
             # 4. Construct JSON payload
             payload = {
