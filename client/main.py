@@ -42,4 +42,10 @@ def main() -> None:
         print(f"Error starting main client application: {e}")
 
 if __name__ == "__main__":
+    try:
+        import pyi_splash
+        pyi_splash.close()
+    except ImportError:
+        pass # Not running as a PyInstaller bundle with a splash screen
+
     main()
