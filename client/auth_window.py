@@ -26,6 +26,7 @@ def login_window() -> str | None:
                 return
 
             status_label.config(text="Logging in...", fg="blue")
+            login_btn.config(text="Logging in... Please wait", state=tk.DISABLED)
             root.update()
 
             try:
@@ -45,8 +46,10 @@ def login_window() -> str | None:
                 else:
                     error_msg = data.get("error", {}).get("message", "Login failed")
                     status_label.config(text=error_msg, fg="red")
+                    login_btn.config(text="Sign In", state=tk.NORMAL)
             except requests.exceptions.RequestException as e:
                 status_label.config(text="Network error", fg="red")
+                login_btn.config(text="Sign In", state=tk.NORMAL)
 
         # UI Elements
         tk.Label(root, text="Email:").pack(pady=(20, 0))
