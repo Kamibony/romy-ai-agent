@@ -84,9 +84,28 @@ def get_action_from_claude(image_b64: str, context_text: str) -> Dict[str, Any]:
         return {"action": "DONE"}
 
     try:
+        from firebase_admin import firestore
+        db = firestore.client()
+        global_prompt = ""
+        try:
+            settings_ref = db.collection("settings").document("global_prompt")
+            settings_doc = settings_ref.get()
+            if settings_doc.exists:
+                global_prompt = settings_doc.to_dict().get("prompt", "")
+        except Exception as e:
+            print(f"Error reading global prompt from Firestore: {e}")
+
         client = anthropic_client
 
         system_prompt = (
+            "You are a UI automation agent. You MUST extract X and Y coordinates and return "
+            "{\"action\": \"CLICK\", \"x\": int, \"y\": int}. DO NOT return 'DONE' unless the ultimate "
+            "user goal is completely achieved.\n\n"
+        )
+        if global_prompt:
+            system_prompt += f"Global Instructions:\n{global_prompt}\n\n"
+
+        system_prompt += (
             "You are an AI executing a computer task. "
             "You MUST reply with a strict JSON response and NOTHING ELSE. "
             "The JSON must follow one of these two formats:\n"
