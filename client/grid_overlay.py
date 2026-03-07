@@ -42,13 +42,13 @@ def create_grid_overlay(step: int = 100) -> tk.Tk:
     for x in range(0, screen_width, step):
         canvas.create_line(x, 0, x, screen_height, fill='red', dash=(2, 2))
         if x > 0:
-            canvas.create_text(x + 2, 10, text=str(x), fill='red', anchor=tk.NW, font=("Arial", 8))
+            canvas.create_text(x + 2, 10, text=str(x), fill='red', anchor=tk.NW, font=("Arial", 12))
 
     # Draw horizontal lines and labels
     for y in range(0, screen_height, step):
         canvas.create_line(0, y, screen_width, y, fill='blue', dash=(2, 2))
         if y > 0:
-            canvas.create_text(10, y + 2, text=str(y), fill='blue', anchor=tk.NW, font=("Arial", 8))
+            canvas.create_text(10, y + 2, text=str(y), fill='blue', anchor=tk.NW, font=("Arial", 12))
 
     # Draw intersection labels (optional, but requested "or intersections")
     # Doing just axes might be cleaner, but intersections make it precise locally.
@@ -56,7 +56,7 @@ def create_grid_overlay(step: int = 100) -> tk.Tk:
     for x in range(0, screen_width, step):
         for y in range(0, screen_height, step):
             if x > 0 and y > 0:
-                canvas.create_text(x + 2, y + 2, text=f"{x},{y}", fill='green', anchor=tk.NW, font=("Arial", 7))
+                canvas.create_text(x + 2, y + 2, text=f"{x},{y}", fill='green', anchor=tk.NW, font=("Arial", 12))
 
     # Ensure window displays immediately
     root.update()

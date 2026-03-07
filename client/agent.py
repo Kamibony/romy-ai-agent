@@ -236,7 +236,7 @@ def activate_agent() -> None:
             grid_window = create_grid_overlay(step=100)
 
             # Wait a brief moment to ensure window is fully rendered on screen
-            time.sleep(0.1)
+            time.sleep(1.0)
 
             # 3. Capture screen WITH the grid visible
             image_b64 = capture_screen()
