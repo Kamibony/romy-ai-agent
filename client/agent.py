@@ -11,8 +11,7 @@ from scipy.io.wavfile import write as wav_write
 import pyautogui
 from plyer import notification
 import winsound
-import firebase_admin
-from firebase_admin import credentials, firestore
+from grid_overlay import create_grid_overlay
 
 pyautogui.FAILSAFE = False
 
@@ -233,8 +232,17 @@ def activate_agent() -> None:
         # 2. Start Agentic Loop
         iteration = 0
         while True:
-            # 3. Capture screen
+            # Show grid right before capturing
+            grid_window = create_grid_overlay(step=100)
+
+            # Wait a brief moment to ensure window is fully rendered on screen
+            time.sleep(0.1)
+
+            # 3. Capture screen WITH the grid visible
             image_b64 = capture_screen()
+
+            # Hide/destroy grid immediately after capture
+            grid_window.destroy()
 
             # 4. Construct JSON payload
             payload = {

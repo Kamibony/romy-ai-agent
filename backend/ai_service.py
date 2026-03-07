@@ -103,7 +103,7 @@ def get_action_from_claude(image_b64: str, context_text: str) -> Dict[str, Any]:
             "You are a UI automation agent. You MUST extract X and Y coordinates and return "
             "ONLY a raw JSON object: {\"action\": \"CLICK\", \"x\": <int>, \"y\": <int>}.\n"
             "You are strictly forbidden from returning 'DONE', conversational text, or Markdown formatting (like ```json).\n"
-            "If exact precision is difficult, you must estimate the coordinates based on the visual layout.\n\n"
+            "A coordinate grid has been overlaid on the image. You MUST use the visible grid lines and labels to accurately calculate the exact X and Y pixel coordinates of the target element.\n\n"
         )
         if global_prompt:
             system_prompt += f"Global Instructions:\n{global_prompt}\n\n"
