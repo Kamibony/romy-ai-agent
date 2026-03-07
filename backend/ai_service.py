@@ -99,19 +99,18 @@ def get_action_from_claude(image_b64: str, context_text: str) -> Dict[str, Any]:
 
         system_prompt = (
             "You are a UI automation agent. You MUST extract X and Y coordinates and return "
-            "{\"action\": \"CLICK\", \"x\": int, \"y\": int}. DO NOT return 'DONE' unless the ultimate "
-            "user goal is completely achieved.\n\n"
+            "ONLY a raw JSON object: {\"action\": \"CLICK\", \"x\": <int>, \"y\": <int>}.\n"
+            "You are strictly forbidden from returning 'DONE', conversational text, or Markdown formatting (like ```json).\n"
+            "If exact precision is difficult, you must estimate the coordinates based on the visual layout.\n\n"
         )
         if global_prompt:
             system_prompt += f"Global Instructions:\n{global_prompt}\n\n"
 
         system_prompt += (
             "You are an AI executing a computer task. "
-            "You MUST reply with a strict JSON response and NOTHING ELSE. "
-            "The JSON must follow one of these two formats:\n"
-            "1. {\"action\": \"click\", \"x\": <int>, \"y\": <int>}\n"
-            "2. {\"action\": \"DONE\"}\n"
-            "Output 'DONE' if the task described in the context is complete or cannot be completed."
+            "You MUST reply with the strict JSON response and NOTHING ELSE. "
+            "Do not wrap the JSON in markdown blocks. "
+            "The JSON must follow this exact format: {\"action\": \"CLICK\", \"x\": <int>, \"y\": <int>}"
         )
 
         user_content = [
@@ -142,14 +141,30 @@ def get_action_from_claude(image_b64: str, context_text: str) -> Dict[str, Any]:
 
         response_text = response.content[0].text
 
+        # Robust data extraction: Strip markdown formatting and extraneous whitespace
+        sanitized_text = response_text.strip()
+        if sanitized_text.startswith("```json"):
+            sanitized_text = sanitized_text[len("```json"):].strip()
+        elif sanitized_text.startswith("```"):
+            sanitized_text = sanitized_text[len("```"):].strip()
+
+        if sanitized_text.endswith("```"):
+            sanitized_text = sanitized_text[:-len("```")].strip()
+
+        # Also handle potential conversational text before/after JSON by finding { and }
+        start_idx = sanitized_text.find('{')
+        end_idx = sanitized_text.rfind('}')
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            sanitized_text = sanitized_text[start_idx:end_idx+1]
+
         # Ensure we can parse it as JSON
         try:
-            action_dict = json.loads(response_text)
+            action_dict = json.loads(sanitized_text)
             if "action" not in action_dict:
                 return {"action": "DONE"}
             return action_dict
         except json.JSONDecodeError as e:
-            print(f"Failed to decode Claude response as JSON. Response: {response_text}, Error: {e}")
+            print(f"Failed to decode Claude response as JSON. Original Response: {response_text}, Sanitized: {sanitized_text}, Error: {e}")
             return {"action": "DONE"}
 
     except Exception as e:
