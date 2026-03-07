@@ -30,9 +30,13 @@ jobs:
           pip install -r client/requirements.txt
           pip install pyinstaller
 
+      - name: Download Splash Screen Image
+        working-directory: ./client
+        run: curl -o splash.png "https://dummyimage.com/600x300/0f172a/ffffff.png&text=ROMY+AI+Agent+-+Loading..."
+
       - name: Build Executable
         working-directory: ./client
-        run: pyinstaller --noconfirm --onefile --windowed main.py
+        run: pyinstaller --noconfirm --onefile --windowed --splash splash.png main.py
 
       - name: Rename Executable
         working-directory: ./client/dist
