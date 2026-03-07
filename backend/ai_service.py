@@ -165,7 +165,7 @@ def get_action_from_claude(image_b64: str, context_text: str) -> Dict[str, Any]:
             return action_dict
         except json.JSONDecodeError as e:
             print(f"Failed to decode Claude response as JSON. Original Response: {response_text}, Sanitized: {sanitized_text}, Error: {e}")
-            return {"action": "DONE"}
+            return {"action": "PARSE_ERROR", "raw_response": response_text}
 
     except Exception as e:
         print(f"Error calling Claude: {e}")
