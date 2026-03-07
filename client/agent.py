@@ -127,11 +127,20 @@ def activate_agent() -> None:
                 data = response.json()
 
                 # 6. Check response
-                action = data.get("action")
-                if action == "DONE":
+                action = data.get("action", "")
+                if isinstance(action, str):
+                    action_upper = action.upper()
+                else:
+                    action_upper = str(action).upper()
+
+                if action_upper == "DONE":
                     print("Task finished.")
                     break
-                elif action == "click" and "x" in data and "y" in data:
+                elif action_upper == "PARSE_ERROR":
+                    raw_response = data.get("raw_response", "No raw response provided")
+                    print(f"Agent stopped due to PARSE_ERROR. Raw Claude response: {raw_response}")
+                    break
+                elif action_upper == "CLICK" and "x" in data and "y" in data:
                     try:
                         x = int(data["x"])
                         y = int(data["y"])
