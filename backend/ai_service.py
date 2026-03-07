@@ -131,7 +131,7 @@ def get_action_from_claude(image_b64: str, context_text: str) -> Dict[str, Any]:
             })
 
         response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-3-7-sonnet-20250219",
             max_tokens=256,
             system=system_prompt,
             messages=[
