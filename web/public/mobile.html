@@ -68,6 +68,11 @@
 
         let currentUser = null;
 
+        // Dev Mode Bypass
+        authStatus.textContent = `Dev Mode (No Auth Required)`;
+        commandContent.style.display = 'block';
+
+        /*
         onAuthStateChanged(auth, (user) => {
             if (user) {
                 currentUser = user;
@@ -79,6 +84,7 @@
                 commandContent.style.display = 'none';
             }
         });
+        */
 
         executeBtn.addEventListener('click', async () => {
             const commandText = commandInput.value.trim();
@@ -97,7 +103,7 @@
                     command: commandText,
                     status: 'pending',
                     timestamp: serverTimestamp(),
-                    uid: currentUser.uid
+                    uid: currentUser ? currentUser.uid : 'dev-user-id'
                 });
                 console.log("Document written with ID: ", docRef.id);
 
