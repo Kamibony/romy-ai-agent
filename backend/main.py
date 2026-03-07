@@ -13,6 +13,7 @@ app = FastAPI(title="ROMY AI Agent Backend")
 class AgentCommandRequest(BaseModel):
     image_base64: str
     audio_base64: Optional[str] = None
+    command_text: Optional[str] = None
 
 # Allow all origins, methods, and headers for CORS (adjust as needed in production)
 app.add_middleware(
@@ -44,11 +45,13 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
     audio_len = len(request.audio_base64) if request.audio_base64 else 0
     print(f"Received image length: {image_len}")
     print(f"Received audio length: {audio_len}")
+    print(f"Received command text: {request.command_text}")
 
     try:
         context_text = process_with_gemini(
             image_b64=request.image_base64,
-            audio_b64=request.audio_base64
+            audio_b64=request.audio_base64,
+            command_text=request.command_text
         )
         print(f"Gemini context: {context_text}")
 
