@@ -81,7 +81,7 @@ def get_action_from_claude(image_b64: str, context_text: str) -> Dict[str, Any]:
     """
     if anthropic_client is None:
         print("Anthropic client not initialized.")
-        return {"action": "DONE"}
+        return {"action": "API_ERROR", "error": "Anthropic client not initialized"}
 
     try:
         from firebase_admin import firestore
@@ -161,7 +161,7 @@ def get_action_from_claude(image_b64: str, context_text: str) -> Dict[str, Any]:
         try:
             action_dict = json.loads(sanitized_text)
             if "action" not in action_dict:
-                return {"action": "DONE"}
+                return {"action": "FORMAT_ERROR", "error": "Missing 'action' key in JSON", "raw_response": action_dict}
             return action_dict
         except json.JSONDecodeError as e:
             print(f"Failed to decode Claude response as JSON. Original Response: {response_text}, Sanitized: {sanitized_text}, Error: {e}")
@@ -169,4 +169,4 @@ def get_action_from_claude(image_b64: str, context_text: str) -> Dict[str, Any]:
 
     except Exception as e:
         print(f"Error calling Claude: {e}")
-        return {"action": "DONE"}
+        return {"action": "API_ERROR", "error": str(e)}
