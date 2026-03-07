@@ -138,7 +138,7 @@ def get_action_from_claude(image_b64: str, context_text: str) -> Dict[str, Any]:
                     "display_height_px": 1080
                 }
             ],
-            betas=["computer-use-2024-10-22"]
+            extra_headers={"anthropic-beta": "computer-use-2024-10-22"}
         )
 
         extracted_x, extracted_y = None, None

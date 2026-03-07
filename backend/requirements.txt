@@ -4,4 +4,4 @@ firebase-admin
 pydantic
 python-dotenv
 google-genai
-anthropic
+anthropic>=0.39.0
