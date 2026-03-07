@@ -3,7 +3,7 @@ import sys
 from tray_manager import run_tray_icon
 from hotkey_manager import start_hotkey_listener
 from auth_window import login_window
-from agent import set_firebase_token
+from agent import set_firebase_token, start_remote_listener
 
 def main() -> None:
     """
@@ -33,6 +33,13 @@ def main() -> None:
             daemon=True
         )
         hotkey_thread.start()
+
+        # Start the remote command listener in a daemon thread.
+        remote_thread = threading.Thread(
+            target=start_remote_listener,
+            daemon=True
+        )
+        remote_thread.start()
 
         # Run the system tray icon on the main thread. This call blocks
         # until the user clicks 'Quit' in the system tray menu.
