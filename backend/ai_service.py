@@ -32,9 +32,9 @@ if Anthropic is not None:
         print(f"Failed to initialize Anthropic client: {e}")
 
 
-def process_with_gemini(image_b64: str, audio_b64: Optional[str] = None) -> str:
+def process_with_gemini(image_b64: str, audio_b64: Optional[str] = None, command_text: Optional[str] = None) -> str:
     """
-    Uses Gemini 2.5 Flash to transcribe the audio command and describe the state of the UI.
+    Uses Gemini 2.5 Flash to transcribe the audio command (or process textual command) and describe the state of the UI.
     """
     if gemini_client is None:
         print("Gemini client not initialized.")
@@ -61,6 +61,8 @@ def process_with_gemini(image_b64: str, audio_b64: Optional[str] = None) -> str:
             )
 
         prompt = "Please transcribe the audio command (if any) and briefly describe the state of the UI shown in the image."
+        if command_text:
+            prompt += f"\nAdditionally, the user provided this text command: '{command_text}'. Treat this as the primary instruction if provided."
         contents.append(prompt)
 
         response = client.models.generate_content(
