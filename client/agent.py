@@ -136,9 +136,10 @@ def activate_agent() -> None:
                 if action_upper == "DONE":
                     print("Task finished.")
                     break
-                elif action_upper == "PARSE_ERROR":
+                elif "ERROR" in action_upper:
                     raw_response = data.get("raw_response", "No raw response provided")
-                    print(f"Agent stopped due to PARSE_ERROR. Raw Claude response: {raw_response}")
+                    error_msg = data.get("error", "No error message provided")
+                    print(f"Agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
                     break
                 elif action_upper == "CLICK" and "x" in data and "y" in data:
                     try:
