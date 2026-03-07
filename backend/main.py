@@ -76,4 +76,4 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
         return result
     except Exception as e:
         print(f"Error in AI pipeline: {e}")
-        return {"status": "error", "action": "DONE"}
+        return {"status": "error", "action": "PIPELINE_ERROR", "error": str(e)}
