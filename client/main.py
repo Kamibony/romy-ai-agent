@@ -25,15 +25,9 @@ def main() -> None:
 
         print("Login successful. Starting background tasks...")
 
-        # Pre-launch the browser workspace (loads the Sandbox)
+        # Pre-launch the browser workspace on the main thread for Playwright stability
         try:
-            # We initialize this on the main thread or a separate daemon thread.
-            # Starting it in a daemon thread so it doesn't block tray initialization.
-            workspace_thread = threading.Thread(
-                target=init_browser_workspace,
-                daemon=True
-            )
-            workspace_thread.start()
+            init_browser_workspace()
         except Exception as workspace_e:
             print(f"Error pre-launching workspace: {workspace_e}")
 
