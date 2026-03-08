@@ -129,23 +129,19 @@ def scan_web_ui() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
 
         active_page = None
         if _browser and _browser.pages:
-            for p in _browser.pages:
+            for page in _browser.pages:
                 try:
-                    if p.evaluate("document.visibilityState") == "visible":
-                        active_page = p
+                    if page.evaluate("document.visibilityState") == "visible":
+                        active_page = page
                         break
                 except Exception:
-                    pass
-            if not active_page:
-                active_page = _browser.pages[-1]
-        else:
-            # Fallback if somehow browser pages are empty but browser exists
+                    continue
+
+        if not active_page:
             active_page = get_playwright_page(None)
 
         print(f"Scanning active page URL: {active_page.url}")
 
-        # Get elements
-        # The prompt says: "extract all interactive elements (buttons, a, input)."
         elements = active_page.locator('button, a, input, select, textarea, [role="button"], [role="link"], [onclick], .btn, .button, [class*="btn"]').all()
 
         element_id = 1
