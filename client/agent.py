@@ -124,9 +124,22 @@ def get_playwright_page(url: str):
     return _page
 
 def init_browser_workspace():
-    """Pre-launches the browser workspace and loads the Sandbox."""
+    """Pre-launches the browser workspace and loads the default workspace URL from Firestore."""
     print("Pre-launching Romy Workspace...")
-    get_playwright_page("https://romy-ai-agent.web.app/sandbox.html")
+
+    default_url = "https://www.google.com"
+    try:
+        db = get_firestore_client()
+        settings_ref = db.collection("settings").document("default_workspace_url")
+        settings_doc = settings_ref.get()
+        if settings_doc.exists:
+            url = settings_doc.to_dict().get("url")
+            if url:
+                default_url = url
+    except Exception as e:
+        print(f"Error fetching default workspace URL from Firestore: {e}")
+
+    get_playwright_page(default_url)
 
 def scan_web_ui() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
     """

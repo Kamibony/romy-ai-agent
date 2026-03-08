@@ -25,8 +25,11 @@ def main() -> None:
 
         print("Login successful. Starting background tasks...")
 
-        # Initialize the browser workspace (this starts Playwright and fetches the URL)
-        init_browser_workspace()
+        # Pre-launch the browser workspace on the main thread for Playwright stability
+        try:
+            init_browser_workspace()
+        except Exception as workspace_e:
+            print(f"Error pre-launching workspace: {workspace_e}")
 
         # Start the hotkey listener in a daemon thread so it doesn't
         # block the main thread and will automatically exit when the
