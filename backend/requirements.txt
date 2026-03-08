@@ -5,3 +5,10 @@ pydantic
 python-dotenv
 google-genai
 anthropic>=0.39.0
+torch
+torchvision
+transformers==4.43.3
+einops
+timm
+Pillow
+opencv-python-headless
