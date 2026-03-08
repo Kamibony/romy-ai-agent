@@ -9,3 +9,4 @@ pyautogui
 plyer
 firebase-admin
 uiautomation
+playwright
