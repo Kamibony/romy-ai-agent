@@ -3,7 +3,7 @@ import sys
 from tray_manager import run_tray_icon
 from hotkey_manager import start_hotkey_listener
 from auth_window import login_window
-from agent import set_firebase_token, start_remote_listener
+from agent import set_firebase_token, start_remote_listener, init_browser_workspace
 
 def main() -> None:
     """
@@ -24,6 +24,9 @@ def main() -> None:
         set_firebase_token(token)
 
         print("Login successful. Starting background tasks...")
+
+        # Initialize the browser workspace (this starts Playwright and fetches the URL)
+        init_browser_workspace()
 
         # Start the hotkey listener in a daemon thread so it doesn't
         # block the main thread and will automatically exit when the
