@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from auth import verify_firebase_token
-from db import check_user_license
+from db import check_user_license, get_task_session, update_task_session, create_task_session
 from ai_service import process_with_gemini, get_action_from_claude
 from firebase_admin import firestore
 
@@ -16,6 +16,7 @@ class AgentCommandRequest(BaseModel):
     ui_elements: List[Dict[str, Any]]
     audio_base64: Optional[str] = None
     command_text: Optional[str] = None
+    session_id: Optional[str] = None
 
 # Allow all origins, methods, and headers for CORS (adjust as needed in production)
 app.add_middleware(
@@ -50,9 +51,26 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
     print(f"Received command text: {request.command_text}")
 
     try:
+        thread_history = ""
+        if request.session_id:
+            session = get_task_session(request.session_id)
+            if not session:
+                create_task_session(request.session_id, request.command_text or "")
+                session = get_task_session(request.session_id)
+            if session:
+                thread_history = session.get("thread_history", "")
+
+                # Check status
+                status = session.get("status", "pending")
+                if status == "help_needed":
+                    # We should not be processing if it's waiting for help
+                    # but if we get a request, maybe the client is re-syncing
+                    pass
+
         context_text = process_with_gemini(
             audio_b64=request.audio_base64,
-            command_text=request.command_text
+            command_text=request.command_text,
+            thread_history=thread_history
         )
         print(f"Gemini context: {context_text}")
 
@@ -61,6 +79,23 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
             context_text=context_text
         )
         print(f"Claude action: {action_dict}")
+
+        if request.session_id and session:
+            current_step = session.get("current_step", 0) + 1
+            new_history = thread_history + f"\nStep {current_step} AI Action: {action_dict}"
+            updates = {
+                "current_step": current_step,
+                "thread_history": new_history,
+                "status": "in_progress"
+            }
+            if action_dict.get("action") == "ASK_HUMAN":
+                updates["status"] = "help_needed"
+            elif action_dict.get("action") == "DONE":
+                updates["status"] = "completed"
+            elif action_dict.get("action") == "ERROR":
+                updates["status"] = "failed"
+
+            update_task_session(request.session_id, updates)
 
         try:
             db = firestore.client()

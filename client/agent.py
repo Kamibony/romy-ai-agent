@@ -227,13 +227,26 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
         final_status = "completed"
 
         while True:
+            # Check for human response
+            doc_snapshot = doc_ref.get()
+            if doc_snapshot.exists:
+                data = doc_snapshot.to_dict()
+                if data.get("status") == "help_needed":
+                    print("Agent paused, waiting for human input...")
+                    time.sleep(2)
+                    continue
+
+                if data.get("human_response"):
+                    command_text += "\nHuman instruction: " + data.get("human_response")
+                    doc_ref.update({"human_response": firestore.DELETE_FIELD})
+
             ui_elements, memory_map = scan_web_ui()
 
             payload = {
-                "ui_elements": ui_elements
+                "ui_elements": ui_elements,
+                "session_id": doc_id
             }
-            if iteration == 0:
-                payload["command_text"] = command_text
+            payload["command_text"] = command_text
 
             headers = {
                 "Authorization": f"Bearer {CURRENT_TOKEN}",
@@ -272,6 +285,25 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                         print(f"Successfully clicked at ({x}, {y}).")
                     else:
                         print(f"Error: target_id {target_id} not found in memory map.")
+                elif action_upper == "ASK_HUMAN":
+                    reason = data.get("reason", "No reason provided")
+                    print(f"Agent asking human for help: {reason}")
+                    try:
+                        screenshot = pyautogui.screenshot()
+                        buffered = io.BytesIO()
+                        screenshot.save(buffered, format="PNG")
+                        img_str = base64.b64encode(buffered.getvalue()).decode()
+                        doc_ref.update({
+                            "status": "help_needed",
+                            "help_reason": reason,
+                            "screenshot_b64": img_str
+                        })
+                    except Exception as img_e:
+                        print(f"Error capturing screenshot: {img_e}")
+                        doc_ref.update({
+                            "status": "help_needed",
+                            "help_reason": reason
+                        })
                 else:
                     print(f"Received action: {action}. Continuing loop...")
             except requests.exceptions.RequestException as req_e:
