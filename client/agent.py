@@ -4,13 +4,15 @@ import time
 import os
 import requests
 
-import mss
-import mss.tools
+import uiautomation as auto
 import sounddevice as sd
 from scipy.io.wavfile import write as wav_write
 import pyautogui
 from plyer import notification
 import winsound
+import firebase_admin
+from firebase_admin import firestore
+from typing import Dict, Any, Tuple
 
 pyautogui.FAILSAFE = False
 
@@ -65,6 +67,55 @@ def start_remote_listener() -> None:
     except Exception as e:
         print(f"Error starting remote listener: {e}")
 
+def scan_ui_elements() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
+    """
+    Scans the active window's accessibility tree for clickable elements.
+    Returns a list of UI element dictionaries and a memory map of ID to coordinates.
+    """
+    ui_elements = []
+    memory_map = {}
+
+    try:
+        # We can either scan the entire desktop or the active window.
+        # Active window is usually better for RPA context to avoid sending too much data.
+        active_window = auto.GetForegroundControl()
+        if not active_window:
+            active_window = auto.GetRootControl()
+
+        print(f"Scanning UI tree for window: {active_window.Name}")
+
+        # Traverse the tree
+        element_id = 1
+        for control, depth in auto.WalkTree(active_window, getChildren=lambda c: c.GetChildren(), includeTop=True):
+            # Filter for elements that are likely interactive or provide context
+            control_type = control.ControlTypeName
+            name = control.Name
+
+            if control_type in ['ButtonControl', 'HyperlinkControl', 'TextControl', 'EditControl', 'MenuItemControl', 'ListItemControl', 'TabItemControl']:
+                rect = control.BoundingRectangle
+                if rect.width() > 0 and rect.height() > 0:
+                    center_x = rect.left + rect.width() // 2
+                    center_y = rect.top + rect.height() // 2
+
+                    element_str_id = str(element_id)
+                    ui_elements.append({
+                        "id": element_str_id,
+                        "type": control_type,
+                        "name": name
+                    })
+
+                    memory_map[element_str_id] = {
+                        "x": center_x,
+                        "y": center_y
+                    }
+                    element_id += 1
+
+        print(f"Found {len(ui_elements)} UI elements.")
+    except Exception as e:
+        print(f"Error scanning UI tree: {e}")
+
+    return ui_elements, memory_map
+
 def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
     """Runs the agent loop triggered by a remote text command."""
     if not CURRENT_TOKEN:
@@ -86,10 +137,10 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
         final_status = "completed"
 
         while True:
-            image_b64 = capture_screen()
+            ui_elements, memory_map = scan_ui_elements()
 
             payload = {
-                "image_base64": image_b64
+                "ui_elements": ui_elements
             }
             if iteration == 0:
                 payload["command_text"] = command_text
@@ -120,16 +171,17 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                     print(f"Remote agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
                     final_status = "failed"
                     break
-                elif action_upper == "CLICK" and "x" in data and "y" in data:
-                    try:
-                        x = int(data["x"])
-                        y = int(data["y"])
+                elif action_upper == "CLICK" and "target_id" in data:
+                    target_id = str(data["target_id"])
+                    if target_id in memory_map:
+                        x = memory_map[target_id]["x"]
+                        y = memory_map[target_id]["y"]
                         print(f"Moving mouse to ({x}, {y}) and clicking...")
                         pyautogui.moveTo(x, y, duration=0.5)
                         pyautogui.click()
                         print(f"Successfully clicked at ({x}, {y}).")
-                    except ValueError:
-                        print(f"Invalid coordinates received: x={data.get('x')}, y={data.get('y')}")
+                    else:
+                        print(f"Error: target_id {target_id} not found in memory map.")
                 else:
                     print(f"Received action: {action}. Continuing loop...")
             except requests.exceptions.RequestException as req_e:
@@ -151,28 +203,6 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
             db.collection("remote_commands").document(doc_id).update({"status": "failed"})
         except Exception:
             pass
-
-
-def capture_screen() -> str:
-    """
-    Captures the primary monitor using mss, saves it as PNG in memory,
-    and returns the Base64 encoded string.
-    """
-    try:
-        with mss.mss() as sct:
-            # Monitor 1 is usually the primary monitor
-            monitor = sct.monitors[1]
-            sct_img = sct.grab(monitor)
-
-            # Save to an in-memory byte buffer
-            img_bytes = mss.tools.to_png(sct_img.rgb, sct_img.size)
-
-            # Encode to base64
-            b64_str = base64.b64encode(img_bytes).decode('utf-8')
-            return b64_str
-    except Exception as e:
-        print(f"Error capturing screen: {e}")
-        return ""
 
 
 def record_audio(duration: int = 5) -> str:
@@ -231,12 +261,12 @@ def activate_agent() -> None:
         # 2. Start Agentic Loop
         iteration = 0
         while True:
-            # 3. Capture screen
-            image_b64 = capture_screen()
+            # 3. Scan UI Elements
+            ui_elements, memory_map = scan_ui_elements()
 
             # 4. Construct JSON payload
             payload = {
-                "image_base64": image_b64
+                "ui_elements": ui_elements
             }
             if iteration == 0:
                 payload["audio_base64"] = audio_b64
@@ -270,16 +300,17 @@ def activate_agent() -> None:
                     error_msg = data.get("error", "No error message provided")
                     print(f"Agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
                     break
-                elif action_upper == "CLICK" and "x" in data and "y" in data:
-                    try:
-                        x = int(data["x"])
-                        y = int(data["y"])
+                elif action_upper == "CLICK" and "target_id" in data:
+                    target_id = str(data["target_id"])
+                    if target_id in memory_map:
+                        x = memory_map[target_id]["x"]
+                        y = memory_map[target_id]["y"]
                         print(f"Moving mouse to ({x}, {y}) and clicking...")
                         pyautogui.moveTo(x, y, duration=0.5)
                         pyautogui.click()
                         print(f"Successfully clicked at ({x}, {y}).")
-                    except ValueError:
-                        print(f"Invalid coordinates received: x={data.get('x')}, y={data.get('y')}")
+                    else:
+                        print(f"Error: target_id {target_id} not found in memory map.")
                 else:
                     print(f"Received action: {action}. Continuing loop...")
             except requests.exceptions.RequestException as req_e:

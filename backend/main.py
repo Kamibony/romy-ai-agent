@@ -10,8 +10,10 @@ from firebase_admin import firestore
 
 app = FastAPI(title="ROMY AI Agent Backend")
 
+from typing import Optional, List, Dict, Any
+
 class AgentCommandRequest(BaseModel):
-    image_base64: str
+    ui_elements: List[Dict[str, Any]]
     audio_base64: Optional[str] = None
     command_text: Optional[str] = None
 
@@ -41,22 +43,21 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
             detail="User license is not active.",
         )
 
-    image_len = len(request.image_base64)
+    elements_count = len(request.ui_elements)
     audio_len = len(request.audio_base64) if request.audio_base64 else 0
-    print(f"Received image length: {image_len}")
+    print(f"Received {elements_count} UI elements")
     print(f"Received audio length: {audio_len}")
     print(f"Received command text: {request.command_text}")
 
     try:
         context_text = process_with_gemini(
-            image_b64=request.image_base64,
             audio_b64=request.audio_base64,
             command_text=request.command_text
         )
         print(f"Gemini context: {context_text}")
 
         action_dict = get_action_from_claude(
-            image_b64=request.image_base64,
+            ui_elements=request.ui_elements,
             context_text=context_text
         )
         print(f"Claude action: {action_dict}")
