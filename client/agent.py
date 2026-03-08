@@ -96,7 +96,12 @@ def get_playwright_page(url: str):
 
     return _page
 
-def scan_web_ui(url=None) -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
+def init_browser_workspace():
+    """Pre-launches the browser workspace and loads the Sandbox."""
+    print("Pre-launching Romy Workspace...")
+    get_playwright_page("https://romy-ai-agent.web.app/sandbox.html")
+
+def scan_web_ui() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
     """
     Scans the web DOM for interactive elements using Playwright.
     Returns a list of UI element dictionaries and a memory map of ID to coordinates.
@@ -105,7 +110,8 @@ def scan_web_ui(url=None) -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int
     memory_map = {}
 
     try:
-        page = get_playwright_page(url)
+        # Strictly passive scanning: never pass a URL or trigger a reload
+        page = get_playwright_page(None)
 
         # Get elements
         # The prompt says: "extract all interactive elements (buttons, a, input)."

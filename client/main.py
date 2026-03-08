@@ -3,7 +3,7 @@ import sys
 from tray_manager import run_tray_icon
 from hotkey_manager import start_hotkey_listener
 from auth_window import login_window
-from agent import set_firebase_token, start_remote_listener
+from agent import set_firebase_token, start_remote_listener, init_browser_workspace
 
 def main() -> None:
     """
@@ -24,6 +24,18 @@ def main() -> None:
         set_firebase_token(token)
 
         print("Login successful. Starting background tasks...")
+
+        # Pre-launch the browser workspace (loads the Sandbox)
+        try:
+            # We initialize this on the main thread or a separate daemon thread.
+            # Starting it in a daemon thread so it doesn't block tray initialization.
+            workspace_thread = threading.Thread(
+                target=init_browser_workspace,
+                daemon=True
+            )
+            workspace_thread.start()
+        except Exception as workspace_e:
+            print(f"Error pre-launching workspace: {workspace_e}")
 
         # Start the hotkey listener in a daemon thread so it doesn't
         # block the main thread and will automatically exit when the
