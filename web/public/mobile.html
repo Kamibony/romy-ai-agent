@@ -42,13 +42,26 @@
                 </button>
                 <div id="status-message" class="text-center text-sm mt-2 hidden"></div>
             </div>
+
+            <div id="hitl-section" style="display: none;" class="mt-8 border-t pt-6 space-y-4">
+                <h3 class="text-xl font-semibold text-center text-orange-600">Agent Needs Help</h3>
+                <p id="hitl-reason" class="text-center text-gray-700 font-medium"></p>
+                <img id="hitl-screenshot" class="w-full rounded shadow-md border" alt="Agent Screenshot" />
+                <div class="space-y-2">
+                    <label for="hitl-input" class="sr-only">Instruction</label>
+                    <textarea id="hitl-input" rows="3" class="block w-full rounded-lg border-gray-300 shadow-sm focus:border-orange-500 focus:ring-orange-500 text-base border p-3 resize-none" placeholder="Provide instructions to the agent..."></textarea>
+                </div>
+                <button id="resume-btn" class="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-lg font-bold text-white bg-orange-600 hover:bg-orange-700 active:bg-orange-800 focus:outline-none transition duration-150 ease-in-out">
+                    Resume Task
+                </button>
+            </div>
         </div>
     </main>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
         import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, serverTimestamp, query, where, onSnapshot, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyBF2KBDgfYOzMbdSjFgCrGUygQbFaSfSxI",
@@ -66,7 +79,14 @@
         const executeBtn = document.getElementById('execute-btn');
         const statusMessage = document.getElementById('status-message');
 
+        const hitlSection = document.getElementById('hitl-section');
+        const hitlReason = document.getElementById('hitl-reason');
+        const hitlScreenshot = document.getElementById('hitl-screenshot');
+        const hitlInput = document.getElementById('hitl-input');
+        const resumeBtn = document.getElementById('resume-btn');
+
         let currentUser = null;
+        let activeHelpTaskId = null;
 
         // Dev Mode Bypass
         authStatus.textContent = `Dev Mode (No Auth Required)`;
@@ -85,6 +105,60 @@
             }
         });
         */
+
+        // Listen for help needed tasks
+        const q = query(collection(db, "remote_commands"), where("status", "==", "help_needed"));
+        onSnapshot(q, (snapshot) => {
+            if (!snapshot.empty) {
+                // For simplicity, just take the first one
+                const docSnap = snapshot.docs[0];
+                const data = docSnap.data();
+                activeHelpTaskId = docSnap.id;
+
+                hitlReason.textContent = data.help_reason || "No reason provided.";
+                if (data.screenshot_b64) {
+                    hitlScreenshot.src = `data:image/png;base64,${data.screenshot_b64}`;
+                    hitlScreenshot.style.display = 'block';
+                } else {
+                    hitlScreenshot.style.display = 'none';
+                }
+
+                hitlInput.value = '';
+                hitlSection.style.display = 'block';
+            } else {
+                hitlSection.style.display = 'none';
+                activeHelpTaskId = null;
+            }
+        });
+
+        resumeBtn.addEventListener('click', async () => {
+            if (!activeHelpTaskId) return;
+
+            const instruction = hitlInput.value.trim();
+            if (!instruction) {
+                alert("Please provide an instruction before resuming.");
+                return;
+            }
+
+            resumeBtn.disabled = true;
+            resumeBtn.textContent = 'Resuming...';
+
+            try {
+                const taskRef = doc(db, "remote_commands", activeHelpTaskId);
+                await updateDoc(taskRef, {
+                    human_response: instruction,
+                    status: 'in_progress'
+                });
+                console.log("Task resumed.");
+            } catch (error) {
+                console.error("Error resuming task:", error);
+                alert("Failed to resume task.");
+            } finally {
+                resumeBtn.disabled = false;
+                resumeBtn.textContent = 'Resume Task';
+            }
+        });
+
 
         executeBtn.addEventListener('click', async () => {
             const commandText = commandInput.value.trim();

@@ -33,7 +33,7 @@ if Anthropic is not None:
     except Exception as e:
         print(f"Failed to initialize Anthropic client: {e}")
 
-def process_with_gemini(audio_b64: Optional[str] = None, command_text: Optional[str] = None) -> str:
+def process_with_gemini(audio_b64: Optional[str] = None, command_text: Optional[str] = None, thread_history: str = "") -> str:
     """
     Uses Gemini 2.5 Flash to transcribe the audio command (or process textual command) and describe the state of the UI.
     """
@@ -56,6 +56,8 @@ def process_with_gemini(audio_b64: Optional[str] = None, command_text: Optional[
         prompt = "Please transcribe the audio command (if any)."
         if command_text:
             prompt += f"\nAdditionally, the user provided this text command: '{command_text}'. Treat this as the primary instruction if provided."
+        if thread_history:
+            prompt += f"\nHere is the history of the current task session:\n{thread_history}"
         contents.append(prompt)
 
         response = client.models.generate_content(
@@ -94,6 +96,8 @@ def get_action_from_claude(ui_elements: list[Dict[str, Any]], context_text: str)
             "You are a structural RPA assistant. You are provided with a list of UI elements currently on the screen. "
             "Each element has an ID and a description/name. Based on the user's command, identify the correct target "
             "element and return ONLY a JSON block: {\"action\": \"CLICK\", \"target_id\": \"<the_number>\"}.\n"
+            "If you encounter an unexpected popup, captcha, or cannot find the target, DO NOT guess or fail. "
+            "Instead, return a JSON action: {\"action\": \"ASK_HUMAN\", \"reason\": \"<your specific question>\"}.\n"
         )
         if global_prompt:
             system_prompt += f"Global Instructions:\n{global_prompt}\n\n"
@@ -130,6 +134,11 @@ def get_action_from_claude(ui_elements: list[Dict[str, Any]], context_text: str)
                     return {
                         "action": "CLICK",
                         "target_id": str(action_data["target_id"])
+                    }
+                elif action_data.get("action") == "ASK_HUMAN" and "reason" in action_data:
+                    return {
+                        "action": "ASK_HUMAN",
+                        "reason": str(action_data["reason"])
                     }
             except json.JSONDecodeError:
                 pass
