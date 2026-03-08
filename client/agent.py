@@ -13,6 +13,7 @@ import winsound
 import firebase_admin
 from firebase_admin import firestore
 from typing import Dict, Any, Tuple
+from playwright.sync_api import sync_playwright
 
 pyautogui.FAILSAFE = False
 
@@ -66,6 +67,87 @@ def start_remote_listener() -> None:
         print("Started listening for remote commands on Firestore.")
     except Exception as e:
         print(f"Error starting remote listener: {e}")
+
+
+_playwright = None
+_browser = None
+_page = None
+
+def get_playwright_page(url: str):
+    global _playwright, _browser, _page
+    if _playwright is None:
+        _playwright = sync_playwright().start()
+        # Use --start-fullscreen to make viewport match screen coordinates for pyautogui
+        _browser = _playwright.chromium.launch(headless=False, args=['--start-fullscreen'])
+        context = _browser.new_context(viewport=None) # Use None to inherit fullscreen size
+        _page = context.new_page()
+
+    if _page.url != url and url:
+        _page.goto(url)
+        _page.wait_for_load_state('networkidle')
+
+    return _page
+
+def scan_web_ui(url="https://romy-ai-agent.web.app/sandbox.html") -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
+    """
+    Scans the web DOM for interactive elements using Playwright.
+    Returns a list of UI element dictionaries and a memory map of ID to coordinates.
+    """
+    ui_elements = []
+    memory_map = {}
+
+    try:
+        page = get_playwright_page(url)
+
+        # Get elements
+        # The prompt says: "extract all interactive elements (buttons, a, input)."
+        elements = page.locator('button, a, input').all()
+
+        element_id = 1
+        for el in elements:
+            try:
+                if not el.is_visible():
+                    continue
+
+                box = el.bounding_box()
+                if not box or box['width'] == 0 or box['height'] == 0:
+                    continue
+
+                tag_name = el.evaluate("el => el.tagName.toLowerCase()")
+
+                # Get text or name
+                text = el.inner_text().strip()
+                if not text:
+                    text = el.get_attribute('value') or el.get_attribute('name') or el.get_attribute('id') or ''
+
+                # Bounding box coordinates (center X, center Y)
+                center_x = int(box['x'] + box['width'] / 2)
+                center_y = int(box['y'] + box['height'] / 2)
+
+                element_str_id = str(element_id)
+
+                ui_elements.append({
+                    "id": element_str_id,
+                    "type": tag_name, # The prompt says Tag
+                    "name": text      # The prompt says Text/Name
+                })
+
+                memory_map[element_str_id] = {
+                    "x": center_x,
+                    "y": center_y
+                }
+
+                element_id += 1
+            except Exception as e:
+                print(f"Error extracting element {element_id}: {e}")
+
+        print(f"Found {len(ui_elements)} Web UI elements.")
+
+    except Exception as e:
+        print(f"Error scanning web UI: {e}")
+
+    return ui_elements, memory_map
+
 
 def scan_ui_elements() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
     """
@@ -137,7 +219,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
         final_status = "completed"
 
         while True:
-            ui_elements, memory_map = scan_ui_elements()
+            ui_elements, memory_map = scan_web_ui()
 
             payload = {
                 "ui_elements": ui_elements
@@ -262,7 +344,7 @@ def activate_agent() -> None:
         iteration = 0
         while True:
             # 3. Scan UI Elements
-            ui_elements, memory_map = scan_ui_elements()
+            ui_elements, memory_map = scan_web_ui()
 
             # 4. Construct JSON payload
             payload = {
