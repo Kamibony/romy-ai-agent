@@ -77,12 +77,20 @@ def get_playwright_page(url: str):
     global _playwright, _browser, _page
     if _playwright is None:
         _playwright = sync_playwright().start()
-        # Use --start-fullscreen to make viewport match screen coordinates for pyautogui
-        _browser = _playwright.chromium.launch(headless=False, args=['--start-fullscreen'])
+        try:
+            # Systemic Priority 1: Market Leader (Chrome)
+            _browser = _playwright.chromium.launch(channel="chrome", headless=False, args=['--start-fullscreen'])
+        except Exception:
+            try:
+                # Systemic Priority 2: OS Native Guarantee (Edge)
+                _browser = _playwright.chromium.launch(channel="msedge", headless=False, args=['--start-fullscreen'])
+            except Exception as e:
+                print(f"Critical Error: No standard browser (Chrome/Edge) found on the system. {e}")
+                return None
         context = _browser.new_context(viewport=None) # Use None to inherit fullscreen size
         _page = context.new_page()
 
-    if _page.url != url and url:
+    if _page and _page.url != url and url:
         _page.goto(url)
         _page.wait_for_load_state('networkidle')
 
