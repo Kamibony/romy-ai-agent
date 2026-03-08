@@ -100,7 +100,7 @@ def init_browser_workspace():
     """Pre-launches the browser workspace and loads the default workspace URL from Firestore."""
     print("Pre-launching Romy Workspace...")
 
-    default_url = "https://www.google.com"
+    default_url = "about:blank"
     try:
         db = get_firestore_client()
         settings_ref = db.collection("settings").document("default_workspace_url")
@@ -124,11 +124,27 @@ def scan_web_ui() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
 
     try:
         # Strictly passive scanning: never pass a URL or trigger a reload
-        page = get_playwright_page(None)
+        # Ensure browser is initialized
+        get_playwright_page(None)
+
+        active_page = None
+        if _browser and _browser.pages:
+            for p in _browser.pages:
+                try:
+                    if p.evaluate("document.visibilityState") == "visible":
+                        active_page = p
+                        break
+                except Exception:
+                    pass
+            if not active_page:
+                active_page = _browser.pages[-1]
+        else:
+            # Fallback if somehow browser pages are empty but browser exists
+            active_page = get_playwright_page(None)
 
         # Get elements
         # The prompt says: "extract all interactive elements (buttons, a, input)."
-        elements = page.locator('button, a, input').all()
+        elements = active_page.locator('button, a, input').all()
 
         element_id = 1
         for el in elements:
