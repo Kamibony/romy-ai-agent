@@ -1,7 +1,6 @@
 pystray
 Pillow
 keyboard
-mss
 sounddevice
 scipy
 requests
@@ -9,3 +8,4 @@ python-dotenv
 pyautogui
 plyer
 firebase-admin
+uiautomation
