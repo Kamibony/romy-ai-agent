@@ -1,3 +1,4 @@
+import logging
 import tkinter as tk
 import requests
 
@@ -73,5 +74,5 @@ def login_window() -> str | None:
 
         return token_result[0]
     except Exception as e:
-        print(f"Error creating login window: {e}")
+        logging.error(f"Error creating login window: {e}")
         return None

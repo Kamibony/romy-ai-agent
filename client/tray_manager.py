@@ -1,3 +1,5 @@
+import logging
+import logging
 import pystray
 from PIL import Image
 
@@ -18,9 +20,12 @@ def create_image(width: int = 64, height: int = 64, color: tuple = (0, 0, 255)) 
         image = Image.new('RGB', (width, height), color)
         return image
     except Exception as e:
-        print(f"Error creating tray icon image: {e}")
+        logging.error(f"Error creating tray icon image: {e}")
         # Return a fallback image just in case
         return Image.new('RGB', (width, height), (0, 0, 0))
+
+import os
+import signal
 
 def on_quit(icon: pystray.Icon, item: pystray.MenuItem) -> None:
     """
@@ -31,15 +36,15 @@ def on_quit(icon: pystray.Icon, item: pystray.MenuItem) -> None:
         item (pystray.MenuItem): The menu item clicked.
     """
     try:
-        print("Shutting down the client...")
+        logging.info("Shutting down the client...")
         icon.stop()
+        os.kill(os.getpid(), signal.SIGTERM)
     except Exception as e:
-        print(f"Error during shutdown: {e}")
+        logging.error(f"Error during shutdown: {e}")
 
 def run_tray_icon() -> None:
     """
     Initializes and runs the system tray icon.
-    This function blocks and must be run on the main thread.
     """
     try:
         # Create the icon image
@@ -63,4 +68,4 @@ def run_tray_icon() -> None:
         # Run the icon (blocks the thread)
         icon.run()
     except Exception as e:
-        print(f"Error running system tray icon: {e}")
+        logging.error(f"Error running system tray icon: {e}")
