@@ -53,7 +53,7 @@ def process_with_gemini(audio_b64: Optional[str] = None, command_text: Optional[
                 )
             )
 
-        prompt = "Please transcribe the audio command (if any)."
+        prompt = "Please transcribe the audio command (if any).\nYou are an audio transcription engine. If the provided audio is empty, silent, contains only background noise, or is indiscernible, you must return STRICTLY the string 'EMPTY_AUDIO'. Do not apologize, do not explain, and absolutely do not generate hallucinated commands or dummy text."
         if command_text:
             prompt += f"\nAdditionally, the user provided this text command: '{command_text}'. Treat this as the primary instruction if provided."
         if thread_history:
@@ -79,6 +79,9 @@ def get_action_from_claude(ui_elements: list[Dict[str, Any]], context_text: str)
         return {"action": "API_ERROR", "error": "Anthropic client not initialized"}
 
     try:
+        if context_text.strip() == "EMPTY_AUDIO":
+            return {"action": "ASK_HUMAN", "reason": "I couldn't hear any audio. Could you please provide a text command?"}
+
         from firebase_admin import firestore
         db = firestore.client()
         global_prompt = ""
