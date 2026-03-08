@@ -102,13 +102,13 @@ def init_browser_workspace():
 
     default_url = "about:blank"
     try:
-        db = get_firestore_client()
-        settings_ref = db.collection("settings").document("default_workspace_url")
-        settings_doc = settings_ref.get()
-        if settings_doc.exists:
-            url = settings_doc.to_dict().get("url")
-            if url:
-                default_url = url
+        url_endpoint = "https://firestore.googleapis.com/v1/projects/romy-ai-agent/databases/(default)/documents/settings/default_workspace_url"
+        headers = {"Authorization": f"Bearer {CURRENT_TOKEN}"}
+        response = requests.get(url_endpoint, headers=headers)
+        response.raise_for_status()
+        url = response.json().get('fields', {}).get('url', {}).get('stringValue')
+        if url:
+            default_url = url
     except Exception as e:
         print(f"Error fetching default workspace URL from Firestore: {e}")
 
@@ -142,9 +142,11 @@ def scan_web_ui() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
             # Fallback if somehow browser pages are empty but browser exists
             active_page = get_playwright_page(None)
 
+        print(f"Scanning active page URL: {active_page.url}")
+
         # Get elements
         # The prompt says: "extract all interactive elements (buttons, a, input)."
-        elements = active_page.locator('button, a, input').all()
+        elements = active_page.locator('button, a, input, select, textarea, [role="button"], [role="link"], [onclick], .btn, .button, [class*="btn"]').all()
 
         element_id = 1
         for el in elements:
