@@ -77,26 +77,26 @@ def get_playwright_page(url: str):
     global _playwright, _browser, _page
     if _playwright is None:
         _playwright = sync_playwright().start()
+        user_data_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "RomyAgentBrowserData")
         try:
             # Systemic Priority 1: Market Leader (Chrome)
-            _browser = _playwright.chromium.launch(channel="chrome", headless=False, args=['--start-fullscreen'])
+            _browser = _playwright.chromium.launch_persistent_context(user_data_dir=user_data_dir, channel="chrome", headless=False, args=['--start-fullscreen'])
         except Exception:
             try:
                 # Systemic Priority 2: OS Native Guarantee (Edge)
-                _browser = _playwright.chromium.launch(channel="msedge", headless=False, args=['--start-fullscreen'])
+                _browser = _playwright.chromium.launch_persistent_context(user_data_dir=user_data_dir, channel="msedge", headless=False, args=['--start-fullscreen'])
             except Exception as e:
                 print(f"Critical Error: No standard browser (Chrome/Edge) found on the system. {e}")
                 return None
-        context = _browser.new_context(viewport=None) # Use None to inherit fullscreen size
-        _page = context.new_page()
+        _page = _browser.pages[0] if _browser.pages else _browser.new_page()
 
-    if _page and _page.url != url and url:
+    if _page and _page.url == "about:blank" and url:
         _page.goto(url)
         _page.wait_for_load_state('networkidle')
 
     return _page
 
-def scan_web_ui(url="https://romy-ai-agent.web.app/sandbox.html") -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
+def scan_web_ui(url=None) -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
     """
     Scans the web DOM for interactive elements using Playwright.
     Returns a list of UI element dictionaries and a memory map of ID to coordinates.
@@ -382,7 +382,34 @@ def activate_agent() -> None:
 
         # 2. Start Agentic Loop
         iteration = 0
+        doc_id = "voice_session_1"
+        command_text = ""
+        db = get_firestore_client()
+        doc_ref = db.collection("remote_commands").document(doc_id)
+
+        # Create or ensure the document exists
+        try:
+            doc_ref.set({"status": "in_progress", "command": "voice command"}, merge=True)
+        except Exception as e:
+            print(f"Error setting up voice session document: {e}")
+
         while True:
+            # Check for human response
+            try:
+                doc_snapshot = doc_ref.get()
+                if doc_snapshot.exists:
+                    data = doc_snapshot.to_dict()
+                    if data.get("status") == "help_needed":
+                        print("Agent paused, waiting for human input...")
+                        time.sleep(2)
+                        continue
+
+                    if data.get("human_response"):
+                        command_text += "\nHuman instruction: " + data.get("human_response")
+                        doc_ref.update({"human_response": firestore.DELETE_FIELD})
+            except Exception as e:
+                print(f"Error checking human response: {e}")
+
             # 3. Scan UI Elements
             ui_elements, memory_map = scan_web_ui()
 
@@ -394,6 +421,9 @@ def activate_agent() -> None:
                 payload["audio_base64"] = audio_b64
             else:
                 payload["audio_base64"] = ""
+
+            payload["command_text"] = command_text
+            payload["session_id"] = doc_id
 
             # 5. Send POST to backend
             headers = {
@@ -433,6 +463,25 @@ def activate_agent() -> None:
                         print(f"Successfully clicked at ({x}, {y}).")
                     else:
                         print(f"Error: target_id {target_id} not found in memory map.")
+                elif action_upper == "ASK_HUMAN":
+                    reason = data.get("reason", "No reason provided")
+                    print(f"Agent asking human for help: {reason}")
+                    try:
+                        screenshot = pyautogui.screenshot()
+                        buffered = io.BytesIO()
+                        screenshot.save(buffered, format="PNG")
+                        img_str = base64.b64encode(buffered.getvalue()).decode()
+                        doc_ref.update({
+                            "status": "help_needed",
+                            "help_reason": reason,
+                            "screenshot_b64": img_str
+                        })
+                    except Exception as img_e:
+                        print(f"Error capturing screenshot: {img_e}")
+                        doc_ref.update({
+                            "status": "help_needed",
+                            "help_reason": reason
+                        })
                 else:
                     print(f"Received action: {action}. Continuing loop...")
             except requests.exceptions.RequestException as req_e:
