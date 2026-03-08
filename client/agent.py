@@ -73,6 +73,33 @@ _playwright = None
 _browser = None
 _page = None
 
+def init_browser_workspace() -> None:
+    """Initializes the browser workspace dynamically by fetching the default URL from Firestore."""
+    try:
+        db = get_firestore_client()
+        settings_ref = db.collection("settings").document("global_prompt")
+        settings_doc = settings_ref.get()
+
+        url_to_load = "https://www.google.com"
+        if settings_doc.exists:
+            data = settings_doc.to_dict()
+            if data and "default_workspace_url" in data:
+                url_to_load = data["default_workspace_url"]
+                print(f"Fetched workspace URL from database: {url_to_load}")
+            else:
+                print("No default_workspace_url found in settings, falling back to default.")
+        else:
+            print("Settings document not found, falling back to default.")
+
+        get_playwright_page(url=url_to_load)
+        print("Browser workspace initialized successfully.")
+    except Exception as e:
+        print(f"Error initializing browser workspace: {e}")
+        try:
+            get_playwright_page(url="https://www.google.com")
+        except Exception as e2:
+            print(f"Fallback browser initialization also failed: {e2}")
+
 def get_playwright_page(url: str):
     global _playwright, _browser, _page
     if _playwright is None:
