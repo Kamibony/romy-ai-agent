@@ -5,7 +5,7 @@ from typing import Optional
 
 from auth import verify_firebase_token
 from db import check_user_license, get_task_session, update_task_session, create_task_session
-from ai_service import process_with_gemini, get_action_from_claude
+from ai_service import process_with_gemini
 from firebase_admin import firestore
 
 app = FastAPI(title="ROMY AI Agent Backend")
@@ -67,18 +67,13 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
                     # but if we get a request, maybe the client is re-syncing
                     pass
 
-        context_text = process_with_gemini(
+        action_list = process_with_gemini(
+            ui_elements=request.ui_elements,
             audio_b64=request.audio_base64,
             command_text=request.command_text,
             thread_history=thread_history
         )
-        print(f"Gemini context: {context_text}")
-
-        action_list = get_action_from_claude(
-            ui_elements=request.ui_elements,
-            context_text=context_text
-        )
-        print(f"Claude action list: {action_list}")
+        print(f"Gemini action list: {action_list}")
 
         if request.session_id and session:
             current_step = session.get("current_step", 0) + 1
@@ -106,8 +101,8 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
             db = firestore.client()
             db.collection("telemetry").add({
                 "timestamp": firestore.SERVER_TIMESTAMP,
-                "gemini_context": context_text,
-                "claude_action": str(action_list),
+                "gemini_context": str(action_list), # Storing the action list in place of context
+                "claude_action": str(action_list), # Kept for backward compatibility if needed by frontend
                 "uid": uid
             })
             print("Telemetry written to Firestore")
