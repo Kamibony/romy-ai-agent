@@ -20,6 +20,8 @@ from firebase_admin import firestore
 from typing import Dict, Any, Tuple
 from playwright.sync_api import sync_playwright
 
+from extension_server import extension_server
+
 pyautogui.FAILSAFE = False
 
 BACKEND_URL = os.environ.get("BACKEND_URL", "https://romy-backend-1049976869239.europe-west1.run.app/api/v1/agent/command")
@@ -189,12 +191,36 @@ def init_browser_workspace():
 
 def scan_web_ui() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
     """
-    Scans the web DOM for interactive elements using Playwright.
+    Scans the web DOM for interactive elements.
+    PRIMARY ROUTE: Chrome Extension via WebSocket.
+    FALLBACK ROUTE: Playwright.
     Returns a list of UI element dictionaries and a memory map of ID to coordinates.
     """
     ui_elements = []
     memory_map = {}
 
+    # 1. Attempt Chrome Extension Scan
+    if extension_server.is_connected():
+        logging.info("Chrome Extension is connected. Requesting DOM scan...")
+        ext_elements = extension_server.scan_dom()
+        if ext_elements is not None:
+            logging.info(f"Received {len(ext_elements)} elements from Extension.")
+            for el in ext_elements:
+                ui_elements.append({
+                    "id": el["id"],
+                    "type": el["type"],
+                    "name": el["name"]
+                })
+                memory_map[el["id"]] = {
+                    "x": el["x"],
+                    "y": el["y"]
+                }
+            return ui_elements, memory_map
+        else:
+            logging.warning("Extension DOM scan failed or timed out. Falling back to Playwright.")
+
+    # 2. Fallback to Playwright Scan
+    logging.info("Using Playwright for DOM scan...")
     try:
         # Strictly passive scanning: never pass a URL or trigger a reload
         active_page = _get_active_page()
@@ -395,7 +421,9 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                         break
                     elif action_upper == "CLICK" and "target_id" in act:
                         target_id = str(act["target_id"])
-                        if target_id in memory_map:
+                        if extension_server.is_connected() and extension_server.execute_click(target_id):
+                            logging.info(f"Successfully clicked element {target_id} via Extension.")
+                        elif target_id in memory_map:
                             x = memory_map[target_id]["x"]
                             y = memory_map[target_id]["y"]
                             logging.info(f"Clicking at ({x}, {y}) using Playwright viewport coordinates...")
@@ -419,7 +447,9 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                     elif action_upper == "TYPE" and "target_id" in act and "text" in act:
                         target_id = str(act["target_id"])
                         text_to_type = act["text"]
-                        if target_id in memory_map:
+                        if extension_server.is_connected() and extension_server.execute_type(target_id, text_to_type):
+                            logging.info(f"Successfully typed '{text_to_type}' into element {target_id} via Extension.")
+                        elif target_id in memory_map:
                             x = memory_map[target_id]["x"]
                             y = memory_map[target_id]["y"]
                             logging.info(f"Typing '{text_to_type}' at ({x}, {y}) using Playwright...")
@@ -457,20 +487,23 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                     elif action_upper == "SCROLL" and "direction" in act:
                         direction = act["direction"].lower()
                         logging.info(f"Scrolling {direction}...")
-                        try:
-                            active_page = _get_active_page()
-                            if active_page:
-                                amount = 500 if direction == "down" else -500
-                                active_page.mouse.wheel(0, amount)
-                                logging.info(f"Successfully scrolled {direction} via Playwright.")
-                            else:
-                                logging.warning("No active Playwright page found for scrolling. Falling back to PyAutoGUI.")
+                        if extension_server.is_connected() and extension_server.execute_scroll(direction):
+                            logging.info(f"Successfully scrolled {direction} via Extension.")
+                        else:
+                            try:
+                                active_page = _get_active_page()
+                                if active_page:
+                                    amount = 500 if direction == "down" else -500
+                                    active_page.mouse.wheel(0, amount)
+                                    logging.info(f"Successfully scrolled {direction} via Playwright.")
+                                else:
+                                    logging.warning("No active Playwright page found for scrolling. Falling back to PyAutoGUI.")
+                                    amount = -500 if direction == "down" else 500
+                                    pyautogui.scroll(amount)
+                            except Exception as scroll_e:
+                                logging.error(f"Error executing scroll via Playwright: {scroll_e}. Falling back to PyAutoGUI.")
                                 amount = -500 if direction == "down" else 500
                                 pyautogui.scroll(amount)
-                        except Exception as scroll_e:
-                            logging.error(f"Error executing scroll via Playwright: {scroll_e}. Falling back to PyAutoGUI.")
-                            amount = -500 if direction == "down" else 500
-                            pyautogui.scroll(amount)
                         time.sleep(1) # Let the DOM settle
 
                     elif action_upper == "REPLY" and "text" in act:
@@ -732,7 +765,9 @@ def execute_voice_agent_loop() -> None:
                         break
                     elif action_upper == "CLICK" and "target_id" in act:
                         target_id = str(act["target_id"])
-                        if target_id in memory_map:
+                        if extension_server.is_connected() and extension_server.execute_click(target_id):
+                            logging.info(f"Successfully clicked element {target_id} via Extension.")
+                        elif target_id in memory_map:
                             x = memory_map[target_id]["x"]
                             y = memory_map[target_id]["y"]
                             logging.info(f"Clicking at ({x}, {y}) using Playwright viewport coordinates...")
@@ -756,7 +791,9 @@ def execute_voice_agent_loop() -> None:
                     elif action_upper == "TYPE" and "target_id" in act and "text" in act:
                         target_id = str(act["target_id"])
                         text_to_type = act["text"]
-                        if target_id in memory_map:
+                        if extension_server.is_connected() and extension_server.execute_type(target_id, text_to_type):
+                            logging.info(f"Successfully typed '{text_to_type}' into element {target_id} via Extension.")
+                        elif target_id in memory_map:
                             x = memory_map[target_id]["x"]
                             y = memory_map[target_id]["y"]
                             logging.info(f"Typing '{text_to_type}' at ({x}, {y}) using Playwright...")
@@ -792,20 +829,23 @@ def execute_voice_agent_loop() -> None:
                     elif action_upper == "SCROLL" and "direction" in act:
                         direction = act["direction"].lower()
                         logging.info(f"Scrolling {direction}...")
-                        try:
-                            active_page = _get_active_page()
-                            if active_page:
-                                amount = 500 if direction == "down" else -500
-                                active_page.mouse.wheel(0, amount)
-                                logging.info(f"Successfully scrolled {direction} via Playwright.")
-                            else:
-                                logging.warning("No active Playwright page found for scrolling. Falling back to PyAutoGUI.")
+                        if extension_server.is_connected() and extension_server.execute_scroll(direction):
+                            logging.info(f"Successfully scrolled {direction} via Extension.")
+                        else:
+                            try:
+                                active_page = _get_active_page()
+                                if active_page:
+                                    amount = 500 if direction == "down" else -500
+                                    active_page.mouse.wheel(0, amount)
+                                    logging.info(f"Successfully scrolled {direction} via Playwright.")
+                                else:
+                                    logging.warning("No active Playwright page found for scrolling. Falling back to PyAutoGUI.")
+                                    amount = -500 if direction == "down" else 500
+                                    pyautogui.scroll(amount)
+                            except Exception as scroll_e:
+                                logging.error(f"Error executing scroll via Playwright: {scroll_e}. Falling back to PyAutoGUI.")
                                 amount = -500 if direction == "down" else 500
                                 pyautogui.scroll(amount)
-                        except Exception as scroll_e:
-                            logging.error(f"Error executing scroll via Playwright: {scroll_e}. Falling back to PyAutoGUI.")
-                            amount = -500 if direction == "down" else 500
-                            pyautogui.scroll(amount)
                         time.sleep(1) # Let the DOM settle
 
                     elif action_upper == "REPLY" and "text" in act:
