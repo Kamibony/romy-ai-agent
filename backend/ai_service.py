@@ -65,6 +65,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "If the audio is completely silent or indiscernible, return exactly: [{\"action\": \"ASK_HUMAN\", \"reason\": \"EMPTY_AUDIO\"}]\n"
             "If you encounter an unexpected popup, captcha, or cannot find the target, DO NOT guess or fail. "
             "Instead, return an array with a single JSON action: [{\"action\": \"ASK_HUMAN\", \"reason\": \"<your specific question>\"}].\n"
+            "Audio Dictation Rule: Format dictated text appropriately for UI inputs. For example, if the user dictates an email address and speaks symbols phonetically (e.g., 'at sign' or Slovak 'zavináč' -> '@', 'dot' or Slovak 'bodka' -> '.'), replace the spoken words with the actual mathematical/email symbols.\n"
             "Return ONLY a valid JSON array, for example: [{\"action\": \"CLICK\", \"target_id\": \"1\"}, {\"action\": \"TYPE\", \"target_id\": \"2\", \"text\": \"hello\"}]\n"
         )
         if global_prompt:
