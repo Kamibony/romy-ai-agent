@@ -36,11 +36,7 @@ jobs:
 
       - name: Build Executable
         working-directory: ./client
-        run: pyinstaller --noconfirm --onefile --windowed --splash splash.png --hidden-import plyer.platforms.win.notification --collect-all playwright_stealth main.py
-
-      - name: Rename Executable
-        working-directory: ./client/dist
-        run: Rename-Item -Path "main.exe" -NewName "ROMY-Agent-MVP.exe"
+        run: pyinstaller --noconfirm RomyAgent.spec
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
