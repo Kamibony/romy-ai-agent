@@ -74,26 +74,31 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
         )
         print(f"Gemini context: {context_text}")
 
-        action_dict = get_action_from_claude(
+        action_list = get_action_from_claude(
             ui_elements=request.ui_elements,
             context_text=context_text
         )
-        print(f"Claude action: {action_dict}")
+        print(f"Claude action list: {action_list}")
 
         if request.session_id and session:
             current_step = session.get("current_step", 0) + 1
-            new_history = thread_history + f"\nStep {current_step} AI Action: {action_dict}"
+            new_history = thread_history + f"\nStep {current_step} AI Action: {action_list}"
             updates = {
                 "current_step": current_step,
                 "thread_history": new_history,
                 "status": "in_progress"
             }
-            if action_dict.get("action") == "ASK_HUMAN":
-                updates["status"] = "help_needed"
-            elif action_dict.get("action") == "DONE":
-                updates["status"] = "completed"
-            elif action_dict.get("action") == "ERROR":
-                updates["status"] = "failed"
+
+            # Check for specific terminal actions in the sequence
+            for action in action_list:
+                if action.get("action") == "ASK_HUMAN":
+                    updates["status"] = "help_needed"
+                    break
+                elif action.get("action") == "DONE":
+                    updates["status"] = "completed"
+                elif action.get("action") == "ERROR" or action.get("action") == "API_ERROR" or action.get("action") == "PARSE_ERROR" or action.get("action") == "PIPELINE_ERROR":
+                    updates["status"] = "failed"
+                    break
 
             update_task_session(request.session_id, updates)
 
@@ -102,17 +107,16 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
             db.collection("telemetry").add({
                 "timestamp": firestore.SERVER_TIMESTAMP,
                 "gemini_context": context_text,
-                "claude_action": str(action_dict),
+                "claude_action": str(action_list),
                 "uid": uid
             })
             print("Telemetry written to Firestore")
         except Exception as e:
             print(f"Error writing telemetry: {e}")
 
-        # Ensure 'status' is returned alongside 'action'
-        result = {"status": "success"}
-        result.update(action_dict)
+        # Return the list of actions under the 'actions' key
+        result = {"status": "success", "actions": action_list}
         return result
     except Exception as e:
         print(f"Error in AI pipeline: {e}")
-        return {"status": "error", "action": "PIPELINE_ERROR", "error": str(e)}
+        return {"status": "error", "actions": [{"action": "PIPELINE_ERROR", "error": str(e)}]}

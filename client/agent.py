@@ -356,66 +356,119 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                 response.raise_for_status()
                 data = response.json()
 
-                action = data.get("action", "")
-                if isinstance(action, str):
-                    action_upper = action.upper()
-                else:
-                    action_upper = str(action).upper()
+                actions = data.get("actions", [])
 
-                if action_upper == "DONE":
-                    logging.info("Remote task finished successfully.")
-                    break
-                elif "ERROR" in action_upper:
-                    raw_response = data.get("raw_response", "No raw response provided")
-                    error_msg = data.get("error", "No error message provided")
-                    logging.error(f"Remote agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
-                    final_status = "failed"
-                    break
-                elif action_upper == "CLICK" and "target_id" in data:
-                    target_id = str(data["target_id"])
-                    if target_id in memory_map:
-                        x = memory_map[target_id]["x"]
-                        y = memory_map[target_id]["y"]
-                        logging.info(f"Clicking at ({x}, {y}) using Playwright viewport coordinates...")
+                # If backend returned older single-action format, wrap it
+                if not actions and "action" in data:
+                    actions = [data]
 
-                        try:
-                            # Prefer active Playwright page to solve Viewport-to-Monitor Coordinate Offset
-                            active_page = _get_active_page()
-                            if active_page:
-                                active_page.mouse.click(x, y)
-                                logging.info(f"Successfully clicked at ({x}, {y}) via Playwright.")
-                            else:
-                                # Fallback (should theoretically not be reached if scanning worked)
-                                logging.warning("No active Playwright page found for click. Falling back to PyAutoGUI.")
+                break_outer = False
+                for act in actions:
+                    if ABORT_AGENT:
+                        logging.info("Emergency abort triggered during action sequence.")
+                        final_status = "failed"
+                        break_outer = True
+                        break
+
+                    action_type = act.get("action", "")
+                    action_upper = str(action_type).upper()
+
+                    if action_upper == "DONE":
+                        logging.info("Remote task finished successfully.")
+                        break_outer = True
+                        break
+                    elif "ERROR" in action_upper:
+                        raw_response = act.get("raw_response", "No raw response provided")
+                        error_msg = act.get("error", "No error message provided")
+                        logging.error(f"Remote agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
+                        final_status = "failed"
+                        break_outer = True
+                        break
+                    elif action_upper == "CLICK" and "target_id" in act:
+                        target_id = str(act["target_id"])
+                        if target_id in memory_map:
+                            x = memory_map[target_id]["x"]
+                            y = memory_map[target_id]["y"]
+                            logging.info(f"Clicking at ({x}, {y}) using Playwright viewport coordinates...")
+
+                            try:
+                                active_page = _get_active_page()
+                                if active_page:
+                                    active_page.mouse.click(x, y)
+                                    logging.info(f"Successfully clicked at ({x}, {y}) via Playwright.")
+                                else:
+                                    logging.warning("No active Playwright page found for click. Falling back to PyAutoGUI.")
+                                    pyautogui.moveTo(x, y, duration=0.5)
+                                    pyautogui.click()
+                            except Exception as click_e:
+                                logging.error(f"Error executing click via Playwright: {click_e}. Falling back to PyAutoGUI.")
                                 pyautogui.moveTo(x, y, duration=0.5)
                                 pyautogui.click()
-                        except Exception as click_e:
-                            logging.error(f"Error executing click via Playwright: {click_e}. Falling back to PyAutoGUI.")
-                            pyautogui.moveTo(x, y, duration=0.5)
-                            pyautogui.click()
+                        else:
+                            logging.error(f"Error: target_id {target_id} not found in memory map.")
+
+                    elif action_upper == "TYPE" and "target_id" in act and "text" in act:
+                        target_id = str(act["target_id"])
+                        text_to_type = act["text"]
+                        if target_id in memory_map:
+                            x = memory_map[target_id]["x"]
+                            y = memory_map[target_id]["y"]
+                            logging.info(f"Typing '{text_to_type}' at ({x}, {y}) using Playwright...")
+
+                            try:
+                                active_page = _get_active_page()
+                                if active_page:
+                                    # Focus/Click first
+                                    active_page.mouse.click(x, y)
+                                    # Small sleep to ensure focus
+                                    time.sleep(0.2)
+                                    active_page.keyboard.type(text_to_type)
+                                    logging.info(f"Successfully typed via Playwright.")
+                                else:
+                                    logging.warning("No active Playwright page found for typing. Falling back to PyAutoGUI.")
+                                    pyautogui.moveTo(x, y, duration=0.5)
+                                    pyautogui.click()
+                                    time.sleep(0.2)
+                                    pyautogui.write(text_to_type)
+                            except Exception as type_e:
+                                logging.error(f"Error executing type via Playwright: {type_e}. Falling back to PyAutoGUI.")
+                                pyautogui.moveTo(x, y, duration=0.5)
+                                pyautogui.click()
+                                time.sleep(0.2)
+                                pyautogui.write(text_to_type)
+                        else:
+                            logging.error(f"Error: target_id {target_id} not found in memory map.")
+
+                    elif action_upper == "ASK_HUMAN":
+                        reason = act.get("reason", "No reason provided")
+                        logging.info(f"Agent asking human for help: {reason}")
+                        try:
+                            screenshot = pyautogui.screenshot()
+                            buffered = io.BytesIO()
+                            screenshot.save(buffered, format="PNG")
+                            img_str = base64.b64encode(buffered.getvalue()).decode()
+                            doc_ref.update({
+                                "status": "help_needed",
+                                "help_reason": reason,
+                                "screenshot_b64": img_str
+                            })
+                        except Exception as img_e:
+                            logging.error(f"Error capturing screenshot: {img_e}")
+                            doc_ref.update({
+                                "status": "help_needed",
+                                "help_reason": reason
+                            })
+                        break_outer = True
+                        break
                     else:
-                        logging.error(f"Error: target_id {target_id} not found in memory map.")
-                elif action_upper == "ASK_HUMAN":
-                    reason = data.get("reason", "No reason provided")
-                    logging.info(f"Agent asking human for help: {reason}")
-                    try:
-                        screenshot = pyautogui.screenshot()
-                        buffered = io.BytesIO()
-                        screenshot.save(buffered, format="PNG")
-                        img_str = base64.b64encode(buffered.getvalue()).decode()
-                        doc_ref.update({
-                            "status": "help_needed",
-                            "help_reason": reason,
-                            "screenshot_b64": img_str
-                        })
-                    except Exception as img_e:
-                        logging.error(f"Error capturing screenshot: {img_e}")
-                        doc_ref.update({
-                            "status": "help_needed",
-                            "help_reason": reason
-                        })
-                else:
-                    logging.info(f"Received action: {action}. Continuing loop...")
+                        logging.info(f"Received action: {action_type}. Continuing loop...")
+
+                    # Micro-sleep between sequential actions within the array
+                    time.sleep(0.5)
+
+                if break_outer:
+                    break
+
             except requests.exceptions.RequestException as req_e:
                 if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
                     logging.critical("Critical Error: Authentication Token Expired (401 Unauthorized).")
@@ -567,65 +620,114 @@ def execute_voice_agent_loop() -> None:
                 data = response.json()
 
                 # 6. Check response
-                action = data.get("action", "")
-                if isinstance(action, str):
-                    action_upper = action.upper()
-                else:
-                    action_upper = str(action).upper()
+                actions = data.get("actions", [])
 
-                if action_upper == "DONE":
-                    logging.info("Task finished.")
-                    break
-                elif "ERROR" in action_upper:
-                    raw_response = data.get("raw_response", "No raw response provided")
-                    error_msg = data.get("error", "No error message provided")
-                    logging.error(f"Agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
-                    break
-                elif action_upper == "CLICK" and "target_id" in data:
-                    target_id = str(data["target_id"])
-                    if target_id in memory_map:
-                        x = memory_map[target_id]["x"]
-                        y = memory_map[target_id]["y"]
-                        logging.info(f"Clicking at ({x}, {y}) using Playwright viewport coordinates...")
+                if not actions and "action" in data:
+                    actions = [data]
 
-                        try:
-                            # Prefer active Playwright page to solve Viewport-to-Monitor Coordinate Offset
-                            active_page = _get_active_page()
-                            if active_page:
-                                active_page.mouse.click(x, y)
-                                logging.info(f"Successfully clicked at ({x}, {y}) via Playwright.")
-                            else:
-                                # Fallback (should theoretically not be reached if scanning worked)
-                                logging.warning("No active Playwright page found for click. Falling back to PyAutoGUI.")
+                break_outer = False
+                for act in actions:
+                    if ABORT_AGENT:
+                        logging.info("Emergency abort triggered during action sequence.")
+                        break_outer = True
+                        break
+
+                    action_type = act.get("action", "")
+                    action_upper = str(action_type).upper()
+
+                    if action_upper == "DONE":
+                        logging.info("Task finished.")
+                        break_outer = True
+                        break
+                    elif "ERROR" in action_upper:
+                        raw_response = act.get("raw_response", "No raw response provided")
+                        error_msg = act.get("error", "No error message provided")
+                        logging.error(f"Agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
+                        break_outer = True
+                        break
+                    elif action_upper == "CLICK" and "target_id" in act:
+                        target_id = str(act["target_id"])
+                        if target_id in memory_map:
+                            x = memory_map[target_id]["x"]
+                            y = memory_map[target_id]["y"]
+                            logging.info(f"Clicking at ({x}, {y}) using Playwright viewport coordinates...")
+
+                            try:
+                                active_page = _get_active_page()
+                                if active_page:
+                                    active_page.mouse.click(x, y)
+                                    logging.info(f"Successfully clicked at ({x}, {y}) via Playwright.")
+                                else:
+                                    logging.warning("No active Playwright page found for click. Falling back to PyAutoGUI.")
+                                    pyautogui.moveTo(x, y, duration=0.5)
+                                    pyautogui.click()
+                            except Exception as click_e:
+                                logging.error(f"Error executing click via Playwright: {click_e}. Falling back to PyAutoGUI.")
                                 pyautogui.moveTo(x, y, duration=0.5)
                                 pyautogui.click()
-                        except Exception as click_e:
-                            logging.error(f"Error executing click via Playwright: {click_e}. Falling back to PyAutoGUI.")
-                            pyautogui.moveTo(x, y, duration=0.5)
-                            pyautogui.click()
+                        else:
+                            logging.error(f"Error: target_id {target_id} not found in memory map.")
+
+                    elif action_upper == "TYPE" and "target_id" in act and "text" in act:
+                        target_id = str(act["target_id"])
+                        text_to_type = act["text"]
+                        if target_id in memory_map:
+                            x = memory_map[target_id]["x"]
+                            y = memory_map[target_id]["y"]
+                            logging.info(f"Typing '{text_to_type}' at ({x}, {y}) using Playwright...")
+
+                            try:
+                                active_page = _get_active_page()
+                                if active_page:
+                                    active_page.mouse.click(x, y)
+                                    time.sleep(0.2)
+                                    active_page.keyboard.type(text_to_type)
+                                    logging.info(f"Successfully typed via Playwright.")
+                                else:
+                                    logging.warning("No active Playwright page found for typing. Falling back to PyAutoGUI.")
+                                    pyautogui.moveTo(x, y, duration=0.5)
+                                    pyautogui.click()
+                                    time.sleep(0.2)
+                                    pyautogui.write(text_to_type)
+                            except Exception as type_e:
+                                logging.error(f"Error executing type via Playwright: {type_e}. Falling back to PyAutoGUI.")
+                                pyautogui.moveTo(x, y, duration=0.5)
+                                pyautogui.click()
+                                time.sleep(0.2)
+                                pyautogui.write(text_to_type)
+                        else:
+                            logging.error(f"Error: target_id {target_id} not found in memory map.")
+
+                    elif action_upper == "ASK_HUMAN":
+                        reason = act.get("reason", "No reason provided")
+                        logging.info(f"Agent asking human for help: {reason}")
+                        try:
+                            screenshot = pyautogui.screenshot()
+                            buffered = io.BytesIO()
+                            screenshot.save(buffered, format="PNG")
+                            img_str = base64.b64encode(buffered.getvalue()).decode()
+                            doc_ref.update({
+                                "status": "help_needed",
+                                "help_reason": reason,
+                                "screenshot_b64": img_str
+                            })
+                        except Exception as img_e:
+                            logging.error(f"Error capturing screenshot: {img_e}")
+                            doc_ref.update({
+                                "status": "help_needed",
+                                "help_reason": reason
+                            })
+                        break_outer = True
+                        break
                     else:
-                        logging.error(f"Error: target_id {target_id} not found in memory map.")
-                elif action_upper == "ASK_HUMAN":
-                    reason = data.get("reason", "No reason provided")
-                    logging.info(f"Agent asking human for help: {reason}")
-                    try:
-                        screenshot = pyautogui.screenshot()
-                        buffered = io.BytesIO()
-                        screenshot.save(buffered, format="PNG")
-                        img_str = base64.b64encode(buffered.getvalue()).decode()
-                        doc_ref.update({
-                            "status": "help_needed",
-                            "help_reason": reason,
-                            "screenshot_b64": img_str
-                        })
-                    except Exception as img_e:
-                        logging.error(f"Error capturing screenshot: {img_e}")
-                        doc_ref.update({
-                            "status": "help_needed",
-                            "help_reason": reason
-                        })
-                else:
-                    logging.info(f"Received action: {action}. Continuing loop...")
+                        logging.info(f"Received action: {action_type}. Continuing loop...")
+
+                    # Micro-sleep between sequential actions within the array
+                    time.sleep(0.5)
+
+                if break_outer:
+                    break
+
             except requests.exceptions.RequestException as req_e:
                 if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
                     logging.critical("Critical Error: Authentication Token Expired (401 Unauthorized).")
