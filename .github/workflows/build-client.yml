@@ -36,7 +36,7 @@ jobs:
 
       - name: Build Executable
         working-directory: ./client
-        run: pyinstaller --noconfirm --onefile --windowed --splash splash.png --hidden-import plyer.platforms.win.notification main.py
+        run: pyinstaller --noconfirm --onefile --windowed --splash splash.png --hidden-import plyer.platforms.win.notification --collect-all playwright_stealth main.py
 
       - name: Rename Executable
         working-directory: ./client/dist
