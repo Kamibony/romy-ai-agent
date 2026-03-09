@@ -140,6 +140,26 @@ def get_playwright_page(url: str):
 
     return _page
 
+def _get_active_page():
+    """Returns the currently visible Playwright page."""
+    # Ensure browser is initialized
+    get_playwright_page(None)
+
+    active_page = None
+    if _browser and _browser.pages:
+        for page in _browser.pages:
+            try:
+                if page.evaluate("document.visibilityState") == "visible":
+                    active_page = page
+                    break
+            except Exception:
+                continue
+
+    if not active_page:
+        active_page = get_playwright_page(None)
+
+    return active_page
+
 def init_browser_workspace():
     """Pre-launches the browser workspace and loads the default workspace URL from Firestore."""
     logging.info("Pre-launching Romy Workspace...")
@@ -168,21 +188,7 @@ def scan_web_ui() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
 
     try:
         # Strictly passive scanning: never pass a URL or trigger a reload
-        # Ensure browser is initialized
-        get_playwright_page(None)
-
-        active_page = None
-        if _browser and _browser.pages:
-            for page in _browser.pages:
-                try:
-                    if page.evaluate("document.visibilityState") == "visible":
-                        active_page = page
-                        break
-                except Exception:
-                    continue
-
-        if not active_page:
-            active_page = get_playwright_page(None)
+        active_page = _get_active_page()
 
         logging.info(f"Scanning active page URL: {active_page.url}")
 
@@ -370,10 +376,23 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                     if target_id in memory_map:
                         x = memory_map[target_id]["x"]
                         y = memory_map[target_id]["y"]
-                        logging.info(f"Moving mouse to ({x}, {y}) and clicking...")
-                        pyautogui.moveTo(x, y, duration=0.5)
-                        pyautogui.click()
-                        logging.info(f"Successfully clicked at ({x}, {y}).")
+                        logging.info(f"Clicking at ({x}, {y}) using Playwright viewport coordinates...")
+
+                        try:
+                            # Prefer active Playwright page to solve Viewport-to-Monitor Coordinate Offset
+                            active_page = _get_active_page()
+                            if active_page:
+                                active_page.mouse.click(x, y)
+                                logging.info(f"Successfully clicked at ({x}, {y}) via Playwright.")
+                            else:
+                                # Fallback (should theoretically not be reached if scanning worked)
+                                logging.warning("No active Playwright page found for click. Falling back to PyAutoGUI.")
+                                pyautogui.moveTo(x, y, duration=0.5)
+                                pyautogui.click()
+                        except Exception as click_e:
+                            logging.error(f"Error executing click via Playwright: {click_e}. Falling back to PyAutoGUI.")
+                            pyautogui.moveTo(x, y, duration=0.5)
+                            pyautogui.click()
                     else:
                         logging.error(f"Error: target_id {target_id} not found in memory map.")
                 elif action_upper == "ASK_HUMAN":
@@ -567,10 +586,23 @@ def execute_voice_agent_loop() -> None:
                     if target_id in memory_map:
                         x = memory_map[target_id]["x"]
                         y = memory_map[target_id]["y"]
-                        logging.info(f"Moving mouse to ({x}, {y}) and clicking...")
-                        pyautogui.moveTo(x, y, duration=0.5)
-                        pyautogui.click()
-                        logging.info(f"Successfully clicked at ({x}, {y}).")
+                        logging.info(f"Clicking at ({x}, {y}) using Playwright viewport coordinates...")
+
+                        try:
+                            # Prefer active Playwright page to solve Viewport-to-Monitor Coordinate Offset
+                            active_page = _get_active_page()
+                            if active_page:
+                                active_page.mouse.click(x, y)
+                                logging.info(f"Successfully clicked at ({x}, {y}) via Playwright.")
+                            else:
+                                # Fallback (should theoretically not be reached if scanning worked)
+                                logging.warning("No active Playwright page found for click. Falling back to PyAutoGUI.")
+                                pyautogui.moveTo(x, y, duration=0.5)
+                                pyautogui.click()
+                        except Exception as click_e:
+                            logging.error(f"Error executing click via Playwright: {click_e}. Falling back to PyAutoGUI.")
+                            pyautogui.moveTo(x, y, duration=0.5)
+                            pyautogui.click()
                     else:
                         logging.error(f"Error: target_id {target_id} not found in memory map.")
                 elif action_upper == "ASK_HUMAN":
