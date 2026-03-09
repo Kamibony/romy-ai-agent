@@ -19,8 +19,7 @@ import firebase_admin
 from firebase_admin import firestore
 from typing import Dict, Any, Tuple
 from playwright.sync_api import sync_playwright
-
-from extension_server import extension_server
+from playwright_stealth import stealth_sync
 
 pyautogui.FAILSAFE = False
 
@@ -117,26 +116,40 @@ def start_remote_listener() -> None:
 
 _playwright = None
 _browser = None
+_context = None
 _page = None
 
 def get_playwright_page(url: str):
-    global _playwright, _browser, _page
+    global _playwright, _browser, _context, _page
     if _playwright is None:
+        logging.info("Starting Persistent Playwright Context with Stealth...")
         _playwright = sync_playwright().start()
+
+        user_data_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "RomyAgentBrowserData", "PlaywrightProfile")
+        os.makedirs(user_data_dir, exist_ok=True)
+
         try:
-            _browser = _playwright.chromium.connect_over_cdp("http://localhost:9222")
-            _page = _browser.contexts[0].pages[0] if _browser.contexts and _browser.contexts[0].pages else _browser.contexts[0].new_page() if _browser.contexts else None
+            # Launch a persistent context
+            _context = _playwright.chromium.launch_persistent_context(
+                user_data_dir=user_data_dir,
+                headless=False,
+                args=[
+                    "--disable-blink-features=AutomationControlled"
+                ]
+            )
+
+            _page = _context.pages[0] if _context.pages else _context.new_page()
+
+            # Apply stealth to the initial page
+            stealth_sync(_page)
+
+            # Ensure new pages in the context also get stealth
+            _context.on("page", lambda page: stealth_sync(page))
+
+            _browser = _context.browser
+
         except Exception as e:
-            logging.critical(f"Failed to connect to Chrome over CDP: {e}")
-            try:
-                notification.notify(
-                    title="ROMY AI",
-                    message="Please start Chrome with --remote-debugging-port=9222 to use Romy",
-                    app_name="ROMY",
-                    timeout=5
-                )
-            except Exception as notif_e:
-                logging.error(f"Error showing notification: {notif_e}")
+            logging.critical(f"Failed to launch Playwright persistent context: {e}")
             return None
 
     if _page and _page.url == "about:blank" and url:
@@ -154,17 +167,14 @@ def _get_active_page():
     get_playwright_page(None)
 
     active_page = None
-    if _browser and _browser.contexts:
-        for context in _browser.contexts:
-            for page in context.pages:
-                try:
-                    if page.evaluate("document.visibilityState") == "visible":
-                        active_page = page
-                        break
-                except Exception:
-                    continue
-            if active_page:
-                break
+    if _context:
+        for page in _context.pages:
+            try:
+                if page.evaluate("document.visibilityState") == "visible":
+                    active_page = page
+                    break
+            except Exception:
+                continue
 
     if not active_page:
         active_page = get_playwright_page(None)
@@ -192,34 +202,12 @@ def init_browser_workspace():
 def scan_web_ui() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
     """
     Scans the web DOM for interactive elements.
-    PRIMARY ROUTE: Chrome Extension via WebSocket.
-    FALLBACK ROUTE: Playwright.
+    ROUTE: Playwright.
     Returns a list of UI element dictionaries and a memory map of ID to coordinates.
     """
     ui_elements = []
     memory_map = {}
 
-    # 1. Attempt Chrome Extension Scan
-    if extension_server.is_connected():
-        logging.info("Chrome Extension is connected. Requesting DOM scan...")
-        ext_elements = extension_server.scan_dom()
-        if ext_elements is not None:
-            logging.info(f"Received {len(ext_elements)} elements from Extension.")
-            for el in ext_elements:
-                ui_elements.append({
-                    "id": el["id"],
-                    "type": el["type"],
-                    "name": el["name"]
-                })
-                memory_map[el["id"]] = {
-                    "x": el["x"],
-                    "y": el["y"]
-                }
-            return ui_elements, memory_map
-        else:
-            logging.warning("Extension DOM scan failed or timed out. Falling back to Playwright.")
-
-    # 2. Fallback to Playwright Scan
     logging.info("Using Playwright for DOM scan...")
     try:
         # Strictly passive scanning: never pass a URL or trigger a reload
@@ -421,9 +409,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                         break
                     elif action_upper == "CLICK" and "target_id" in act:
                         target_id = str(act["target_id"])
-                        if extension_server.is_connected() and extension_server.execute_click(target_id):
-                            logging.info(f"Successfully clicked element {target_id} via Extension.")
-                        elif target_id in memory_map:
+                        if target_id in memory_map:
                             x = memory_map[target_id]["x"]
                             y = memory_map[target_id]["y"]
                             logging.info(f"Clicking at ({x}, {y}) using Playwright viewport coordinates...")
@@ -447,9 +433,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                     elif action_upper == "TYPE" and "target_id" in act and "text" in act:
                         target_id = str(act["target_id"])
                         text_to_type = act["text"]
-                        if extension_server.is_connected() and extension_server.execute_type(target_id, text_to_type):
-                            logging.info(f"Successfully typed '{text_to_type}' into element {target_id} via Extension.")
-                        elif target_id in memory_map:
+                        if target_id in memory_map:
                             x = memory_map[target_id]["x"]
                             y = memory_map[target_id]["y"]
                             logging.info(f"Typing '{text_to_type}' at ({x}, {y}) using Playwright...")
@@ -487,23 +471,20 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                     elif action_upper == "SCROLL" and "direction" in act:
                         direction = act["direction"].lower()
                         logging.info(f"Scrolling {direction}...")
-                        if extension_server.is_connected() and extension_server.execute_scroll(direction):
-                            logging.info(f"Successfully scrolled {direction} via Extension.")
-                        else:
-                            try:
-                                active_page = _get_active_page()
-                                if active_page:
-                                    amount = 500 if direction == "down" else -500
-                                    active_page.mouse.wheel(0, amount)
-                                    logging.info(f"Successfully scrolled {direction} via Playwright.")
-                                else:
-                                    logging.warning("No active Playwright page found for scrolling. Falling back to PyAutoGUI.")
-                                    amount = -500 if direction == "down" else 500
-                                    pyautogui.scroll(amount)
-                            except Exception as scroll_e:
-                                logging.error(f"Error executing scroll via Playwright: {scroll_e}. Falling back to PyAutoGUI.")
+                        try:
+                            active_page = _get_active_page()
+                            if active_page:
+                                amount = 500 if direction == "down" else -500
+                                active_page.mouse.wheel(0, amount)
+                                logging.info(f"Successfully scrolled {direction} via Playwright.")
+                            else:
+                                logging.warning("No active Playwright page found for scrolling. Falling back to PyAutoGUI.")
                                 amount = -500 if direction == "down" else 500
                                 pyautogui.scroll(amount)
+                        except Exception as scroll_e:
+                            logging.error(f"Error executing scroll via Playwright: {scroll_e}. Falling back to PyAutoGUI.")
+                            amount = -500 if direction == "down" else 500
+                            pyautogui.scroll(amount)
                         time.sleep(1) # Let the DOM settle
 
                     elif action_upper == "REPLY" and "text" in act:
@@ -765,9 +746,7 @@ def execute_voice_agent_loop() -> None:
                         break
                     elif action_upper == "CLICK" and "target_id" in act:
                         target_id = str(act["target_id"])
-                        if extension_server.is_connected() and extension_server.execute_click(target_id):
-                            logging.info(f"Successfully clicked element {target_id} via Extension.")
-                        elif target_id in memory_map:
+                        if target_id in memory_map:
                             x = memory_map[target_id]["x"]
                             y = memory_map[target_id]["y"]
                             logging.info(f"Clicking at ({x}, {y}) using Playwright viewport coordinates...")
@@ -791,9 +770,7 @@ def execute_voice_agent_loop() -> None:
                     elif action_upper == "TYPE" and "target_id" in act and "text" in act:
                         target_id = str(act["target_id"])
                         text_to_type = act["text"]
-                        if extension_server.is_connected() and extension_server.execute_type(target_id, text_to_type):
-                            logging.info(f"Successfully typed '{text_to_type}' into element {target_id} via Extension.")
-                        elif target_id in memory_map:
+                        if target_id in memory_map:
                             x = memory_map[target_id]["x"]
                             y = memory_map[target_id]["y"]
                             logging.info(f"Typing '{text_to_type}' at ({x}, {y}) using Playwright...")
@@ -829,23 +806,20 @@ def execute_voice_agent_loop() -> None:
                     elif action_upper == "SCROLL" and "direction" in act:
                         direction = act["direction"].lower()
                         logging.info(f"Scrolling {direction}...")
-                        if extension_server.is_connected() and extension_server.execute_scroll(direction):
-                            logging.info(f"Successfully scrolled {direction} via Extension.")
-                        else:
-                            try:
-                                active_page = _get_active_page()
-                                if active_page:
-                                    amount = 500 if direction == "down" else -500
-                                    active_page.mouse.wheel(0, amount)
-                                    logging.info(f"Successfully scrolled {direction} via Playwright.")
-                                else:
-                                    logging.warning("No active Playwright page found for scrolling. Falling back to PyAutoGUI.")
-                                    amount = -500 if direction == "down" else 500
-                                    pyautogui.scroll(amount)
-                            except Exception as scroll_e:
-                                logging.error(f"Error executing scroll via Playwright: {scroll_e}. Falling back to PyAutoGUI.")
+                        try:
+                            active_page = _get_active_page()
+                            if active_page:
+                                amount = 500 if direction == "down" else -500
+                                active_page.mouse.wheel(0, amount)
+                                logging.info(f"Successfully scrolled {direction} via Playwright.")
+                            else:
+                                logging.warning("No active Playwright page found for scrolling. Falling back to PyAutoGUI.")
                                 amount = -500 if direction == "down" else 500
                                 pyautogui.scroll(amount)
+                        except Exception as scroll_e:
+                            logging.error(f"Error executing scroll via Playwright: {scroll_e}. Falling back to PyAutoGUI.")
+                            amount = -500 if direction == "down" else 500
+                            pyautogui.scroll(amount)
                         time.sleep(1) # Let the DOM settle
 
                     elif action_upper == "REPLY" and "text" in act:
