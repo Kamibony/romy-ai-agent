@@ -418,8 +418,10 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                             try:
                                 active_page = _get_active_page()
                                 if active_page:
-                                    # Focus/Click first
-                                    active_page.mouse.click(x, y)
+                                    # Focus/Click first and clear
+                                    active_page.mouse.click(x, y, click_count=3)
+                                    time.sleep(0.1)
+                                    active_page.keyboard.press("Backspace")
                                     # Small sleep to ensure focus
                                     time.sleep(0.2)
                                     active_page.keyboard.type(text_to_type)
@@ -428,12 +430,16 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                                     logging.warning("No active Playwright page found for typing. Falling back to PyAutoGUI.")
                                     pyautogui.moveTo(x, y, duration=0.5)
                                     pyautogui.click()
+                                    pyautogui.hotkey('ctrl', 'a')
+                                    pyautogui.press('backspace')
                                     time.sleep(0.2)
                                     pyautogui.write(text_to_type)
                             except Exception as type_e:
                                 logging.error(f"Error executing type via Playwright: {type_e}. Falling back to PyAutoGUI.")
                                 pyautogui.moveTo(x, y, duration=0.5)
                                 pyautogui.click()
+                                pyautogui.hotkey('ctrl', 'a')
+                                pyautogui.press('backspace')
                                 time.sleep(0.2)
                                 pyautogui.write(text_to_type)
                         else:
@@ -720,7 +726,9 @@ def execute_voice_agent_loop() -> None:
                             try:
                                 active_page = _get_active_page()
                                 if active_page:
-                                    active_page.mouse.click(x, y)
+                                    active_page.mouse.click(x, y, click_count=3)
+                                    time.sleep(0.1)
+                                    active_page.keyboard.press("Backspace")
                                     time.sleep(0.2)
                                     active_page.keyboard.type(text_to_type)
                                     logging.info(f"Successfully typed via Playwright.")
@@ -728,12 +736,16 @@ def execute_voice_agent_loop() -> None:
                                     logging.warning("No active Playwright page found for typing. Falling back to PyAutoGUI.")
                                     pyautogui.moveTo(x, y, duration=0.5)
                                     pyautogui.click()
+                                    pyautogui.hotkey('ctrl', 'a')
+                                    pyautogui.press('backspace')
                                     time.sleep(0.2)
                                     pyautogui.write(text_to_type)
                             except Exception as type_e:
                                 logging.error(f"Error executing type via Playwright: {type_e}. Falling back to PyAutoGUI.")
                                 pyautogui.moveTo(x, y, duration=0.5)
                                 pyautogui.click()
+                                pyautogui.hotkey('ctrl', 'a')
+                                pyautogui.press('backspace')
                                 time.sleep(0.2)
                                 pyautogui.write(text_to_type)
                         else:
