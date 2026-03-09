@@ -121,22 +121,28 @@ def get_playwright_page(url: str):
     global _playwright, _browser, _page
     if _playwright is None:
         _playwright = sync_playwright().start()
-        user_data_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "RomyAgentBrowserData")
         try:
-            # Systemic Priority 1: Market Leader (Chrome)
-            _browser = _playwright.chromium.launch_persistent_context(user_data_dir=user_data_dir, channel="chrome", headless=False, args=['--start-fullscreen'])
-        except Exception:
+            _browser = _playwright.chromium.connect_over_cdp("http://localhost:9222")
+            _page = _browser.contexts[0].pages[0] if _browser.contexts and _browser.contexts[0].pages else _browser.contexts[0].new_page() if _browser.contexts else None
+        except Exception as e:
+            logging.critical(f"Failed to connect to Chrome over CDP: {e}")
             try:
-                # Systemic Priority 2: OS Native Guarantee (Edge)
-                _browser = _playwright.chromium.launch_persistent_context(user_data_dir=user_data_dir, channel="msedge", headless=False, args=['--start-fullscreen'])
-            except Exception as e:
-                logging.critical(f"Critical Error: No standard browser (Chrome/Edge) found on the system. {e}")
-                return None
-        _page = _browser.pages[0] if _browser.pages else _browser.new_page()
+                notification.notify(
+                    title="ROMY AI",
+                    message="Please start Chrome with --remote-debugging-port=9222 to use Romy",
+                    app_name="ROMY",
+                    timeout=5
+                )
+            except Exception as notif_e:
+                logging.error(f"Error showing notification: {notif_e}")
+            return None
 
     if _page and _page.url == "about:blank" and url:
-        _page.goto(url)
-        _page.wait_for_load_state('networkidle')
+        try:
+            _page.goto(url)
+            _page.wait_for_load_state('networkidle')
+        except Exception as e:
+            logging.error(f"Error navigating to {url}: {e}")
 
     return _page
 
@@ -146,14 +152,17 @@ def _get_active_page():
     get_playwright_page(None)
 
     active_page = None
-    if _browser and _browser.pages:
-        for page in _browser.pages:
-            try:
-                if page.evaluate("document.visibilityState") == "visible":
-                    active_page = page
-                    break
-            except Exception:
-                continue
+    if _browser and _browser.contexts:
+        for context in _browser.contexts:
+            for page in context.pages:
+                try:
+                    if page.evaluate("document.visibilityState") == "visible":
+                        active_page = page
+                        break
+                except Exception:
+                    continue
+            if active_page:
+                break
 
     if not active_page:
         active_page = get_playwright_page(None)
