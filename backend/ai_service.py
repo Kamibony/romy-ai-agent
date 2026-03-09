@@ -37,6 +37,9 @@ def process_with_gemini(audio_b64: Optional[str] = None, command_text: Optional[
     """
     Uses Gemini 2.5 Flash to transcribe the audio command (or process textual command) and describe the state of the UI.
     """
+    if not audio_b64 and not command_text:
+        return "EMPTY_AUDIO"
+
     if gemini_client is None:
         print("Gemini client not initialized.")
         return "Error: Gemini client not initialized."
