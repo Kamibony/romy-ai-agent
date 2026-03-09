@@ -61,6 +61,8 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "Supported actions:\n"
             "- {\"action\": \"CLICK\", \"target_id\": \"<the_number>\"}\n"
             "- {\"action\": \"TYPE\", \"target_id\": \"<the_number>\", \"text\": \"<text to type>\"}\n"
+            "- {\"action\": \"SCROLL\", \"direction\": \"down\"} (or \"up\". Use this if the user asks for something likely out of view or if requested explicitly)\n"
+            "- {\"action\": \"REPLY\", \"text\": \"<the answer>\"} (Use this to answer questions, extract prices, or summarize data from the UI elements, instead of just clicking)\n"
             "- {\"action\": \"DONE\"} (when the task is fully completed)\n"
             "If the audio is completely silent or indiscernible, return exactly: [{\"action\": \"ASK_HUMAN\", \"reason\": \"EMPTY_AUDIO\"}]\n"
             "If you encounter an unexpected popup, captcha, or cannot find the target, DO NOT guess or fail. "
@@ -111,6 +113,16 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                                 "target_id": str(action_data["target_id"]),
                                 "text": str(action_data["text"])
                             })
+                        elif action_data.get("action") == "SCROLL" and "direction" in action_data:
+                            parsed_actions.append({
+                                "action": "SCROLL",
+                                "direction": str(action_data["direction"])
+                            })
+                        elif action_data.get("action") == "REPLY" and "text" in action_data:
+                            parsed_actions.append({
+                                "action": "REPLY",
+                                "text": str(action_data["text"])
+                            })
                         elif action_data.get("action") == "ASK_HUMAN" and "reason" in action_data:
                             parsed_actions.append({
                                 "action": "ASK_HUMAN",
@@ -141,6 +153,16 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                     return [{
                         "action": "TYPE",
                         "target_id": str(action_data["target_id"]),
+                        "text": str(action_data["text"])
+                    }]
+                elif action_data.get("action") == "SCROLL" and "direction" in action_data:
+                    return [{
+                        "action": "SCROLL",
+                        "direction": str(action_data["direction"])
+                    }]
+                elif action_data.get("action") == "REPLY" and "text" in action_data:
+                    return [{
+                        "action": "REPLY",
                         "text": str(action_data["text"])
                     }]
                 elif action_data.get("action") == "ASK_HUMAN" and "reason" in action_data:

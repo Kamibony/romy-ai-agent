@@ -445,6 +445,35 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                         else:
                             logging.error(f"Error: target_id {target_id} not found in memory map.")
 
+                    elif action_upper == "SCROLL" and "direction" in act:
+                        direction = act["direction"].lower()
+                        logging.info(f"Scrolling {direction}...")
+                        try:
+                            active_page = _get_active_page()
+                            if active_page:
+                                amount = 500 if direction == "down" else -500
+                                active_page.mouse.wheel(0, amount)
+                                logging.info(f"Successfully scrolled {direction} via Playwright.")
+                            else:
+                                logging.warning("No active Playwright page found for scrolling. Falling back to PyAutoGUI.")
+                                amount = -500 if direction == "down" else 500
+                                pyautogui.scroll(amount)
+                        except Exception as scroll_e:
+                            logging.error(f"Error executing scroll via Playwright: {scroll_e}. Falling back to PyAutoGUI.")
+                            amount = -500 if direction == "down" else 500
+                            pyautogui.scroll(amount)
+                        time.sleep(1) # Let the DOM settle
+
+                    elif action_upper == "REPLY" and "text" in act:
+                        reply_text = act["text"]
+                        logging.info(f"Agent replied: {reply_text}")
+                        try:
+                            notification.notify(title="ROMY AI Reply", message=reply_text, app_name="ROMY", timeout=5)
+                            if winsound: winsound.Beep(800, 200)
+                        except Exception as notif_e:
+                            logging.error(f"Error showing reply notification: {notif_e}")
+                            if winsound: winsound.Beep(800, 200)
+
                     elif action_upper == "ASK_HUMAN":
                         reason = act.get("reason", "No reason provided")
                         logging.info(f"Agent asking human for help: {reason}")
@@ -750,6 +779,35 @@ def execute_voice_agent_loop() -> None:
                                 pyautogui.write(text_to_type)
                         else:
                             logging.error(f"Error: target_id {target_id} not found in memory map.")
+
+                    elif action_upper == "SCROLL" and "direction" in act:
+                        direction = act["direction"].lower()
+                        logging.info(f"Scrolling {direction}...")
+                        try:
+                            active_page = _get_active_page()
+                            if active_page:
+                                amount = 500 if direction == "down" else -500
+                                active_page.mouse.wheel(0, amount)
+                                logging.info(f"Successfully scrolled {direction} via Playwright.")
+                            else:
+                                logging.warning("No active Playwright page found for scrolling. Falling back to PyAutoGUI.")
+                                amount = -500 if direction == "down" else 500
+                                pyautogui.scroll(amount)
+                        except Exception as scroll_e:
+                            logging.error(f"Error executing scroll via Playwright: {scroll_e}. Falling back to PyAutoGUI.")
+                            amount = -500 if direction == "down" else 500
+                            pyautogui.scroll(amount)
+                        time.sleep(1) # Let the DOM settle
+
+                    elif action_upper == "REPLY" and "text" in act:
+                        reply_text = act["text"]
+                        logging.info(f"Agent replied: {reply_text}")
+                        try:
+                            notification.notify(title="ROMY AI Reply", message=reply_text, app_name="ROMY", timeout=5)
+                            if winsound: winsound.Beep(800, 200)
+                        except Exception as notif_e:
+                            logging.error(f"Error showing reply notification: {notif_e}")
+                            if winsound: winsound.Beep(800, 200)
 
                     elif action_upper == "ASK_HUMAN":
                         reason = act.get("reason", "No reason provided")
