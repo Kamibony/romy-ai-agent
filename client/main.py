@@ -6,7 +6,6 @@ from tray_manager import run_tray_icon
 from hotkey_manager import start_hotkey_listener
 from auth_window import login_window
 from agent import set_firebase_token, start_remote_listener, init_browser_workspace, agent_worker_loop
-from extension_server import extension_server
 
 def setup_logging():
     user_data_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "RomyAgentBrowserData")
@@ -57,13 +56,6 @@ def main() -> None:
             daemon=True
         )
         hotkey_thread.start()
-
-        # Start the extension WebSocket server in a daemon thread.
-        extension_thread = threading.Thread(
-            target=extension_server.run_server,
-            daemon=True
-        )
-        extension_thread.start()
 
         # Start the remote command listener in a daemon thread.
         remote_thread = threading.Thread(

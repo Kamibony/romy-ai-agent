@@ -10,4 +10,4 @@ plyer
 firebase-admin
 uiautomation
 playwright
-websockets
+playwright-stealth
