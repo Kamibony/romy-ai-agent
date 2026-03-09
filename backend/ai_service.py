@@ -11,15 +11,8 @@ try:
 except ImportError:
     genai = None
 
-try:
-    from anthropic import Anthropic
-except ImportError:
-    Anthropic = None
-
-
 # Initialize clients globally if possible
 gemini_client = None
-anthropic_client = None
 
 if genai is not None:
     try:
@@ -27,63 +20,18 @@ if genai is not None:
     except Exception as e:
         print(f"Failed to initialize Gemini client: {e}")
 
-if Anthropic is not None:
-    try:
-        anthropic_client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-    except Exception as e:
-        print(f"Failed to initialize Anthropic client: {e}")
-
-def process_with_gemini(audio_b64: Optional[str] = None, command_text: Optional[str] = None, thread_history: str = "") -> str:
+def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[str] = None, command_text: Optional[str] = None, thread_history: str = "") -> list[Dict[str, Any]]:
     """
-    Uses Gemini 2.5 Flash to transcribe the audio command (or process textual command) and describe the state of the UI.
+    Uses Gemini 2.5 Flash to process audio/text commands and UI elements, returning a list of actions.
     """
     if not audio_b64 and not command_text:
-        return "EMPTY_AUDIO"
+        return [{"action": "ASK_HUMAN", "reason": "EMPTY_AUDIO"}]
 
     if gemini_client is None:
         print("Gemini client not initialized.")
-        return "Error: Gemini client not initialized."
+        return [{"action": "API_ERROR", "error": "Gemini client not initialized."}]
 
     try:
-        client = gemini_client
-
-        contents = []
-        if audio_b64:
-            contents.append(
-                types.Part.from_bytes(
-                    data=base64.b64decode(audio_b64),
-                    mime_type="audio/wav"  # Defaulting to wav as client captures wav
-                )
-            )
-
-        prompt = "You are a precise Speech-to-Text engine. Your ONLY task is to transcribe the exact words spoken in the provided audio file. Output ONLY the transcribed text. Do not add commentary, do not answer questions, and do not summarize. If the audio is completely silent or indiscernible, output STRICTLY the string 'EMPTY_AUDIO'."
-        if command_text:
-            prompt += f"\n\nAdditional text command provided by user (append to transcription): {command_text}"
-        contents.append(prompt)
-
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=contents
-        )
-
-        return response.text
-    except Exception as e:
-        print(f"Error calling Gemini: {e}")
-        return f"Error analyzing context with Gemini: {e}"
-
-def get_action_from_claude(ui_elements: list[Dict[str, Any]], context_text: str) -> list[Dict[str, Any]]:
-    """
-    Uses Claude 3.5 Sonnet to determine the next logical sequence of actions based on the Gemini context and UI elements list.
-    Returns a list of action dictionaries.
-    """
-    if anthropic_client is None:
-        print("Anthropic client not initialized.")
-        return [{"action": "API_ERROR", "error": "Anthropic client not initialized"}]
-
-    try:
-        if context_text.strip() == "EMPTY_AUDIO":
-            return [{"action": "ASK_HUMAN", "reason": "I couldn't hear any audio. Could you please provide a text command?"}]
-
         from firebase_admin import firestore
         db = firestore.client()
         global_prompt = ""
@@ -95,46 +43,53 @@ def get_action_from_claude(ui_elements: list[Dict[str, Any]], context_text: str)
         except Exception as e:
             print(f"Error reading global prompt from Firestore: {e}")
 
-        client = anthropic_client
+        client = gemini_client
 
-        system_prompt = (
+        contents = []
+        if audio_b64:
+            contents.append(
+                types.Part.from_bytes(
+                    data=base64.b64decode(audio_b64),
+                    mime_type="audio/wav"  # Defaulting to wav as client captures wav
+                )
+            )
+
+        system_instruction = (
             "You are a structural RPA assistant. You are provided with a list of UI elements currently on the screen. "
-            "Each element has an ID and a description/name. Based on the user's command, identify the correct target "
+            "Each element has an ID and a description/name. Based on the user's command (which may be provided as audio or text), identify the correct target "
             "elements and return ONLY a JSON array of sequential action objects. "
             "Supported actions:\n"
             "- {\"action\": \"CLICK\", \"target_id\": \"<the_number>\"}\n"
             "- {\"action\": \"TYPE\", \"target_id\": \"<the_number>\", \"text\": \"<text to type>\"}\n"
             "- {\"action\": \"DONE\"} (when the task is fully completed)\n"
+            "If the audio is completely silent or indiscernible, return exactly: [{\"action\": \"ASK_HUMAN\", \"reason\": \"EMPTY_AUDIO\"}]\n"
             "If you encounter an unexpected popup, captcha, or cannot find the target, DO NOT guess or fail. "
             "Instead, return an array with a single JSON action: [{\"action\": \"ASK_HUMAN\", \"reason\": \"<your specific question>\"}].\n"
             "Return ONLY a valid JSON array, for example: [{\"action\": \"CLICK\", \"target_id\": \"1\"}, {\"action\": \"TYPE\", \"target_id\": \"2\", \"text\": \"hello\"}]\n"
         )
         if global_prompt:
-            system_prompt += f"Global Instructions:\n{global_prompt}\n\n"
+            system_instruction += f"Global Instructions:\n{global_prompt}\n\n"
 
         ui_elements_str = json.dumps(ui_elements, indent=2)
+        prompt = f"UI Elements:\n{ui_elements_str}\n\nDetermine the correct target element and output the JSON array of actions."
 
-        user_content = [
-            {
-                "type": "text",
-                "text": f"Context from previous perception layer:\n{context_text}\n\nUI Elements:\n{ui_elements_str}\n\nBased on this context and the UI elements list, determine the correct target element."
-            }
-        ]
+        if command_text:
+            prompt += f"\n\nAdditional text command provided by user: {command_text}"
+        if thread_history:
+            prompt += f"\n\nThread History:\n{thread_history}"
 
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
-            system=system_prompt,
-            messages=[
-                {"role": "user", "content": user_content}
-            ],
-            extra_headers={"anthropic-beta": "computer-use-2024-10-22"}
+        contents.append(prompt)
+
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.2,
+            )
         )
 
-        response_text = ""
-        for block in response.content:
-            if block.type == "text":
-                response_text += block.text
+        response_text = response.text
 
         # Try to parse the JSON array from the response
         match = re.search(r'\[.*\]', response_text, re.DOTALL)
@@ -197,8 +152,8 @@ def get_action_from_claude(ui_elements: list[Dict[str, Any]], context_text: str)
             except json.JSONDecodeError:
                 pass
 
-        return [{"action": "PARSE_ERROR", "raw_response": str(response.content)}]
+        return [{"action": "PARSE_ERROR", "raw_response": str(response_text)}]
 
     except Exception as e:
-        print(f"Error calling Claude: {e}")
+        print(f"Error calling Gemini: {e}")
         return [{"action": "API_ERROR", "error": str(e)}]

@@ -498,22 +498,63 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
             pass
 
 
-def record_audio(duration: int = 5) -> str:
+import numpy as np
+
+def record_audio() -> str:
     """
-    Records microphone input for `duration` seconds, saves as WAV in memory,
-    and returns the Base64 encoded string.
+    Records microphone input dynamically, stopping after ~1.5 to 2.0 seconds of silence.
+    Saves as WAV in memory, and returns the Base64 encoded string.
     """
     try:
         sample_rate = 44100
-        logging.info(f"Recording audio for {duration} seconds...")
-        # Record audio
-        recording = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='int16')
-        sd.wait()  # Wait until recording is finished
+        channels = 1
+        block_duration = 0.1  # seconds
+        block_size = int(sample_rate * block_duration)
+        silence_threshold = 0.01  # RMS threshold for silence
+        silence_duration_limit = 2.0  # seconds of silence to stop recording
+        max_duration = 30.0  # maximum recording duration to prevent infinite loops
+
+        logging.info("Recording audio dynamically... Speak now.")
+
+        recorded_frames = []
+        silent_frames = 0
+        total_frames = 0
+
+        stream = sd.InputStream(samplerate=sample_rate, channels=channels, dtype='float32')
+        with stream:
+            while True:
+                data, overflowed = stream.read(block_size)
+                recorded_frames.append(data)
+                total_frames += 1
+
+                # Calculate RMS
+                rms = np.sqrt(np.mean(np.square(data)))
+
+                if rms < silence_threshold:
+                    silent_frames += 1
+                else:
+                    silent_frames = 0
+
+                if silent_frames * block_duration >= silence_duration_limit:
+                    logging.info("Silence detected. Stopping recording.")
+                    break
+
+                if total_frames * block_duration >= max_duration:
+                    logging.warning("Maximum recording duration reached.")
+                    break
+
         logging.info("Recording finished.")
+
+        if not recorded_frames:
+            return ""
+
+        # Concatenate all frames and convert back to int16 for WAV writing
+        recording = np.concatenate(recorded_frames, axis=0)
+        recording_int16 = np.int16(recording * 32767)
 
         # Save to an in-memory byte buffer
         wav_io = io.BytesIO()
-        wav_write(wav_io, sample_rate, recording)
+        wav_write(wav_io, sample_rate, recording_int16)
         wav_bytes = wav_io.getvalue()
 
         # Encode to base64
@@ -550,7 +591,7 @@ def execute_voice_agent_loop() -> None:
         except Exception:
             if winsound: winsound.Beep(1000, 200)
 
-        audio_b64 = record_audio(duration=5)
+        audio_b64 = record_audio()
 
         try:
             notification.notify(title="ROMY AI", message="🧠 Processing command...", app_name="ROMY", timeout=2)
