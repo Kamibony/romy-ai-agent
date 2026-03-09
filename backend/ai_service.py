@@ -53,11 +53,9 @@ def process_with_gemini(audio_b64: Optional[str] = None, command_text: Optional[
                 )
             )
 
-        prompt = "Please transcribe the audio command (if any).\nYou are an audio transcription engine. If the provided audio is empty, silent, contains only background noise, or is indiscernible, you must return STRICTLY the string 'EMPTY_AUDIO'. Do not apologize, do not explain, and absolutely do not generate hallucinated commands or dummy text."
+        prompt = "You are a precise Speech-to-Text engine. Your ONLY task is to transcribe the exact words spoken in the provided audio file. Output ONLY the transcribed text. Do not add commentary, do not answer questions, and do not summarize. If the audio is completely silent or indiscernible, output STRICTLY the string 'EMPTY_AUDIO'."
         if command_text:
-            prompt += f"\nAdditionally, the user provided this text command: '{command_text}'. Treat this as the primary instruction if provided."
-        if thread_history:
-            prompt += f"\nHere is the history of the current task session:\n{thread_history}"
+            prompt += f"\n\nAdditional text command provided by user (append to transcription): {command_text}"
         contents.append(prompt)
 
         response = client.models.generate_content(
