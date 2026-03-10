@@ -1,7 +1,13 @@
 import logging
 import os
-import threading
 import sys
+
+# Inject app directory into sys.path to fix ModuleNotFoundError in embedded environment
+app_dir = os.path.dirname(os.path.abspath(__file__))
+if app_dir not in sys.path:
+    sys.path.insert(0, app_dir)
+
+import threading
 import subprocess
 
 def resource_path(relative_path: str) -> str:
