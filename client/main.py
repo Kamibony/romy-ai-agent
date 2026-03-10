@@ -54,16 +54,6 @@ def setup_playwright_bootstrapper():
     except Exception as e:
         logging.error(f"Error in setup_playwright_bootstrapper: {e}")
 
-# -----------------------------------------------------------------------------
-# Vendoring Bypass for playwright_stealth
-# Inject the vendor directory into sys.path before any imports that might use it
-# -----------------------------------------------------------------------------
-vendor_dir = resource_path("vendor")
-if os.path.isdir(vendor_dir) and vendor_dir not in sys.path:
-    # Insert at the front so it takes precedence over any empty namespace packages
-    sys.path.insert(0, vendor_dir)
-
-
 def setup_logging():
     user_data_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "RomyAgentBrowserData")
     os.makedirs(user_data_dir, exist_ok=True)
