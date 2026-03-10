@@ -10,4 +10,4 @@ plyer
 firebase-admin
 uiautomation
 playwright
-playwright-stealth==1.0.6
+playwright-stealth>=2.0.0

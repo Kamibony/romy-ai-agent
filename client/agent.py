@@ -19,7 +19,7 @@ import firebase_admin
 from firebase_admin import firestore
 from typing import Dict, Any, Tuple
 from playwright.sync_api import sync_playwright
-from playwright_stealth import stealth_sync
+from playwright_stealth import Stealth
 
 pyautogui.FAILSAFE = False
 
@@ -140,11 +140,9 @@ def get_playwright_page(url: str):
 
             _page = _context.pages[0] if _context.pages else _context.new_page()
 
-            # Apply stealth to the initial page
-            stealth_sync(_page)
-
-            # Ensure new pages in the context also get stealth
-            _context.on("page", lambda page: stealth_sync(page))
+            # Apply stealth to the context
+            stealth = Stealth()
+            stealth.apply_stealth_sync(_context)
 
             _browser = _context.browser
 
