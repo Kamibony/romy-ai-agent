@@ -2,34 +2,21 @@
 import os
 import sys
 import playwright_stealth
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs, copy_metadata
+from PyInstaller.utils.hooks import collect_all
 
-# Collect playwright hidden imports and data
-playwright_hidden_imports = collect_submodules('playwright')
-playwright_datas = collect_data_files('playwright')
-playwright_metadata = copy_metadata('playwright')
+# 1. Exhaustive collection for core dependencies
+playwright_datas, playwright_binaries, playwright_hiddenimports = collect_all('playwright')
+stealth_datas, stealth_binaries, stealth_hiddenimports = collect_all('playwright_stealth')
 
-# Collect playwright_stealth hidden imports and data
-stealth_hidden_imports = collect_submodules('playwright_stealth')
-stealth_metadata = copy_metadata('playwright-stealth')
-
-# DYNAMIC DIRECT MAPPING (The Systemic Fix)
-# Find the exact physical path of the playwright_stealth package on the build machine
+# 2. Deterministic mapping for unhooked JS assets
 stealth_package_dir = os.path.dirname(playwright_stealth.__file__)
 stealth_js_dir = os.path.join(stealth_package_dir, 'js')
+explicit_stealth_datas = [(stealth_js_dir, 'playwright_stealth/js')]
 
-# Forcefully map the physical 'js' directory into the PyInstaller bundle
-explicit_stealth_datas = [
-    (stealth_js_dir, 'playwright_stealth/js')
-]
-
-hidden_imports = [
-    'plyer.platforms.win.notification',
-    'playwright_stealth',
-    'playwright_stealth.stealth'
-] + playwright_hidden_imports + stealth_hidden_imports
-
-datas = [] + playwright_datas + explicit_stealth_datas + stealth_metadata + playwright_metadata
+# 3. Unified Merging
+hidden_imports = ['plyer.platforms.win.notification'] + playwright_hiddenimports + stealth_hiddenimports
+datas = playwright_datas + stealth_datas + explicit_stealth_datas
+binaries = playwright_binaries + stealth_binaries
 
 # Ensure Node.js driver (playwright.cmd, node.exe) is explicitly mapped.
 # PyInstaller usually collects these with collect_data_files('playwright'), which is in playwright_datas.
@@ -38,7 +25,7 @@ datas = [] + playwright_datas + explicit_stealth_datas + stealth_metadata + play
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hidden_imports,
     hookspath=[],
