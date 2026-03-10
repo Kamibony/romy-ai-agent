@@ -7,17 +7,14 @@ from PyInstaller.utils.hooks import collect_all
 # 1. Exhaustive collection for core playwright dependencies ONLY
 playwright_datas, playwright_binaries, playwright_hiddenimports = collect_all('playwright')
 
-# 2. THE ULTIMATE FIX: The Vendoring Bypass
-# Completely bypass PyInstaller's compilation for playwright_stealth to avoid the namespace package
-# shadowing bug where it generates a blank __init__.py.
-# We copy the ENTIRE physical directory of the package into a "vendor" folder as raw data.
-stealth_package_dir = os.path.dirname(playwright_stealth.__file__)
-explicit_stealth_datas = [(stealth_package_dir, os.path.join('vendor', 'playwright_stealth'))]
+# 2. Standard collection for playwright_stealth
+# We map the JS files manually if needed, or we can just let PyInstaller collect it.
+stealth_datas, stealth_binaries, stealth_hiddenimports = collect_all('playwright_stealth')
 
 # 3. Unified Merging
-hidden_imports = ['plyer.platforms.win.notification'] + playwright_hiddenimports
-datas = playwright_datas + explicit_stealth_datas
-binaries = playwright_binaries
+hidden_imports = ['plyer.platforms.win.notification'] + playwright_hiddenimports + stealth_hiddenimports
+datas = playwright_datas + stealth_datas
+binaries = playwright_binaries + stealth_binaries
 
 # Ensure Node.js driver (playwright.cmd, node.exe) is explicitly mapped.
 # PyInstaller usually collects these with collect_data_files('playwright'), which is in playwright_datas.
@@ -32,7 +29,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['playwright_stealth'],
+    excludes=[],
     noarchive=False,
     optimize=0,
 )
@@ -55,22 +52,29 @@ splash = Splash(
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     splash,
     splash.binaries,
     [],
+    exclude_binaries=True,
     name='ROMY-Agent-MVP',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='ROMY-Agent-MVP',
 )

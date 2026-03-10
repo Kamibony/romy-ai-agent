@@ -38,10 +38,14 @@ jobs:
         working-directory: ./client
         run: pyinstaller --noconfirm RomyAgent.spec
 
+      - name: Zip Directory Build
+        working-directory: ./client/dist
+        run: Compress-Archive -Path ROMY-Agent-MVP\* -DestinationPath ROMY-Agent-MVP.zip
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: Latest Release
-          files: client/dist/ROMY-Agent-MVP.exe
+          files: client/dist/ROMY-Agent-MVP.zip
           make_latest: true
