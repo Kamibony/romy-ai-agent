@@ -4,19 +4,18 @@ import sys
 import playwright_stealth
 from PyInstaller.utils.hooks import collect_all
 
-# 1. Exhaustive collection for core dependencies
+# 1. Exhaustive collection for core playwright dependencies ONLY
 playwright_datas, playwright_binaries, playwright_hiddenimports = collect_all('playwright')
-stealth_datas, stealth_binaries, stealth_hiddenimports = collect_all('playwright_stealth')
 
-# 2. Deterministic mapping for unhooked JS assets
+# 2. THE ULTIMATE FIX: Copy the ENTIRE playwright_stealth package as raw data.
+# This prevents PyInstaller from generating a blank __init__.py and shadowing the real module.
 stealth_package_dir = os.path.dirname(playwright_stealth.__file__)
-stealth_js_dir = os.path.join(stealth_package_dir, 'js')
-explicit_stealth_datas = [(stealth_js_dir, 'playwright_stealth/js')]
+explicit_stealth_datas = [(stealth_package_dir, 'playwright_stealth')]
 
 # 3. Unified Merging
-hidden_imports = ['plyer.platforms.win.notification'] + playwright_hiddenimports + stealth_hiddenimports
-datas = playwright_datas + stealth_datas + explicit_stealth_datas
-binaries = playwright_binaries + stealth_binaries
+hidden_imports = ['plyer.platforms.win.notification', 'playwright_stealth'] + playwright_hiddenimports
+datas = playwright_datas + explicit_stealth_datas
+binaries = playwright_binaries
 
 # Ensure Node.js driver (playwright.cmd, node.exe) is explicitly mapped.
 # PyInstaller usually collects these with collect_data_files('playwright'), which is in playwright_datas.
