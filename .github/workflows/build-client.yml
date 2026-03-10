@@ -24,28 +24,87 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
+      - name: Prepare Build Environment
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          pip install -r client/requirements.txt
-          pip install pyinstaller
+          mkdir -p build/RomyAgent/python
+          mkdir -p build/RomyAgent/app
+          mkdir -p dist
 
-      - name: Download Splash Screen Image
-        working-directory: ./client
-        run: curl -o splash.png "https://dummyimage.com/600x300/0f172a/ffffff.png&text=ROMY+AI+Agent+-+Loading..."
+      - name: Download and Extract Embedded Python
+        shell: bash
+        run: |
+          curl -L -o python.zip "https://www.python.org/ftp/python/3.10.11/python-3.10.11-embed-amd64.zip"
+          unzip python.zip -d build/RomyAgent/python
+          rm python.zip
 
-      - name: Build Executable
-        working-directory: ./client
-        run: pyinstaller --noconfirm RomyAgent.spec
+      - name: Configure Embedded Python for pip
+        shell: bash
+        run: |
+          sed -i 's/#import site/import site/g' build/RomyAgent/python/python310._pth
+          curl -L -o get-pip.py "https://bootstrap.pypa.io/get-pip.py"
+          build/RomyAgent/python/python.exe get-pip.py
+          rm get-pip.py
 
-      - name: Zip Directory Build
-        working-directory: ./client/dist
-        run: Compress-Archive -Path ROMY-Agent-MVP\* -DestinationPath ROMY-Agent-MVP.zip
+      - name: Add Tkinter to Embedded Python
+        shell: bash
+        run: |
+          PYTHON_DIR=$(dirname $(which python))
+          mkdir -p build/RomyAgent/python/Lib
+          cp -r "$PYTHON_DIR/Lib/tkinter" build/RomyAgent/python/Lib/
+          cp "$PYTHON_DIR/DLLs/_tkinter.pyd" build/RomyAgent/python/
+          cp "$PYTHON_DIR/DLLs/tcl86t.dll" build/RomyAgent/python/
+          cp "$PYTHON_DIR/DLLs/tk86t.dll" build/RomyAgent/python/
+          cp -r "$PYTHON_DIR/tcl" build/RomyAgent/python/
+          echo "Lib" >> build/RomyAgent/python/python310._pth
+
+      - name: Copy App Files
+        shell: bash
+        run: |
+          cp -r client/* build/RomyAgent/app/
+          mv build/RomyAgent/app/run_romy.bat build/RomyAgent/
+
+      - name: Install Dependencies
+        shell: bash
+        run: |
+          build/RomyAgent/python/python.exe -m pip install -r build/RomyAgent/app/requirements.txt
+
+      - name: Generate Inno Setup Script
+        shell: bash
+        run: |
+          cat << 'EOF' > installer.iss
+          [Setup]
+          AppName=ROMY AI Agent
+          AppVersion=1.0
+          DefaultDirName={userappdata}\ROMY AI Agent
+          DefaultGroupName=ROMY AI Agent
+          OutputDir=dist
+          OutputBaseFilename=Install_RomyAgent
+          Compression=lzma
+          SolidCompression=yes
+          PrivilegesRequired=lowest
+          DisableProgramGroupPage=yes
+
+          [Files]
+          Source: "build\RomyAgent\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+          [Icons]
+          Name: "{autoprograms}\ROMY AI Agent"; Filename: "{app}\run_romy.bat"; IconFilename: "{app}\python\pythonw.exe"
+          Name: "{autodesktop}\ROMY AI Agent"; Filename: "{app}\run_romy.bat"; IconFilename: "{app}\python\pythonw.exe"
+
+          [Run]
+          Filename: "{app}\run_romy.bat"; Description: "Launch ROMY AI Agent"; Flags: nowait postinstall skipifsilent
+          EOF
+
+      - name: Build Installer with Inno Setup
+        shell: cmd
+        run: |
+          "C:\Program Files (x86)\Inno Setup 6\iscc.exe" installer.iss
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: Latest Release
-          files: client/dist/ROMY-Agent-MVP.zip
+          files: dist/Install_RomyAgent.exe
           make_latest: true
