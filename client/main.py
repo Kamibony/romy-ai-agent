@@ -131,21 +131,7 @@ def main() -> None:
         logging.error(f"Error starting main client application: {e}")
 
 if __name__ == "__main__":
-    # We close the splash screen AFTER main() starts and setup is mostly complete,
-    # but since main() has blocking operations (login_window), we should close it
-    # just before login_window, or inside setup_playwright_bootstrapper if it takes long.
-    # Let's handle it here before main, or at the start of main.
-    # The bootstrapper logic is inside main(), but we want the splash screen
-    # visible during setup_playwright_bootstrapper.
-
-    # Let's change the pattern: call setup, close splash, run main app
     setup_logging()
     setup_playwright_bootstrapper()
-
-    try:
-        import pyi_splash
-        pyi_splash.close()
-    except ImportError:
-        pass # Not running as a PyInstaller bundle with a splash screen
 
     main()
