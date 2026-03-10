@@ -7,10 +7,12 @@ from PyInstaller.utils.hooks import collect_all
 # 1. Exhaustive collection for core playwright dependencies ONLY
 playwright_datas, playwright_binaries, playwright_hiddenimports = collect_all('playwright')
 
-# 2. THE ULTIMATE FIX: Copy the ENTIRE playwright_stealth package as raw data.
-# This prevents PyInstaller from generating a blank __init__.py and shadowing the real module.
+# 2. THE ULTIMATE FIX: Copy ONLY the js directory of the playwright_stealth package as raw data.
+# This prevents PyInstaller from generating a blank __init__.py and shadowing the real module,
+# while ensuring the necessary js data files are correctly placed in the _MEIPASS dir.
 stealth_package_dir = os.path.dirname(playwright_stealth.__file__)
-explicit_stealth_datas = [(stealth_package_dir, 'playwright_stealth')]
+stealth_js_dir = os.path.join(stealth_package_dir, 'js')
+explicit_stealth_datas = [(stealth_js_dir, os.path.join('playwright_stealth', 'js'))]
 
 # 3. Unified Merging
 hidden_imports = ['plyer.platforms.win.notification', 'playwright_stealth'] + playwright_hiddenimports
