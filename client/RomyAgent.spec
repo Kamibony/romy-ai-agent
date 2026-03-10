@@ -1,19 +1,25 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
 import sys
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs, copy_metadata
 
 # Collect playwright hidden imports and data
 playwright_hidden_imports = collect_submodules('playwright')
 playwright_datas = collect_data_files('playwright')
+playwright_metadata = copy_metadata('playwright')
 
 # Collect playwright_stealth hidden imports and data
 stealth_hidden_imports = collect_submodules('playwright_stealth')
 stealth_datas = collect_data_files('playwright_stealth')
+stealth_metadata = copy_metadata('playwright-stealth')
 
-hidden_imports = ['plyer.platforms.win.notification'] + playwright_hidden_imports + stealth_hidden_imports
+hidden_imports = [
+    'plyer.platforms.win.notification',
+    'playwright_stealth',
+    'playwright_stealth.stealth'
+] + playwright_hidden_imports + stealth_hidden_imports
 
-datas = [] + playwright_datas + stealth_datas
+datas = [] + playwright_datas + stealth_datas + stealth_metadata + playwright_metadata
 
 # Ensure Node.js driver (playwright.cmd, node.exe) is explicitly mapped.
 # PyInstaller usually collects these with collect_data_files('playwright'), which is in playwright_datas.
