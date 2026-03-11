@@ -1,14 +1,70 @@
 import { MESSAGE_TYPES } from '../utils/message_types.js';
+import { getAuthToken, login, logout } from '../utils/auth.js';
 
 let mediaRecorder;
 let audioChunks = [];
 let isRecording = false;
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     const btnRecord = document.getElementById('btn-record');
     const btnSubmit = document.getElementById('btn-submit');
     const textInput = document.getElementById('text-input');
     const statusText = document.getElementById('status-text');
+
+    const loginContainer = document.getElementById('login-container');
+    const controlsContainer = document.getElementById('controls-container');
+    const btnLogin = document.getElementById('btn-login');
+    const btnLogout = document.getElementById('btn-logout');
+    const loginEmail = document.getElementById('login-email');
+    const loginPassword = document.getElementById('login-password');
+    const loginError = document.getElementById('login-error');
+
+    async function checkAuthState() {
+        const token = await getAuthToken();
+        if (token) {
+            loginContainer.style.display = 'none';
+            controlsContainer.style.display = 'flex';
+            statusText.innerText = "Ready to assist";
+        } else {
+            loginContainer.style.display = 'block';
+            controlsContainer.style.display = 'none';
+            statusText.innerText = "Please log in";
+        }
+    }
+
+    await checkAuthState();
+
+    btnLogin.addEventListener('click', async () => {
+        const email = loginEmail.value.trim();
+        const password = loginPassword.value;
+        if (!email || !password) {
+            loginError.innerText = "Please enter email and password.";
+            loginError.style.display = 'block';
+            return;
+        }
+
+        btnLogin.disabled = true;
+        btnLogin.innerText = "Logging in...";
+        loginError.style.display = 'none';
+
+        try {
+            await login(email, password);
+            loginEmail.value = '';
+            loginPassword.value = '';
+            await checkAuthState();
+        } catch (error) {
+            loginError.innerText = error.message || "Login failed.";
+            loginError.style.display = 'block';
+        } finally {
+            btnLogin.disabled = false;
+            btnLogin.innerText = "Login";
+        }
+    });
+
+    btnLogout.addEventListener('click', async () => {
+        await logout();
+        await checkAuthState();
+    });
 
     btnRecord.addEventListener('mousedown', async () => {
         if (!isRecording) await startRecording();

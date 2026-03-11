@@ -1,5 +1,6 @@
 import { API_ENDPOINTS, API_CONFIG } from '../utils/api.js';
 import { MESSAGE_TYPES } from '../utils/message_types.js';
+import { getAuthToken } from '../utils/auth.js';
 
 // Central orchestrator for the Chrome Extension
 console.log("Romy Agent Service Worker initialized.");
@@ -40,8 +41,10 @@ async function handleProcessCommand(payload, sender, sendResponse) {
         const uiElements = domMapResponse.elements;
 
         // 3. Send to Backend
-        // NOTE: In a real implementation, you'd fetch the auth token here.
-        const token = "TODO_AUTH_TOKEN";
+        const token = await getAuthToken();
+        if (!token) {
+            throw new Error("User is not authenticated. Please log in.");
+        }
 
         const apiPayload = {
             audio_base64: audioBase64,

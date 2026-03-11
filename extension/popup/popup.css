@@ -87,4 +87,23 @@ textarea {
     0% { transform: scale(1); }
     50% { transform: scale(1.05); }
     100% { transform: scale(1); }
+}.input-field {
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 1rem;
+}
+
+.error-text {
+    color: #dc3545;
+    font-size: 0.85rem;
+    text-align: center;
+}
+.btn-logout {
+    margin-top: 10px;
+    background-color: #dc3545;
+}
+
+.btn-logout:hover {
+    background-color: #c82333;
 }
