@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Romy Agent</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div id="app">
+        <header>
+            <img src="../assets/icons/icon-128.png" alt="Logo" class="logo" />
+            <h1>Romy Assistant</h1>
+        </header>
+
+        <div class="status-container">
+            <span id="status-text">Ready to assist</span>
+        </div>
+
+        <div class="controls">
+            <!-- Voice Capture -->
+            <button id="btn-record" class="btn btn-primary">Hold to Record</button>
+
+            <!-- Manual Input -->
+            <textarea id="text-input" placeholder="Or type a command..."></textarea>
+            <button id="btn-submit" class="btn btn-secondary">Submit</button>
+        </div>
+    </div>
+
+    <script type="module" src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Romy AI Hybrid Agent",
+  "version": "1.0.0",
+  "description": "Enterprise RPA system: Phase 1 (Web Module)",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background/service_worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/message_types_content.js",
+        "content/dom_mapper.js",
+        "content/content_script.js"
+      ],
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Romy Agent"
+  }
+}
