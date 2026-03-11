@@ -33,9 +33,27 @@ function handleExecuteAction(action, sendResponse) {
             case "TYPE":
                 const typeTarget = document.querySelector(`[data-romy-id="${action.target_id}"]`);
                 if (!typeTarget) throw new Error(`Target ID ${action.target_id} not found.`);
+
                 typeTarget.focus();
-                // Natively set the value
-                typeTarget.value = action.text;
+
+                // Set the value natively bypassing React/Vue's value tracking
+                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                    window.HTMLInputElement.prototype,
+                    "value"
+                );
+                const nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(
+                    window.HTMLTextAreaElement.prototype,
+                    "value"
+                );
+
+                if (nativeInputValueSetter && nativeInputValueSetter.set && typeTarget instanceof HTMLInputElement) {
+                    nativeInputValueSetter.set.call(typeTarget, action.text);
+                } else if (nativeTextAreaValueSetter && nativeTextAreaValueSetter.set && typeTarget instanceof HTMLTextAreaElement) {
+                    nativeTextAreaValueSetter.set.call(typeTarget, action.text);
+                } else {
+                    typeTarget.value = action.text;
+                }
+
                 // Dispatch events to trigger React/Angular bindings
                 typeTarget.dispatchEvent(new Event("input", { bubbles: true }));
                 typeTarget.dispatchEvent(new Event("change", { bubbles: true }));
