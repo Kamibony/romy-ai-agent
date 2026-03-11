@@ -17,13 +17,24 @@
             <span id="status-text">Ready to assist</span>
         </div>
 
-        <div class="controls">
+        <div id="login-container" style="display: none;">
+            <div class="controls">
+                <input type="email" id="login-email" placeholder="Email" class="input-field" />
+                <input type="password" id="login-password" placeholder="Password" class="input-field" />
+                <button id="btn-login" class="btn btn-primary">Login</button>
+                <div id="login-error" class="error-text" style="display: none;"></div>
+            </div>
+        </div>
+
+        <div id="controls-container" class="controls" style="display: none;">
             <!-- Voice Capture -->
             <button id="btn-record" class="btn btn-primary">Hold to Record</button>
 
             <!-- Manual Input -->
             <textarea id="text-input" placeholder="Or type a command..."></textarea>
             <button id="btn-submit" class="btn btn-secondary">Submit</button>
+
+            <button id="btn-logout" class="btn btn-secondary btn-logout">Logout</button>
         </div>
     </div>
 
