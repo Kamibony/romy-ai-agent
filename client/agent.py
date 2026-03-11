@@ -424,7 +424,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
 
             logging.info(f"Sending remote payload to backend (iteration {iteration})...")
             try:
-                response = requests.post(BACKEND_URL, json=payload, headers=headers)
+                response = requests.post(BACKEND_URL, json=payload, headers=headers, timeout=30)
                 response.raise_for_status()
                 data = response.json()
 
@@ -467,7 +467,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                                 if active_page:
                                     # Use the injected data-romy-id for precise clicking
                                     locator = active_page.locator(f'[data-romy-id="{target_id}"]').first
-                                    locator.click(force=True)
+                                    locator.click(force=True, no_wait_after=True)
                                     logging.info(f"Successfully clicked element {target_id} via Playwright locator.")
                                 else:
                                     x = memory_map[target_id]["x"]
@@ -770,7 +770,7 @@ def execute_voice_agent_loop() -> None:
 
             logging.info(f"Sending payload to backend (iteration {iteration})...")
             try:
-                response = requests.post(BACKEND_URL, json=payload, headers=headers)
+                response = requests.post(BACKEND_URL, json=payload, headers=headers, timeout=30)
                 response.raise_for_status()
                 data = response.json()
 
@@ -812,7 +812,7 @@ def execute_voice_agent_loop() -> None:
                                 active_page = _get_active_page()
                                 if active_page:
                                     locator = active_page.locator(f'[data-romy-id="{target_id}"]').first
-                                    locator.click(force=True)
+                                    locator.click(force=True, no_wait_after=True)
                                     logging.info(f"Successfully clicked element {target_id} via Playwright locator.")
                                 else:
                                     x = memory_map[target_id]["x"]
