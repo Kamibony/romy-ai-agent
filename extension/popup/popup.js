@@ -32,6 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
     btnSubmit.addEventListener('click', () => {
         const text = textInput.value.trim();
         if (text) {
+            statusText.innerText = "Processing...";
             sendCommand({ audioBase64: "", commandText: text });
             textInput.value = "";
         }
@@ -80,7 +81,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function sendCommand(payload) {
+        btnRecord.disabled = true;
+        btnSubmit.disabled = true;
+        textInput.disabled = true;
+
         chrome.runtime.sendMessage({ type: MESSAGE_TYPES.PROCESS_COMMAND, payload }, (response) => {
+            btnRecord.disabled = false;
+            btnSubmit.disabled = false;
+            textInput.disabled = false;
+
             if (chrome.runtime.lastError) {
                 console.error(chrome.runtime.lastError);
                 statusText.innerText = "Connection error.";

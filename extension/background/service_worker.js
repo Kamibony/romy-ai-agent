@@ -1,4 +1,4 @@
-import { API_ENDPOINTS } from '../utils/api.js';
+import { API_ENDPOINTS, API_CONFIG } from '../utils/api.js';
 import { MESSAGE_TYPES } from '../utils/message_types.js';
 
 // Central orchestrator for the Chrome Extension
@@ -50,14 +50,23 @@ async function handleProcessCommand(payload, sender, sendResponse) {
             // Include thread history if needed
         };
 
-        const response = await fetch(API_ENDPOINTS.COMMAND, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify(apiPayload)
-        });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), API_CONFIG.TIMEOUT || 30000);
+
+        let response;
+        try {
+            response = await fetch(API_ENDPOINTS.COMMAND, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify(apiPayload),
+                signal: controller.signal
+            });
+        } finally {
+            clearTimeout(timeoutId);
+        }
 
         if (!response.ok) throw new Error(`Backend error: ${response.status}`);
         const actions = await response.json(); // Expected JSON array of actions
@@ -82,6 +91,10 @@ async function handleProcessCommand(payload, sender, sendResponse) {
 
     } catch (error) {
         console.error("Error processing command:", error);
-        sendResponse({ success: false, error: error.message });
+        let errorMsg = error.message;
+        if (error.name === 'AbortError') {
+            errorMsg = "Backend request timed out.";
+        }
+        sendResponse({ success: false, error: errorMsg });
     }
 }
