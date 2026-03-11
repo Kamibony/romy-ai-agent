@@ -295,6 +295,9 @@ def scan_web_ui() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
 
                 element_str_id = str(element_id)
 
+                # Inject custom attribute into the live DOM
+                el.evaluate(f'(node) => {{ node.setAttribute("data-romy-id", "{element_str_id}"); }}')
+
                 ui_elements.append({
                     "id": element_str_id,
                     "type": tag_name, # The prompt says Tag
@@ -432,6 +435,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                     actions = [data]
 
                 break_outer = False
+                had_terminal_action = False
                 for act in actions:
                     if ABORT_AGENT:
                         logging.info("Emergency abort triggered during action sequence.")
@@ -456,20 +460,24 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                     elif action_upper == "CLICK" and "target_id" in act:
                         target_id = str(act["target_id"])
                         if target_id in memory_map:
-                            x = memory_map[target_id]["x"]
-                            y = memory_map[target_id]["y"]
-                            logging.info(f"Clicking at ({x}, {y}) using Playwright viewport coordinates...")
+                            logging.info(f"Clicking element with ID {target_id} using Playwright locator...")
 
                             try:
                                 active_page = _get_active_page()
                                 if active_page:
-                                    active_page.mouse.click(x, y)
-                                    logging.info(f"Successfully clicked at ({x}, {y}) via Playwright.")
+                                    # Use the injected data-romy-id for precise clicking
+                                    locator = active_page.locator(f'[data-romy-id="{target_id}"]').first
+                                    locator.click(force=True)
+                                    logging.info(f"Successfully clicked element {target_id} via Playwright locator.")
                                 else:
+                                    x = memory_map[target_id]["x"]
+                                    y = memory_map[target_id]["y"]
                                     logging.warning("No active Playwright page found for click. Falling back to PyAutoGUI.")
                                     pyautogui.moveTo(x, y, duration=0.5)
                                     pyautogui.click()
                             except Exception as click_e:
+                                x = memory_map[target_id]["x"]
+                                y = memory_map[target_id]["y"]
                                 logging.error(f"Error executing click via Playwright: {click_e}. Falling back to PyAutoGUI.")
                                 pyautogui.moveTo(x, y, duration=0.5)
                                 pyautogui.click()
@@ -480,22 +488,21 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                         target_id = str(act["target_id"])
                         text_to_type = act["text"]
                         if target_id in memory_map:
-                            x = memory_map[target_id]["x"]
-                            y = memory_map[target_id]["y"]
-                            logging.info(f"Typing '{text_to_type}' at ({x}, {y}) using Playwright...")
+                            logging.info(f"Typing '{text_to_type}' at element {target_id} using Playwright locator...")
 
                             try:
                                 active_page = _get_active_page()
                                 if active_page:
-                                    # Focus/Click first and clear
-                                    active_page.mouse.click(x, y, click_count=3)
+                                    locator = active_page.locator(f'[data-romy-id="{target_id}"]').first
+                                    locator.click(force=True, click_count=3)
                                     time.sleep(0.1)
                                     active_page.keyboard.press("Backspace")
-                                    # Small sleep to ensure focus
                                     time.sleep(0.2)
                                     active_page.keyboard.type(text_to_type)
-                                    logging.info(f"Successfully typed via Playwright.")
+                                    logging.info(f"Successfully typed via Playwright locator.")
                                 else:
+                                    x = memory_map[target_id]["x"]
+                                    y = memory_map[target_id]["y"]
                                     logging.warning("No active Playwright page found for typing. Falling back to PyAutoGUI.")
                                     pyautogui.moveTo(x, y, duration=0.5)
                                     pyautogui.click()
@@ -504,6 +511,8 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                                     time.sleep(0.2)
                                     pyautogui.write(text_to_type)
                             except Exception as type_e:
+                                x = memory_map[target_id]["x"]
+                                y = memory_map[target_id]["y"]
                                 logging.error(f"Error executing type via Playwright: {type_e}. Falling back to PyAutoGUI.")
                                 pyautogui.moveTo(x, y, duration=0.5)
                                 pyautogui.click()
@@ -562,6 +571,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                                 "status": "help_needed",
                                 "help_reason": reason
                             })
+                        had_terminal_action = True
                         break_outer = True
                         break
                     else:
@@ -571,6 +581,10 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                     time.sleep(0.5)
 
                 if break_outer:
+                    break
+
+                if iteration > 0 and not had_terminal_action:
+                    logging.error("Agentic Loop terminated to prevent infinite empty audio loop. No terminal action provided by backend.")
                     break
 
             except requests.exceptions.RequestException as req_e:
@@ -767,6 +781,7 @@ def execute_voice_agent_loop() -> None:
                     actions = [data]
 
                 break_outer = False
+                had_terminal_action = False
                 for act in actions:
                     if ABORT_AGENT:
                         logging.info("Emergency abort triggered during action sequence.")
@@ -778,31 +793,36 @@ def execute_voice_agent_loop() -> None:
 
                     if action_upper == "DONE":
                         logging.info("Task finished.")
+                        had_terminal_action = True
                         break_outer = True
                         break
                     elif "ERROR" in action_upper:
                         raw_response = act.get("raw_response", "No raw response provided")
                         error_msg = act.get("error", "No error message provided")
                         logging.error(f"Agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
+                        had_terminal_action = True
                         break_outer = True
                         break
                     elif action_upper == "CLICK" and "target_id" in act:
                         target_id = str(act["target_id"])
                         if target_id in memory_map:
-                            x = memory_map[target_id]["x"]
-                            y = memory_map[target_id]["y"]
-                            logging.info(f"Clicking at ({x}, {y}) using Playwright viewport coordinates...")
+                            logging.info(f"Clicking element with ID {target_id} using Playwright locator...")
 
                             try:
                                 active_page = _get_active_page()
                                 if active_page:
-                                    active_page.mouse.click(x, y)
-                                    logging.info(f"Successfully clicked at ({x}, {y}) via Playwright.")
+                                    locator = active_page.locator(f'[data-romy-id="{target_id}"]').first
+                                    locator.click(force=True)
+                                    logging.info(f"Successfully clicked element {target_id} via Playwright locator.")
                                 else:
+                                    x = memory_map[target_id]["x"]
+                                    y = memory_map[target_id]["y"]
                                     logging.warning("No active Playwright page found for click. Falling back to PyAutoGUI.")
                                     pyautogui.moveTo(x, y, duration=0.5)
                                     pyautogui.click()
                             except Exception as click_e:
+                                x = memory_map[target_id]["x"]
+                                y = memory_map[target_id]["y"]
                                 logging.error(f"Error executing click via Playwright: {click_e}. Falling back to PyAutoGUI.")
                                 pyautogui.moveTo(x, y, duration=0.5)
                                 pyautogui.click()
@@ -813,20 +833,21 @@ def execute_voice_agent_loop() -> None:
                         target_id = str(act["target_id"])
                         text_to_type = act["text"]
                         if target_id in memory_map:
-                            x = memory_map[target_id]["x"]
-                            y = memory_map[target_id]["y"]
-                            logging.info(f"Typing '{text_to_type}' at ({x}, {y}) using Playwright...")
+                            logging.info(f"Typing '{text_to_type}' at element {target_id} using Playwright locator...")
 
                             try:
                                 active_page = _get_active_page()
                                 if active_page:
-                                    active_page.mouse.click(x, y, click_count=3)
+                                    locator = active_page.locator(f'[data-romy-id="{target_id}"]').first
+                                    locator.click(force=True, click_count=3)
                                     time.sleep(0.1)
                                     active_page.keyboard.press("Backspace")
                                     time.sleep(0.2)
                                     active_page.keyboard.type(text_to_type)
-                                    logging.info(f"Successfully typed via Playwright.")
+                                    logging.info(f"Successfully typed via Playwright locator.")
                                 else:
+                                    x = memory_map[target_id]["x"]
+                                    y = memory_map[target_id]["y"]
                                     logging.warning("No active Playwright page found for typing. Falling back to PyAutoGUI.")
                                     pyautogui.moveTo(x, y, duration=0.5)
                                     pyautogui.click()
@@ -835,6 +856,8 @@ def execute_voice_agent_loop() -> None:
                                     time.sleep(0.2)
                                     pyautogui.write(text_to_type)
                             except Exception as type_e:
+                                x = memory_map[target_id]["x"]
+                                y = memory_map[target_id]["y"]
                                 logging.error(f"Error executing type via Playwright: {type_e}. Falling back to PyAutoGUI.")
                                 pyautogui.moveTo(x, y, duration=0.5)
                                 pyautogui.click()
@@ -893,6 +916,7 @@ def execute_voice_agent_loop() -> None:
                                 "status": "help_needed",
                                 "help_reason": reason
                             })
+                        had_terminal_action = True
                         break_outer = True
                         break
                     else:
@@ -902,6 +926,10 @@ def execute_voice_agent_loop() -> None:
                     time.sleep(0.5)
 
                 if break_outer:
+                    break
+
+                if iteration > 0 and not had_terminal_action:
+                    logging.error("Voice Agentic Loop terminated to prevent infinite empty audio loop. No terminal action provided by backend.")
                     break
 
             except requests.exceptions.RequestException as req_e:
