@@ -113,6 +113,54 @@ def start_remote_listener() -> None:
     except Exception as e:
         logging.error(f"Error starting remote listener: {e}")
 
+def handle_token_expiry():
+    """Handles 401 Unauthorized by deleting the token and prompting for re-login."""
+    logging.critical("Handling Token Expiry (401 Unauthorized).")
+
+    # 1. Delete token.json from local AppData
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    if local_app_data:
+        for folder in ["RomyAgent", "RomyAgentBrowserData", ""]:
+            if folder:
+                token_path = os.path.join(local_app_data, folder, "token.json")
+            else:
+                token_path = os.path.join(local_app_data, "token.json")
+            if os.path.exists(token_path):
+                try:
+                    os.remove(token_path)
+                    logging.info(f"Deleted expired token file: {token_path}")
+                except Exception as e:
+                    logging.error(f"Failed to delete token file {token_path}: {e}")
+
+    try:
+        from plyer import notification
+        notification.notify(title="ROMY AI Error", message="Authentication expired. Please re-login.", app_name="ROMY", timeout=5)
+    except Exception:
+        pass
+
+    # 2. Trigger Auth Window to get a new token
+    try:
+        import auth_window
+        new_token = auth_window.login_window()
+        if new_token:
+            set_firebase_token(new_token)
+            logging.info("Successfully acquired new token.")
+        else:
+            logging.error("Failed to acquire new token. Prompting user to restart.")
+            import tkinter as tk
+            from tkinter import messagebox
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror("Authentication Error", "Session expired and login failed. Please restart the application.")
+            root.destroy()
+    except Exception as e:
+        logging.error(f"Error showing auth window during token expiry: {e}")
+        import tkinter as tk
+        from tkinter import messagebox
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror("Authentication Error", "Session expired. Please restart the application to log in again.")
+        root.destroy()
 
 _playwright = None
 _browser = None
@@ -527,11 +575,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
 
             except requests.exceptions.RequestException as req_e:
                 if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
-                    logging.critical("Critical Error: Authentication Token Expired (401 Unauthorized).")
-                    try:
-                        notification.notify(title="ROMY AI Error", message="Authentication expired. Please re-login.", app_name="ROMY", timeout=5)
-                    except Exception:
-                        pass
+                    handle_token_expiry()
                     final_status = "failed"
                     break
                 logging.info(f"Request failed: {req_e}")
@@ -862,11 +906,7 @@ def execute_voice_agent_loop() -> None:
 
             except requests.exceptions.RequestException as req_e:
                 if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
-                    logging.critical("Critical Error: Authentication Token Expired (401 Unauthorized).")
-                    try:
-                        notification.notify(title="ROMY AI Error", message="Authentication expired. Please re-login.", app_name="ROMY", timeout=5)
-                    except Exception:
-                        pass
+                    handle_token_expiry()
                     break
                 logging.info(f"Request failed: {req_e}")
                 # Break the loop on network failure to avoid infinite errors
