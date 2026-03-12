@@ -109,9 +109,8 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
         except Exception as e:
             print(f"Error writing telemetry: {e}")
 
-        # Return the list of actions under the 'actions' key
-        result = {"status": "success", "actions": action_list}
-        return result
+        # Directly return the list of actions to match extension expectations
+        return action_list
     except Exception as e:
         print(f"Error in AI pipeline: {e}")
-        return {"status": "error", "actions": [{"action": "PIPELINE_ERROR", "error": str(e)}]}
+        return [{"action": "PIPELINE_ERROR", "error": str(e)}]

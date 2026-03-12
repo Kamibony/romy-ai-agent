@@ -1,9 +1,16 @@
 import { MESSAGE_TYPES } from '../utils/message_types.js';
 import { getAuthToken, login, logout } from '../utils/auth.js';
 
-let mediaRecorder;
-let audioChunks = [];
 let isRecording = false;
+
+async function setupOffscreenDocument(path) {
+    if (await chrome.offscreen.hasDocument()) return;
+    await chrome.offscreen.createDocument({
+        url: path,
+        reasons: ['USER_MEDIA'],
+        justification: 'Recording audio for voice commands'
+    });
+}
 
 document.addEventListener('DOMContentLoaded', async () => {
     const btnRecord = document.getElementById('btn-record');
@@ -96,30 +103,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     async function startRecording() {
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream);
-
-            mediaRecorder.ondataavailable = (event) => {
-                if (event.data.size > 0) audioChunks.push(event.data);
-            };
-
-            mediaRecorder.onstop = async () => {
-                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                const base64Audio = await blobToBase64(audioBlob);
-                audioChunks = []; // Reset
-
-                // Keep stream tracks clean
-                stream.getTracks().forEach(track => track.stop());
-
-                sendCommand({ audioBase64: base64Audio, commandText: "" });
-            };
-
-            mediaRecorder.start();
+            await setupOffscreenDocument('../offscreen/offscreen.html');
+            const response = await chrome.runtime.sendMessage({ type: MESSAGE_TYPES.START_RECORDING });
+            if (response && response.error) {
+                throw new Error(response.error);
+            }
             isRecording = true;
             btnRecord.classList.add('recording');
             btnRecord.innerText = "Recording...";
             statusText.innerText = "Listening...";
-
         } catch (err) {
             console.error("Microphone access denied or error:", err);
             statusText.innerText = "Microphone error. Check permissions.";
@@ -127,12 +119,34 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     async function stopRecordingAndSend() {
-        if (mediaRecorder && mediaRecorder.state !== "inactive") {
-            mediaRecorder.stop();
+        if (isRecording) {
             isRecording = false;
             btnRecord.classList.remove('recording');
             btnRecord.innerText = "Hold to Record";
             statusText.innerText = "Processing...";
+
+            try {
+                const response = await chrome.runtime.sendMessage({ type: MESSAGE_TYPES.STOP_RECORDING });
+                if (response && response.error) {
+                    throw new Error(response.error);
+                }
+                const base64Audio = response.audioBase64;
+                if (base64Audio) {
+                    sendCommand({ audioBase64: base64Audio, commandText: "" });
+                } else {
+                    statusText.innerText = "No audio captured.";
+                }
+            } catch (err) {
+                console.error("Error stopping recording:", err);
+                statusText.innerText = "Error capturing audio.";
+            } finally {
+                // Ensure the offscreen document is closed after recording stops to save resources
+                try {
+                    await chrome.offscreen.closeDocument();
+                } catch (e) {
+                    console.log("Error closing offscreen document:", e);
+                }
+            }
         }
     }
 
@@ -157,15 +171,4 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    function blobToBase64(blob) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.readAsDataURL(blob);
-            reader.onloadend = () => {
-                const base64data = reader.result.split(',')[1];
-                resolve(base64data);
-            };
-            reader.onerror = reject;
-        });
-    }
 });
