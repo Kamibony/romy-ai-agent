@@ -11,6 +11,10 @@ const MESSAGE_TYPES = {
     UPDATE_TOKEN: 'UPDATE_TOKEN',
     GET_TOKEN: 'GET_TOKEN',
 
+    // Offscreen audio capture
+    START_RECORDING: 'START_RECORDING',
+    STOP_RECORDING: 'STOP_RECORDING',
+
     // Future (Phase 2): Background -> Native Host
     OS_NATIVE_ACTION: 'OS_NATIVE_ACTION'
 };
