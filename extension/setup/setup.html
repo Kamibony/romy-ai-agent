@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Microphone Setup - Romy Agent</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            padding: 50px;
+            background-color: #f9f9f9;
+        }
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+        }
+        p {
+            color: #666;
+            margin-bottom: 20px;
+        }
+        .btn {
+            padding: 10px 20px;
+            font-size: 16px;
+            color: white;
+            background-color: #007bff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .btn:hover {
+            background-color: #0056b3;
+        }
+        #status {
+            margin-top: 20px;
+            font-weight: bold;
+        }
+        .success { color: #28a745; }
+        .error { color: #dc3545; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Microphone Permission Required</h1>
+        <p>Romy Agent needs access to your microphone to process voice commands. Please click the button below and allow access when prompted by your browser.</p>
+        <button id="btn-request" class="btn">Grant Microphone Access</button>
+        <p id="status"></p>
+    </div>
+    <script src="setup.js"></script>
+</body>
+</html>
