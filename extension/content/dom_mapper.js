@@ -14,14 +14,28 @@ window.RomyDomMapper = {
         // Broad locator string matching Playwright scanning
         const locators = 'button, a, input, select, textarea, [role="button"], [role="link"], [onclick], .btn, .button, [class*="btn"]';
 
-        const allNodes = document.querySelectorAll(locators);
+        function getAllNodes(root) {
+            let nodes = [];
+            const elements = root.querySelectorAll('*');
+            elements.forEach(el => {
+                if (el.matches(locators)) {
+                    nodes.push(el);
+                }
+                if (el.shadowRoot) {
+                    nodes = nodes.concat(getAllNodes(el.shadowRoot));
+                }
+            });
+            return nodes;
+        }
+
+        const allNodes = getAllNodes(document);
 
         allNodes.forEach((node) => {
             const rect = node.getBoundingClientRect();
 
             // Simplified visibility check
             const computedStyle = window.getComputedStyle(node);
-            const isVisible = (
+            let isVisible = (
                 rect.width > 0 &&
                 rect.height > 0 &&
                 rect.top >= 0 &&
@@ -32,6 +46,13 @@ window.RomyDomMapper = {
                 computedStyle.display !== 'none' &&
                 computedStyle.opacity !== '0'
             );
+
+            // Relax visibility checks for inputs and textareas which might be visually hidden behind custom UI
+            const tagName = node.tagName.toLowerCase();
+            const isInputLike = tagName === 'input' || tagName === 'textarea' || node.hasAttribute('contenteditable');
+            if (!isVisible && isInputLike && computedStyle.display !== 'none') {
+                isVisible = true;
+            }
 
             if (isVisible) {
                 // Generate and inject unique ID as string of number

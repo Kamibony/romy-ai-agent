@@ -73,23 +73,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         await checkAuthState();
     });
 
-    btnRecord.addEventListener('mousedown', async () => {
-        if (!isRecording) await startRecording();
-    });
-
-    btnRecord.addEventListener('mouseup', async () => {
-        if (isRecording) await stopRecordingAndSend();
-    });
-
-    // Mobile fallback (touch events)
-    btnRecord.addEventListener('touchstart', async (e) => {
-        e.preventDefault();
-        if (!isRecording) await startRecording();
-    });
-
-    btnRecord.addEventListener('touchend', async (e) => {
-        e.preventDefault();
-        if (isRecording) await stopRecordingAndSend();
+    btnRecord.addEventListener('click', async () => {
+        if (!isRecording) {
+            await startRecording();
+        } else {
+            await stopRecordingAndSend();
+        }
     });
 
     btnSubmit.addEventListener('click', () => {
@@ -103,6 +92,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     async function startRecording() {
         try {
+            // Check microphone permission before proceeding
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                stream.getTracks().forEach(track => track.stop());
+            } catch (e) {
+                console.warn("Microphone access denied. Opening setup page.");
+                chrome.tabs.create({ url: chrome.runtime.getURL("setup/setup.html") });
+                statusText.innerText = "Please grant mic access.";
+                return;
+            }
+
             await setupOffscreenDocument('../offscreen/offscreen.html');
             const response = await chrome.runtime.sendMessage({ type: MESSAGE_TYPES.START_RECORDING });
             if (response && response.error) {
@@ -110,7 +110,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             isRecording = true;
             btnRecord.classList.add('recording');
-            btnRecord.innerText = "Recording...";
+            btnRecord.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-square"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect></svg>';
             statusText.innerText = "Listening...";
         } catch (err) {
             console.error("Microphone access denied or error:", err);
@@ -122,7 +122,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (isRecording) {
             isRecording = false;
             btnRecord.classList.remove('recording');
-            btnRecord.innerText = "Hold to Record";
+            btnRecord.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-mic"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>';
             statusText.innerText = "Processing...";
 
             try {
