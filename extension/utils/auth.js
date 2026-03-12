@@ -3,10 +3,10 @@ import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, getId
 import { firebaseConfig } from './firebase-config.js';
 
 // Initialize Firebase App
-const app = initializeApp(firebaseConfig);
+export const app = initializeApp(firebaseConfig);
 
 // Initialize Firebase Auth
-const auth = getAuth(app);
+export const auth = getAuth(app);
 
 export async function login(email, password) {
     try {
