@@ -41,3 +41,12 @@ export async function getAuthToken() {
         });
     });
 }
+
+export async function getCurrentUser() {
+    return new Promise((resolve) => {
+        const unsubscribe = onAuthStateChanged(auth, async (user) => {
+            unsubscribe();
+            resolve(user);
+        });
+    });
+}
