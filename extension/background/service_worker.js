@@ -8,6 +8,7 @@ console.log("Romy Agent Service Worker initialized.");
 
 let isListeningToRemoteCommands = false;
 let remoteCommandUnsubscribe = null;
+const processedCommandIds = new Set();
 
 // Initialize the remote listener immediately if token is available
 async function initRemoteListener() {
@@ -41,6 +42,17 @@ export async function startRemoteListener() {
                     const docId = change.doc.id;
                     const commandText = data.command || "";
                     const audioBase64 = data.audio_b64 || "";
+
+                    if (processedCommandIds.has(docId)) {
+                        console.log(`Command ${docId} already processed. Skipping to prevent double execution.`);
+                        return;
+                    }
+
+                    processedCommandIds.add(docId);
+                    if (processedCommandIds.size > 50) {
+                        const iterator = processedCommandIds.values();
+                        processedCommandIds.delete(iterator.next().value);
+                    }
 
                     console.log(`Received new remote command: "${commandText}" (ID: ${docId}, has audio: ${!!audioBase64})`);
 
