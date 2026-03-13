@@ -49,7 +49,11 @@ def create_task_session(session_id: str, initial_command: str = "") -> None:
 def check_user_license(uid: str) -> bool:
     """
     Connects to Firestore, checks the `users` collection for the given `uid`,
+<<<<<<< fix-partner-access-admin-15008130805504158054
+    and returns True if `is_active` is boolean True or if the user has a 'partner' or 'admin' role.
+=======
     and returns True if `is_active` is boolean True or if the user has a Partner/Admin role.
+>>>>>>> main
     """
     try:
         db = firestore.client()
@@ -58,8 +62,13 @@ def check_user_license(uid: str) -> bool:
 
         if user_doc.exists:
             user_data = user_doc.to_dict()
+<<<<<<< fix-partner-access-admin-15008130805504158054
+            role = user_data.get("role", "").lower()
+            if role in ["admin", "partner"]:
+=======
             role = user_data.get("role")
             if role in ["Admin", "Partner"]:
+>>>>>>> main
                 return True
             return user_data.get("is_active") is True
         return False
