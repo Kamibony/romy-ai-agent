@@ -1,7 +1,9 @@
 import { MESSAGE_TYPES } from '../utils/message_types.js';
-import { getAuthToken, login, logout } from '../utils/auth.js';
+import { getAuthToken, login, logout, getCurrentUser } from '../utils/auth.js';
+import { db, doc, getDoc } from '../utils/firebase-init.js';
 
 let isRecording = false;
+let userRole = null;
 
 async function setupOffscreenDocument(path) {
     if (await chrome.offscreen.hasDocument()) return;
@@ -33,10 +35,24 @@ document.addEventListener('DOMContentLoaded', async () => {
             loginContainer.style.display = 'none';
             controlsContainer.style.display = 'flex';
             statusText.innerText = "Ready to assist";
+
+            // Check user role for telemetry visibility
+            const user = await getCurrentUser();
+            if (user) {
+                try {
+                    const userDoc = await getDoc(doc(db, "users", user.uid));
+                    if (userDoc.exists()) {
+                        userRole = userDoc.data().role;
+                    }
+                } catch (e) {
+                    console.log("Could not fetch user role", e);
+                }
+            }
         } else {
             loginContainer.style.display = 'block';
             controlsContainer.style.display = 'none';
             statusText.innerText = "Please log in";
+            userRole = null;
         }
     }
 
@@ -152,7 +168,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function appendTelemetry(message) {
-        if (telemetryLog) {
+        if (telemetryLog && (userRole === 'Admin' || userRole === 'Partner')) {
             telemetryLog.style.display = 'block';
             const entry = document.createElement('div');
             entry.textContent = `> ${message}`;
