@@ -170,13 +170,13 @@
                 snapshot.forEach((doc) => {
                     const data = doc.data();
                     const time = data.timestamp ? data.timestamp.toDate().toLocaleTimeString() : new Date().toLocaleTimeString();
-                    const geminiText = data.gemini_context ? data.gemini_context.substring(0, 100) + (data.gemini_context.length > 100 ? '...' : '') : 'N/A';
+                    const geminiText = data.gemini_context ? data.gemini_context : 'N/A';
 
                     html += `
                         <div class="bg-indigo-800 p-3 rounded border border-indigo-700">
                             <div class="text-indigo-300 text-[10px] mb-1">[${time}]</div>
-                            <div class="mb-2"><span class="font-bold text-indigo-200">Gemini:</span> ${geminiText}</div>
-                            <div><span class="font-bold text-green-400">Claude:</span> ${data.claude_action || 'N/A'}</div>
+                            <div class="mb-2"><span class="font-bold text-indigo-200">Gemini:</span> <div class="whitespace-pre-wrap break-all">${geminiText}</div></div>
+                            <div><span class="font-bold text-green-400">Claude:</span> <div class="whitespace-pre-wrap break-all">${data.claude_action || 'N/A'}</div></div>
                         </div>
                     `;
                 });

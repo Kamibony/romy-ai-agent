@@ -24,9 +24,25 @@
 
     <!-- Main Content -->
     <main class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pb-12">
+        <div id="login-container" class="bg-white rounded-lg shadow-md p-6 border border-gray-200 mb-8" style="display: none;">
+            <h2 class="text-2xl font-semibold mb-4 text-gray-800 border-b pb-2">Admin Login</h2>
+            <div class="space-y-4">
+                <input type="email" id="login-email" placeholder="Email" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2" />
+                <input type="password" id="login-password" placeholder="Password" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2" />
+                <button id="btn-login" class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                    Login
+                </button>
+                <div id="login-error" class="text-sm text-red-600 hidden"></div>
+            </div>
+        </div>
+
+        <div id="admin-dashboard" style="display: none;">
         <section class="bg-white rounded-lg shadow-md p-6 border border-gray-200">
             <h2 class="text-2xl font-semibold mb-4 text-gray-800 border-b pb-2">Prompt Engineering</h2>
-            <div id="auth-status" class="mb-4 text-sm text-gray-600">Dev Mode: Auth bypassed for MVP testing.</div>
+            <div id="auth-status" class="mb-4 text-sm text-gray-600 flex justify-between">
+                <span id="user-info">Logged in.</span>
+                <button id="btn-logout" class="text-indigo-600 hover:text-indigo-900 font-medium">Logout</button>
+            </div>
             <div id="admin-content" style="display: block;" class="space-y-4">
                 <div>
                     <label for="global-prompt" class="block text-sm font-medium text-gray-700">Global System Prompt</label>
@@ -59,11 +75,12 @@
                 </div>
             </div>
         </section>
+        </div>
     </main>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
-        import { getAuth } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+        import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
         import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
         const firebaseConfig = {
@@ -77,6 +94,7 @@
         const db = getFirestore(app);
 
         const authStatus = document.getElementById('auth-status');
+        const userInfo = document.getElementById('user-info');
         const adminContent = document.getElementById('admin-content');
         const globalPromptInput = document.getElementById('global-prompt');
         const saveBtn = document.getElementById('save-btn');
@@ -88,8 +106,15 @@
         const saveSettingsStatus = document.getElementById('save-settings-status');
         const errorSettingsStatus = document.getElementById('error-settings-status');
 
-        // Load existing settings immediately on page load
-        (async () => {
+        const loginContainer = document.getElementById('login-container');
+        const adminDashboard = document.getElementById('admin-dashboard');
+        const loginEmail = document.getElementById('login-email');
+        const loginPassword = document.getElementById('login-password');
+        const btnLogin = document.getElementById('btn-login');
+        const btnLogout = document.getElementById('btn-logout');
+        const loginError = document.getElementById('login-error');
+
+        async function loadSettings() {
             try {
                 const docRef = doc(db, "settings", "global_prompt");
                 const docSnap = await getDoc(docRef);
@@ -113,7 +138,75 @@
                 errorSettingsStatus.textContent = "Error loading default workspace url: " + error.message;
                 errorSettingsStatus.classList.remove('hidden');
             }
-        })();
+        }
+
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                // Fetch user doc to check role
+                try {
+                    const userDoc = await getDoc(doc(db, "users", user.uid));
+                    if (userDoc.exists()) {
+                        const userData = userDoc.data();
+                        const role = (userData.role || "").toLowerCase();
+                        if (role === "admin" || role === "partner") {
+                            loginContainer.style.display = 'none';
+                            adminDashboard.style.display = 'block';
+                            userInfo.textContent = `Logged in as ${user.email} (${role})`;
+                            loadSettings();
+                        } else {
+                            await signOut(auth);
+                            loginError.textContent = "Access denied: Requires Admin or Partner role.";
+                            loginError.classList.remove('hidden');
+                            loginContainer.style.display = 'block';
+                            adminDashboard.style.display = 'none';
+                        }
+                    } else {
+                        await signOut(auth);
+                        loginError.textContent = "Access denied: User record not found.";
+                        loginError.classList.remove('hidden');
+                        loginContainer.style.display = 'block';
+                        adminDashboard.style.display = 'none';
+                    }
+                } catch (error) {
+                    console.error("Error checking role:", error);
+                    loginError.textContent = "Error checking permissions.";
+                    loginError.classList.remove('hidden');
+                }
+            } else {
+                loginContainer.style.display = 'block';
+                adminDashboard.style.display = 'none';
+            }
+        });
+
+        btnLogin.addEventListener('click', async () => {
+            const email = loginEmail.value.trim();
+            const password = loginPassword.value;
+            if (!email || !password) {
+                loginError.textContent = "Please enter email and password.";
+                loginError.classList.remove('hidden');
+                return;
+            }
+
+            btnLogin.disabled = true;
+            btnLogin.textContent = "Logging in...";
+            loginError.classList.add('hidden');
+
+            try {
+                await signInWithEmailAndPassword(auth, email, password);
+                loginEmail.value = '';
+                loginPassword.value = '';
+            } catch (error) {
+                loginError.textContent = error.message || "Login failed.";
+                loginError.classList.remove('hidden');
+            } finally {
+                btnLogin.disabled = false;
+                btnLogin.textContent = "Login";
+            }
+        });
+
+        btnLogout.addEventListener('click', async () => {
+            await signOut(auth);
+        });
 
         saveBtn.addEventListener('click', async () => {
             const promptText = globalPromptInput.value;
