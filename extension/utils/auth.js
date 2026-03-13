@@ -1,12 +1,7 @@
-import { initializeApp } from './firebase-app.js';
-import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, getIdToken } from './firebase-auth.js';
-import { firebaseConfig } from './firebase-config.js';
+import { signInWithEmailAndPassword, signOut, onAuthStateChanged, getIdToken } from './firebase-auth.js';
+import { app, auth } from './firebase-init.js';
 
-// Initialize Firebase App
-export const app = initializeApp(firebaseConfig);
-
-// Initialize Firebase Auth
-export const auth = getAuth(app);
+export { app, auth };
 
 export async function login(email, password) {
     try {

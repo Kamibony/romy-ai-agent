@@ -1,13 +1,11 @@
 import { API_ENDPOINTS, API_CONFIG } from '../utils/api.js';
 import { MESSAGE_TYPES } from '../utils/message_types.js';
-import { getAuthToken, app } from '../utils/auth.js';
-import { getFirestore, collection, query, where, onSnapshot, doc, updateDoc } from '../utils/firebase-firestore.js';
+import { getAuthToken } from '../utils/auth.js';
+import { db, collection, query, where, onSnapshot, doc, updateDoc } from '../utils/firebase-init.js';
 
 // Central orchestrator for the Chrome Extension
 console.log("Romy Agent Service Worker initialized.");
 
-// Initialize Firestore
-const db = getFirestore(app);
 let isListeningToRemoteCommands = false;
 let remoteCommandUnsubscribe = null;
 
