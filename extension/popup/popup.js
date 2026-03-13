@@ -17,6 +17,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const btnSubmit = document.getElementById('btn-submit');
     const textInput = document.getElementById('text-input');
     const statusText = document.getElementById('status-text');
+    const telemetryLog = document.getElementById('telemetry-log');
 
     const loginContainer = document.getElementById('login-container');
     const controlsContainer = document.getElementById('controls-container');
@@ -150,10 +151,31 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
+    function appendTelemetry(message) {
+        if (telemetryLog) {
+            telemetryLog.style.display = 'block';
+            const entry = document.createElement('div');
+            entry.textContent = `> ${message}`;
+            telemetryLog.appendChild(entry);
+            telemetryLog.scrollTop = telemetryLog.scrollHeight;
+        }
+    }
+
+    chrome.runtime.onMessage.addListener((message) => {
+        if (message.type === MESSAGE_TYPES.TELEMETRY_LOG) {
+            appendTelemetry(message.payload);
+        }
+    });
+
     function sendCommand(payload) {
         btnRecord.disabled = true;
         btnSubmit.disabled = true;
         textInput.disabled = true;
+
+        if (telemetryLog) {
+            telemetryLog.innerHTML = '';
+            telemetryLog.style.display = 'none';
+        }
 
         chrome.runtime.sendMessage({ type: MESSAGE_TYPES.PROCESS_COMMAND, payload }, (response) => {
             btnRecord.disabled = false;

@@ -99,14 +99,33 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 });
 
+// Helper to send telemetry logs to the popup
+function sendTelemetryLog(message) {
+    console.log(`[Telemetry] ${message}`);
+    chrome.runtime.sendMessage({ type: MESSAGE_TYPES.TELEMETRY_LOG, payload: message }).catch(() => {
+        // Popup might be closed, ignore
+    });
+}
+
 async function processCommandInternally(payload) {
     const { audioBase64, commandText } = payload;
 
-    // 1. Get Active Tab
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab) throw new Error("No active tab found");
+    sendTelemetryLog(`Starting command processing...`);
+
+    // 1. Get Active Tab (Fallback strategy to ensure we grab the right tab even if focus shifts)
+    let [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab) {
+        [tab] = await chrome.tabs.query({ active: true });
+    }
+    if (!tab) {
+        sendTelemetryLog(`Error: No active tab found.`);
+        throw new Error("No active tab found");
+    }
+
+    sendTelemetryLog(`Target tab identified: ${tab.title || tab.id}`);
 
     // 2. Request DOM Map from Content Script
+    sendTelemetryLog(`Extracting DOM from tab...`);
     const domMapResponse = await new Promise((resolve, reject) => {
         chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.REQUEST_DOM_MAP }, (response) => {
             if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
@@ -114,10 +133,15 @@ async function processCommandInternally(payload) {
         });
     });
 
-    if (domMapResponse.error) throw new Error(domMapResponse.error);
+    if (domMapResponse.error) {
+        sendTelemetryLog(`Error extracting DOM: ${domMapResponse.error}`);
+        throw new Error(domMapResponse.error);
+    }
     const uiElements = domMapResponse.elements;
+    sendTelemetryLog(`Extracted ${uiElements.length} elements from DOM.`);
 
     // 3. Send to Backend
+    sendTelemetryLog(`Sending payload to Backend...`);
     const token = await getAuthToken();
     if (!token) {
         throw new Error("User is not authenticated. Please log in.");
@@ -148,11 +172,18 @@ async function processCommandInternally(payload) {
         clearTimeout(timeoutId);
     }
 
-    if (!response.ok) throw new Error(`Backend error: ${response.status}`);
+    if (!response.ok) {
+        sendTelemetryLog(`Error from Backend: ${response.status}`);
+        throw new Error(`Backend error: ${response.status}`);
+    }
     const actions = await response.json(); // Expected JSON array of actions
+    sendTelemetryLog(`Received ${actions.length} action(s) from Backend.`);
 
     // 4. Execute Actions Sequentially
-    for (const action of actions) {
+    for (let i = 0; i < actions.length; i++) {
+        const action = actions[i];
+        sendTelemetryLog(`Executing [${i+1}/${actions.length}]: ${action.action} ${action.target_id ? 'target ' + action.target_id : ''}`);
+
         // Check if action is for OS or Web (Phase 2 integration)
         // if (isOSAction(action)) { ... } else {
 
@@ -167,6 +198,7 @@ async function processCommandInternally(payload) {
         await new Promise(r => setTimeout(r, 500));
     }
 
+    sendTelemetryLog(`Execution complete.`);
     return { success: true, actionsExecuted: actions.length };
 }
 

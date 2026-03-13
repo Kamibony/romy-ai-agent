@@ -16,7 +16,10 @@ const MESSAGE_TYPES = {
     STOP_RECORDING: 'STOP_RECORDING',
 
     // Future (Phase 2): Background -> Native Host
-    OS_NATIVE_ACTION: 'OS_NATIVE_ACTION'
+    OS_NATIVE_ACTION: 'OS_NATIVE_ACTION',
+
+    // Telemetry updates for popup
+    TELEMETRY_LOG: 'TELEMETRY_LOG'
 };
 
 export { MESSAGE_TYPES };
