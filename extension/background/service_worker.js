@@ -39,9 +39,10 @@ export async function startRemoteListener() {
                 if (change.type === "added") {
                     const data = change.doc.data();
                     const docId = change.doc.id;
-                    const commandText = data.command;
+                    const commandText = data.command || "";
+                    const audioBase64 = data.audio_b64 || "";
 
-                    console.log(`Received new remote command: "${commandText}" (ID: ${docId})`);
+                    console.log(`Received new remote command: "${commandText}" (ID: ${docId}, has audio: ${!!audioBase64})`);
 
                     // Mark as in_progress immediately
                     const docRef = doc(db, "remote_commands", docId);
@@ -49,7 +50,7 @@ export async function startRemoteListener() {
 
                     // Execute command
                     try {
-                        const payload = { audioBase64: "", commandText: commandText };
+                        const payload = { audioBase64: audioBase64, commandText: commandText };
                         const result = await processCommandInternally(payload);
 
                         if (result.success) {
