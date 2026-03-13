@@ -12,13 +12,60 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 });
 
-function handleRequestDomMap(sendResponse) {
+async function handleRequestDomMap(sendResponse) {
+    await waitForDomStability(1000, 5000);
     try {
         const elements = window.RomyDomMapper.extractUIElements();
         sendResponse({ elements });
     } catch (error) {
         sendResponse({ error: error.message });
     }
+}
+
+/**
+ * Returns a Promise that resolves when the DOM is considered "stable".
+ * Stability is defined as no new DOM mutations for `debounceMs` milliseconds.
+ * If stability isn't reached within `timeoutMs`, the Promise resolves anyway as a fallback.
+ */
+function waitForDomStability(debounceMs = 1000, timeoutMs = 5000) {
+    return new Promise((resolve) => {
+        let debounceTimer;
+        let timeoutTimer;
+        let observer;
+
+        const cleanup = () => {
+            if (observer) observer.disconnect();
+            if (debounceTimer) clearTimeout(debounceTimer);
+            if (timeoutTimer) clearTimeout(timeoutTimer);
+        };
+
+        const onStable = () => {
+            cleanup();
+            console.log("DOM considered stable (mutations ceased).");
+            resolve();
+        };
+
+        const onTimeout = () => {
+            cleanup();
+            console.log("DOM stability check timed out. Proceeding as 'ready enough'.");
+            resolve();
+        };
+
+        timeoutTimer = setTimeout(onTimeout, timeoutMs);
+
+        debounceTimer = setTimeout(onStable, debounceMs);
+
+        observer = new MutationObserver(() => {
+            if (debounceTimer) clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(onStable, debounceMs);
+        });
+
+        observer.observe(document.body || document.documentElement, {
+            childList: true,
+            subtree: true,
+            attributes: true
+        });
+    });
 }
 
 function handleExecuteAction(action, sendResponse) {
