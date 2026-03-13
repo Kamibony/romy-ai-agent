@@ -26,21 +26,39 @@
             <p class="text-center text-gray-500 text-sm">Enter a command to execute on your machine.</p>
 
             <div id="auth-status" class="text-center text-sm text-gray-600">Checking auth...</div>
+            <div id="status-message" class="text-center text-sm mt-2 font-medium">Ready to assist</div>
 
-            <div id="command-content" style="display: none;" class="space-y-4">
-                <div class="space-y-2">
-                    <label for="command-input" class="sr-only">Command</label>
-                    <textarea id="command-input" rows="4" class="block w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-lg border p-3 resize-none" placeholder="e.g., 'Add a property', 'Approve the latest request'"></textarea>
+            <div id="login-container" style="display: none;" class="space-y-4">
+                <input type="email" id="login-email" placeholder="Email" class="block w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-lg border p-3" />
+                <input type="password" id="login-password" placeholder="Password" class="block w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-lg border p-3" />
+                <button id="btn-login" class="w-full py-3 px-4 border border-transparent rounded-lg shadow-sm text-lg font-bold text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150 ease-in-out">
+                    Login
+                </button>
+                <div id="login-error" class="text-center text-sm text-red-600 mt-2 hidden"></div>
+            </div>
+
+            <div id="command-content" style="display: none;" class="space-y-6">
+                <!-- Voice Capture -->
+                <div class="flex justify-center">
+                    <button id="btn-record" class="flex justify-center items-center rounded-full w-20 h-20 bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg focus:outline-none transition-colors duration-200" aria-label="Toggle Recording">
+                        <svg id="icon-mic" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+                        <svg id="icon-stop" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect></svg>
+                    </button>
                 </div>
 
-                <button id="execute-btn" class="w-full flex justify-center items-center py-4 px-4 border border-transparent rounded-lg shadow-sm text-lg font-bold text-white bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150 ease-in-out">
-                    <svg class="mr-2 h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    Execute Remote Command
-                </button>
-                <div id="status-message" class="text-center text-sm mt-2 hidden"></div>
+                <div class="space-y-2">
+                    <label for="command-input" class="sr-only">Command</label>
+                    <textarea id="command-input" rows="2" class="block w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-lg border p-3 resize-none" placeholder="Or type a command..."></textarea>
+                </div>
+
+                <div class="flex space-x-4">
+                    <button id="execute-btn" class="flex-1 py-3 px-4 border border-transparent rounded-lg shadow-sm text-lg font-bold text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150 ease-in-out">
+                        Submit
+                    </button>
+                    <button id="btn-logout" class="py-3 px-4 border border-transparent rounded-lg shadow-sm text-lg font-bold text-white bg-red-500 hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition duration-150 ease-in-out">
+                        Logout
+                    </button>
+                </div>
             </div>
 
             <div id="hitl-section" style="display: none;" class="mt-8 border-t pt-6 space-y-4">
@@ -73,11 +91,24 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
+        import { signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+
         const authStatus = document.getElementById('auth-status');
         const commandContent = document.getElementById('command-content');
         const commandInput = document.getElementById('command-input');
         const executeBtn = document.getElementById('execute-btn');
         const statusMessage = document.getElementById('status-message');
+
+        const loginContainer = document.getElementById('login-container');
+        const btnLogin = document.getElementById('btn-login');
+        const btnLogout = document.getElementById('btn-logout');
+        const loginEmail = document.getElementById('login-email');
+        const loginPassword = document.getElementById('login-password');
+        const loginError = document.getElementById('login-error');
+
+        const btnRecord = document.getElementById('btn-record');
+        const iconMic = document.getElementById('icon-mic');
+        const iconStop = document.getElementById('icon-stop');
 
         const hitlSection = document.getElementById('hitl-section');
         const hitlReason = document.getElementById('hitl-reason');
@@ -87,24 +118,124 @@
 
         let currentUser = null;
         let activeHelpTaskId = null;
+        let isRecording = false;
+        let mediaRecorder = null;
+        let audioChunks = [];
 
-        // Dev Mode Bypass
-        authStatus.textContent = `Dev Mode (No Auth Required)`;
-        commandContent.style.display = 'block';
-
-        /*
         onAuthStateChanged(auth, (user) => {
             if (user) {
                 currentUser = user;
                 authStatus.textContent = `Signed in as ${user.email}`;
+                loginContainer.style.display = 'none';
                 commandContent.style.display = 'block';
+                statusMessage.textContent = 'Ready to assist';
             } else {
                 currentUser = null;
-                authStatus.innerHTML = '<span class="text-red-600">Not signed in. Please <a href="sandbox.html" class="underline text-indigo-600">sign in here</a> first.</span>';
+                authStatus.textContent = 'Not signed in.';
+                loginContainer.style.display = 'block';
                 commandContent.style.display = 'none';
+                statusMessage.textContent = 'Please log in';
             }
         });
-        */
+
+        btnLogin.addEventListener('click', async () => {
+            const email = loginEmail.value.trim();
+            const password = loginPassword.value;
+            if (!email || !password) {
+                loginError.textContent = "Please enter email and password.";
+                loginError.classList.remove('hidden');
+                return;
+            }
+
+            btnLogin.disabled = true;
+            btnLogin.textContent = "Logging in...";
+            loginError.classList.add('hidden');
+
+            try {
+                await signInWithEmailAndPassword(auth, email, password);
+                loginEmail.value = '';
+                loginPassword.value = '';
+            } catch (error) {
+                loginError.textContent = error.message || "Login failed.";
+                loginError.classList.remove('hidden');
+            } finally {
+                btnLogin.disabled = false;
+                btnLogin.textContent = "Login";
+            }
+        });
+
+        btnLogout.addEventListener('click', async () => {
+            await signOut(auth);
+        });
+
+        btnRecord.addEventListener('click', async () => {
+            if (!isRecording) {
+                await startRecording();
+            } else {
+                await stopRecordingAndSend();
+            }
+        });
+
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = event => {
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+
+                mediaRecorder.start();
+                isRecording = true;
+
+                // Update UI
+                btnRecord.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
+                btnRecord.classList.add('bg-red-600', 'hover:bg-red-700', 'animate-pulse');
+                iconMic.classList.add('hidden');
+                iconStop.classList.remove('hidden');
+                statusMessage.textContent = "Listening...";
+            } catch (err) {
+                console.error("Microphone error:", err);
+                statusMessage.textContent = "Microphone error. Check permissions.";
+                statusMessage.className = 'text-center text-sm mt-2 font-medium text-red-600';
+            }
+        }
+
+        async function stopRecordingAndSend() {
+            if (isRecording && mediaRecorder) {
+                isRecording = false;
+
+                // Update UI
+                btnRecord.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
+                btnRecord.classList.remove('bg-red-600', 'hover:bg-red-700', 'animate-pulse');
+                iconStop.classList.add('hidden');
+                iconMic.classList.remove('hidden');
+                statusMessage.textContent = "Processing...";
+
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+
+                    // Stop tracks to release microphone
+                    mediaRecorder.stream.getTracks().forEach(track => track.stop());
+
+                    const reader = new FileReader();
+                    reader.readAsDataURL(audioBlob);
+                    reader.onloadend = async () => {
+                        const base64Audio = reader.result.split(',')[1];
+                        if (base64Audio) {
+                            await sendCommand("", base64Audio);
+                        } else {
+                            statusMessage.textContent = "No audio captured.";
+                        }
+                    };
+                };
+
+                mediaRecorder.stop();
+            }
+        }
 
         // Listen for help needed tasks
         const q = query(collection(db, "remote_commands"), where("status", "==", "help_needed"));
@@ -164,39 +295,52 @@
             const commandText = commandInput.value.trim();
             if (!commandText) {
                 statusMessage.textContent = 'Please enter a command.';
-                statusMessage.className = 'text-center text-sm mt-2 text-red-600 block';
+                statusMessage.className = 'text-center text-sm mt-2 font-medium text-red-600 block';
                 return;
             }
+            await sendCommand(commandText, "");
+        });
 
+        async function sendCommand(commandText, audioB64) {
             executeBtn.disabled = true;
-            executeBtn.innerHTML = '<svg class="animate-spin mr-2 h-6 w-6 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Sending...';
-            statusMessage.classList.add('hidden');
+            btnRecord.disabled = true;
+            statusMessage.textContent = 'Sending...';
+            statusMessage.className = 'text-center text-sm mt-2 font-medium text-gray-600 block';
 
             try {
-                const docRef = await addDoc(collection(db, "remote_commands"), {
-                    command: commandText,
+                if (!currentUser) {
+                    throw new Error("Must be logged in to send a command.");
+                }
+
+                const payload = {
                     status: 'pending',
                     timestamp: serverTimestamp(),
-                    uid: currentUser ? currentUser.uid : 'dev-user-id'
-                });
+                    uid: currentUser.uid
+                };
+
+                if (commandText) payload.command = commandText;
+                if (audioB64) payload.audio_b64 = audioB64;
+
+                const docRef = await addDoc(collection(db, "remote_commands"), payload);
                 console.log("Document written with ID: ", docRef.id);
 
                 statusMessage.textContent = 'Command sent successfully!';
-                statusMessage.className = 'text-center text-sm mt-2 text-green-600 block font-bold';
+                statusMessage.className = 'text-center text-sm mt-2 font-medium text-green-600 block font-bold';
                 commandInput.value = ''; // Clear input on success
 
                 setTimeout(() => {
-                    statusMessage.classList.add('hidden');
+                    statusMessage.textContent = 'Ready to assist';
+                    statusMessage.className = 'text-center text-sm mt-2 font-medium text-gray-800 block';
                 }, 3000);
             } catch (error) {
                 console.error("Error adding document: ", error);
                 statusMessage.textContent = 'Failed to send command: ' + error.message;
-                statusMessage.className = 'text-center text-sm mt-2 text-red-600 block';
+                statusMessage.className = 'text-center text-sm mt-2 font-medium text-red-600 block';
             } finally {
                 executeBtn.disabled = false;
-                executeBtn.innerHTML = '<svg class="mr-2 h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> Execute Remote Command';
+                btnRecord.disabled = false;
             }
-        });
+        }
     </script>
 </body>
 </html>
