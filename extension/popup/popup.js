@@ -5,15 +5,6 @@ import { db, doc, getDoc } from '../utils/firebase-init.js';
 let isRecording = false;
 let userRole = null;
 
-async function setupOffscreenDocument(path) {
-    if (await chrome.offscreen.hasDocument()) return;
-    await chrome.offscreen.createDocument({
-        url: path,
-        reasons: ['USER_MEDIA'],
-        justification: 'Recording audio for voice commands'
-    });
-}
-
 document.addEventListener('DOMContentLoaded', async () => {
     const btnRecord = document.getElementById('btn-record');
     const btnSubmit = document.getElementById('btn-submit');
@@ -48,6 +39,24 @@ document.addEventListener('DOMContentLoaded', async () => {
                     console.log("Could not fetch user role", e);
                 }
             }
+
+            // Sync state from background script
+            chrome.runtime.sendMessage({ type: MESSAGE_TYPES.GET_STATE }, (response) => {
+                if (response) {
+                    isRecording = response.isRecording;
+                    if (isRecording) {
+                        btnRecord.classList.add('recording');
+                        btnRecord.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-square"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect></svg>';
+                        statusText.innerText = "Listening...";
+                    } else if (response.isProcessing) {
+                        statusText.innerText = "Processing...";
+                        btnRecord.disabled = true;
+                        btnSubmit.disabled = true;
+                        textInput.disabled = true;
+                    }
+                }
+            });
+
         } else {
             loginContainer.style.display = 'block';
             controlsContainer.style.display = 'none';
@@ -120,8 +129,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 return;
             }
 
-            await setupOffscreenDocument('../offscreen/offscreen.html');
-            const response = await chrome.runtime.sendMessage({ type: MESSAGE_TYPES.START_RECORDING });
+            const response = await chrome.runtime.sendMessage({ type: MESSAGE_TYPES.REQUEST_START_RECORDING });
             if (response && response.error) {
                 throw new Error(response.error);
             }
@@ -143,26 +151,18 @@ document.addEventListener('DOMContentLoaded', async () => {
             statusText.innerText = "Processing...";
 
             try {
-                const response = await chrome.runtime.sendMessage({ type: MESSAGE_TYPES.STOP_RECORDING });
+                const response = await chrome.runtime.sendMessage({ type: MESSAGE_TYPES.REQUEST_STOP_RECORDING });
                 if (response && response.error) {
                     throw new Error(response.error);
                 }
                 const base64Audio = response.audioBase64;
-                if (base64Audio) {
-                    sendCommand({ audioBase64: base64Audio, commandText: "" });
-                } else {
+                if (!base64Audio) {
                     statusText.innerText = "No audio captured.";
                 }
+                // Processing is now handled autonomously by the background script when audio is captured.
             } catch (err) {
                 console.error("Error stopping recording:", err);
                 statusText.innerText = "Error capturing audio.";
-            } finally {
-                // Ensure the offscreen document is closed after recording stops to save resources
-                try {
-                    await chrome.offscreen.closeDocument();
-                } catch (e) {
-                    console.log("Error closing offscreen document:", e);
-                }
             }
         }
     }
@@ -180,6 +180,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.runtime.onMessage.addListener((message) => {
         if (message.type === MESSAGE_TYPES.TELEMETRY_LOG) {
             appendTelemetry(message.payload);
+        } else if (message.type === MESSAGE_TYPES.EXECUTION_COMPLETE) {
+            statusText.innerText = "Ready to assist";
+            btnRecord.disabled = false;
+            btnSubmit.disabled = false;
+            textInput.disabled = false;
         }
     });
 
