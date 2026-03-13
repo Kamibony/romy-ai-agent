@@ -27,7 +27,8 @@
         "content/dom_mapper.js",
         "content/content_script.js"
       ],
-      "all_frames": true
+      "all_frames": true,
+      "run_at": "document_end"
     }
   ],
   "action": {
