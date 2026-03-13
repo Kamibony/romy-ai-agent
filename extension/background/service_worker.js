@@ -10,6 +10,18 @@ let isListeningToRemoteCommands = false;
 let remoteCommandUnsubscribe = null;
 const processedCommandIds = new Set();
 
+let isRecording = false;
+let isProcessing = false;
+
+async function setupOffscreenDocument(path) {
+    if (await chrome.offscreen.hasDocument()) return;
+    await chrome.offscreen.createDocument({
+        url: path,
+        reasons: ['USER_MEDIA', 'DOM_PARSER'],
+        justification: 'Recording audio and coordinating continuous DOM structural processing'
+    });
+}
+
 // Initialize the remote listener immediately if token is available
 async function initRemoteListener() {
     const token = await getAuthToken();
@@ -101,6 +113,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             handleProcessCommand(request.payload, sender, sendResponse);
             return true; // Keep the message channel open for async response
 
+        case MESSAGE_TYPES.REQUEST_START_RECORDING:
+            handleStartRecording(sendResponse);
+            return true;
+
+        case MESSAGE_TYPES.REQUEST_STOP_RECORDING:
+            handleStopRecording(sendResponse);
+            return true;
+
+        case MESSAGE_TYPES.GET_STATE:
+            sendResponse({ isRecording, isProcessing });
+            return false;
+
         // Future OS actions handler (Phase 2)
         // case MESSAGE_TYPES.OS_NATIVE_ACTION:
         //     chrome.runtime.sendNativeMessage('com.romy.nativehost', request.payload, ...);
@@ -110,6 +134,54 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             console.warn(`Unknown message type: ${request.type}`);
     }
 });
+
+async function handleStartRecording(sendResponse) {
+    if (isRecording) {
+        sendResponse({ error: "Already recording" });
+        return;
+    }
+
+    try {
+        await setupOffscreenDocument('../offscreen/offscreen.html');
+        const response = await chrome.runtime.sendMessage({ type: MESSAGE_TYPES.START_RECORDING });
+        if (response && response.error) {
+            throw new Error(response.error);
+        }
+        isRecording = true;
+        sendResponse({ success: true });
+    } catch (err) {
+        console.error("Failed to start recording:", err);
+        isRecording = false;
+        sendResponse({ error: err.message });
+    }
+}
+
+async function handleStopRecording(sendResponse) {
+    if (!isRecording) {
+        sendResponse({ error: "Not recording" });
+        return;
+    }
+
+    try {
+        const response = await chrome.runtime.sendMessage({ type: MESSAGE_TYPES.STOP_RECORDING });
+        if (response && response.error) {
+            throw new Error(response.error);
+        }
+        isRecording = false;
+
+        const base64Audio = response.audioBase64;
+        sendResponse({ audioBase64: base64Audio });
+
+        if (base64Audio) {
+            // Initiate command processing autonomously
+            handleProcessCommand({ audioBase64: base64Audio, commandText: "" }, null, () => {});
+        }
+    } catch (err) {
+        console.error("Failed to stop recording:", err);
+        isRecording = false;
+        sendResponse({ error: err.message });
+    }
+}
 
 // Helper to send telemetry logs to the popup
 function sendTelemetryLog(message) {
@@ -215,6 +287,7 @@ async function processCommandInternally(payload) {
 }
 
 async function handleProcessCommand(payload, sender, sendResponse) {
+    isProcessing = true;
     try {
         const result = await processCommandInternally(payload);
         sendResponse(result);
@@ -225,5 +298,10 @@ async function handleProcessCommand(payload, sender, sendResponse) {
             errorMsg = "Backend request timed out.";
         }
         sendResponse({ success: false, error: errorMsg });
+    } finally {
+        isProcessing = false;
+        chrome.runtime.sendMessage({ type: MESSAGE_TYPES.EXECUTION_COMPLETE }).catch(() => {
+            // Popup might be closed, ignore
+        });
     }
 }

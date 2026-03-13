@@ -14,12 +14,20 @@ const MESSAGE_TYPES = {
     // Offscreen audio capture
     START_RECORDING: 'START_RECORDING',
     STOP_RECORDING: 'STOP_RECORDING',
+    GET_STATE: 'GET_STATE',
+
+    // Popup requests to background for recording
+    REQUEST_START_RECORDING: 'REQUEST_START_RECORDING',
+    REQUEST_STOP_RECORDING: 'REQUEST_STOP_RECORDING',
 
     // Future (Phase 2): Background -> Native Host
     OS_NATIVE_ACTION: 'OS_NATIVE_ACTION',
 
     // Telemetry updates for popup
-    TELEMETRY_LOG: 'TELEMETRY_LOG'
+    TELEMETRY_LOG: 'TELEMETRY_LOG',
+
+    // Status updates
+    EXECUTION_COMPLETE: 'EXECUTION_COMPLETE'
 };
 
 export { MESSAGE_TYPES };
