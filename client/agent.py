@@ -52,8 +52,9 @@ def agent_worker_loop() -> None:
 
             if task_type == "remote":
                 doc_id = task.get("doc_id")
-                command_text = task.get("command_text")
-                run_remote_agent_loop(doc_id, command_text)
+                command_text = task.get("command_text", "")
+                audio_b64 = task.get("audio_b64", "")
+                run_remote_agent_loop(doc_id, command_text, audio_b64)
             elif task_type == "voice":
                 execute_voice_agent_loop()
 
@@ -95,7 +96,8 @@ def start_remote_listener() -> None:
                     doc_id = doc.id
                     data = doc.to_dict()
                     command_text = data.get("command", "")
-                    logging.info(f"Detected new remote command: {command_text}")
+                    audio_b64 = data.get("audio_b64", "")
+                    logging.info(f"Detected new remote command. Text: '{command_text}', Audio present: {bool(audio_b64)}")
 
                     # Update status to in_progress
                     doc.reference.update({"status": "in_progress"})
@@ -104,7 +106,8 @@ def start_remote_listener() -> None:
                     COMMAND_QUEUE.put({
                         "type": "remote",
                         "doc_id": doc_id,
-                        "command_text": command_text
+                        "command_text": command_text,
+                        "audio_b64": audio_b64
                     })
 
         # Watch the collection query
@@ -370,7 +373,7 @@ def scan_ui_elements() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]
 
     return ui_elements, memory_map
 
-def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
+def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -> None:
     """Runs the agent loop triggered by a remote text command."""
     if not CURRENT_TOKEN:
         logging.error("Error: Missing Firebase Token. Cannot execute remote command.")
@@ -379,7 +382,8 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
     try:
         logging.info(f"=== Remote Agent Activated for Document: {doc_id} ===")
         try:
-            notification.notify(title="ROMY AI", message=f"Remote command received: {command_text}", app_name="ROMY", timeout=2)
+            msg_text = f"Remote command received: {command_text}" if command_text else "Remote audio command received."
+            notification.notify(title="ROMY AI", message=msg_text, app_name="ROMY", timeout=2)
             if winsound: winsound.Beep(800, 200)
         except Exception:
             if winsound: winsound.Beep(800, 200)
@@ -415,6 +419,11 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                 "ui_elements": ui_elements,
                 "session_id": doc_id
             }
+            if iteration == 0 and audio_b64:
+                payload["audio_base64"] = audio_b64
+            else:
+                payload["audio_base64"] = ""
+
             payload["command_text"] = command_text
 
             headers = {
