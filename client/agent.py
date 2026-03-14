@@ -30,6 +30,17 @@ _db = None
 
 COMMAND_QUEUE = queue.Queue()
 ABORT_AGENT = False
+PAUSE_AGENT = False
+
+def toggle_pause() -> bool:
+    """Toggles the pause state of the agent loops. Returns the new state."""
+    global PAUSE_AGENT
+    PAUSE_AGENT = not PAUSE_AGENT
+    if PAUSE_AGENT:
+        logging.info("Agent execution paused by user.")
+    else:
+        logging.info("Agent execution resumed by user.")
+    return PAUSE_AGENT
 
 def trigger_abort() -> None:
     """Sets the global abort flag to instantly stop the agent execution loop."""
@@ -400,6 +411,10 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                 final_status = "failed"
                 break
 
+            if PAUSE_AGENT:
+                time.sleep(1)
+                continue
+
             # Check for human response
             doc_snapshot = doc_ref.get()
             if doc_snapshot.exists:
@@ -697,6 +712,10 @@ def execute_voice_agent_loop() -> None:
             if ABORT_AGENT:
                 logging.info("Emergency abort triggered. Stopping voice agent loop.")
                 break
+
+            if PAUSE_AGENT:
+                time.sleep(1)
+                continue
 
             # Check for human response
             try:
