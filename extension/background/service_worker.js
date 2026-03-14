@@ -195,7 +195,6 @@ async function processCommandInternally(payload) {
     const { audioBase64, commandText } = payload;
 
     sendTelemetryLog(`Starting command processing...`);
-
     // 1. Get Active Tab (Fallback strategy to ensure we grab the right tab even if focus shifts)
     let [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (!tab) {
@@ -208,82 +207,119 @@ async function processCommandInternally(payload) {
 
     sendTelemetryLog(`Target tab identified: ${tab.title || tab.id}`);
 
-    // 2. Request DOM Map from Content Script
-    sendTelemetryLog(`Extracting DOM from tab...`);
-    const domMapResponse = await new Promise((resolve, reject) => {
-        chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.REQUEST_DOM_MAP }, (response) => {
-            if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
-            else resolve(response);
-        });
-    });
+    let iteration = 0;
+    let totalActionsExecuted = 0;
+    const threadHistory = [];
 
-    if (domMapResponse.error) {
-        sendTelemetryLog(`Error extracting DOM: ${domMapResponse.error}`);
-        throw new Error(domMapResponse.error);
-    }
-    const uiElements = domMapResponse.elements;
-    sendTelemetryLog(`Extracted ${uiElements.length} elements from DOM.`);
+    while (true) {
+        sendTelemetryLog(`Iteration ${iteration + 1}...`);
 
-    // 3. Send to Backend
-    sendTelemetryLog(`Sending payload to Backend...`);
-    const token = await getAuthToken();
-    if (!token) {
-        throw new Error("User is not authenticated. Please log in.");
-    }
-
-    const apiPayload = {
-        audio_base64: audioBase64,
-        command_text: commandText,
-        ui_elements: uiElements,
-        // Include thread history if needed
-    };
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), API_CONFIG.TIMEOUT || 30000);
-
-    let response;
-    try {
-        response = await fetch(API_ENDPOINTS.COMMAND, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify(apiPayload),
-            signal: controller.signal
-        });
-    } finally {
-        clearTimeout(timeoutId);
-    }
-
-    if (!response.ok) {
-        sendTelemetryLog(`Error from Backend: ${response.status}`);
-        throw new Error(`Backend error: ${response.status}`);
-    }
-    const actions = await response.json(); // Expected JSON array of actions
-    sendTelemetryLog(`Received ${actions.length} action(s) from Backend.`);
-
-    // 4. Execute Actions Sequentially
-    for (let i = 0; i < actions.length; i++) {
-        const action = actions[i];
-        sendTelemetryLog(`Executing [${i+1}/${actions.length}]: ${action.action} ${action.target_id ? 'target ' + action.target_id : ''}`);
-
-        // Check if action is for OS or Web (Phase 2 integration)
-        // if (isOSAction(action)) { ... } else {
-
-        await new Promise((resolve, reject) => {
-            chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.EXECUTE_ACTION, payload: action }, (res) => {
-                 if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
-                 else if (res && res.error) reject(new Error(res.error));
-                 else resolve(res);
+        // 2. Request DOM Map from Content Script (This also waits for DOM stability via MutationObserver)
+        sendTelemetryLog(`Extracting DOM from tab...`);
+        const domMapResponse = await new Promise((resolve, reject) => {
+            chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.REQUEST_DOM_MAP }, (response) => {
+                if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+                else resolve(response);
             });
         });
-        // Optional micro-sleep here for DOM stability
-        await new Promise(r => setTimeout(r, 500));
+
+        if (domMapResponse.error) {
+            sendTelemetryLog(`Error extracting DOM: ${domMapResponse.error}`);
+            throw new Error(domMapResponse.error);
+        }
+        const uiElements = domMapResponse.elements;
+        sendTelemetryLog(`Extracted ${uiElements.length} elements from DOM.`);
+
+        // 3. Send to Backend
+        sendTelemetryLog(`Sending payload to Backend...`);
+        const token = await getAuthToken();
+        if (!token) {
+            throw new Error("User is not authenticated. Please log in.");
+        }
+
+        const apiPayload = {
+            audio_base64: iteration === 0 ? audioBase64 : "",
+            command_text: commandText,
+            ui_elements: uiElements,
+            thread_history: threadHistory
+        };
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), API_CONFIG.TIMEOUT || 30000);
+
+        let response;
+        try {
+            response = await fetch(API_ENDPOINTS.COMMAND, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify(apiPayload),
+                signal: controller.signal
+            });
+        } finally {
+            clearTimeout(timeoutId);
+        }
+
+        if (!response.ok) {
+            sendTelemetryLog(`Error from Backend: ${response.status}`);
+            throw new Error(`Backend error: ${response.status}`);
+        }
+        const actions = await response.json(); // Expected JSON array of actions
+        sendTelemetryLog(`Received ${actions.length} action(s) from Backend.`);
+
+        if (actions.length === 0) {
+            sendTelemetryLog(`No actions returned, assuming done.`);
+            break;
+        }
+
+        // Add actions to history
+        threadHistory.push(...actions);
+        let hasTerminalAction = false;
+
+        // 4. Execute Actions Sequentially
+        for (let i = 0; i < actions.length; i++) {
+            const action = actions[i];
+
+            if (action.action === "DONE" || action.action === "ASK_HUMAN" || action.action === "ERROR") {
+                hasTerminalAction = true;
+            }
+
+            if (action.action !== "DONE" && action.action !== "ERROR") {
+                sendTelemetryLog(`Executing [${i+1}/${actions.length}]: ${action.action} ${action.target_id ? 'target ' + action.target_id : ''}`);
+
+                // Check if action is for OS or Web (Phase 2 integration)
+                // if (isOSAction(action)) { ... } else {
+
+                await new Promise((resolve, reject) => {
+                    chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.EXECUTE_ACTION, payload: action }, (res) => {
+                        if (chrome.runtime.lastError) {
+                            console.warn("Execute action error, tab closed?", chrome.runtime.lastError);
+                            resolve({error: chrome.runtime.lastError.message});
+                        }
+                        else if (res && res.error) reject(new Error(res.error));
+                        else resolve(res);
+                    });
+                });
+                totalActionsExecuted++;
+                // Optional micro-sleep here for DOM stability
+                await new Promise(r => setTimeout(r, 500));
+            } else {
+                sendTelemetryLog(`Received terminal action: ${action.action}`);
+            }
+        }
+
+        if (hasTerminalAction || iteration > 50) { // Safety break
+            break;
+        }
+
+        iteration++;
+        // The DOM map request at the beginning of the next loop iteration will naturally wait for DOM stability using the MutationObserver.
     }
 
-    sendTelemetryLog(`Execution complete.`);
-    return { success: true, actionsExecuted: actions.length };
+    sendTelemetryLog(`Execution complete. Total actions: ${totalActionsExecuted}`);
+    return { success: true, actionsExecuted: totalActionsExecuted };
 }
 
 async function handleProcessCommand(payload, sender, sendResponse) {

@@ -14,11 +14,48 @@ window.RomyDomMapper = {
         // Broad locator string matching Playwright scanning
         const locators = 'button, a, input, select, textarea, [role="button"], [role="link"], [onclick], .btn, .button, [class*="btn"]';
 
+        function isInteractive(el) {
+            if (el.matches(locators)) return true;
+
+            // Check ARIA attributes
+            if (el.hasAttribute('aria-label') || el.hasAttribute('role')) {
+                const role = el.getAttribute('role');
+                if (role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
+                    return true;
+                }
+                // If it has aria-label and isn't just a generic container
+                if (el.hasAttribute('aria-label') && (el.tagName !== 'DIV' && el.tagName !== 'SPAN' || el.hasAttribute('tabindex'))) {
+                    return true;
+                }
+            }
+
+            // Check common structural action classes (handling SVG className objects)
+            const className = typeof el.className === 'string' ? el.className : (el.className && el.className.baseVal ? el.className.baseVal : '');
+            if (className) {
+                const classes = className.toLowerCase().split(' ');
+                if (classes.some(c => c.includes('btn') || c.includes('button') || c.includes('action') || c.includes('submit'))) {
+                    return true;
+                }
+            }
+
+            // Check computed styles for interactivity
+            try {
+                const style = window.getComputedStyle(el);
+                if (style.cursor === 'pointer' && el.tagName !== 'BODY' && el.tagName !== 'HTML') {
+                    return true;
+                }
+            } catch (e) {
+                // Ignore errors reading computed styles
+            }
+
+            return false;
+        }
+
         function getAllNodes(root) {
             let nodes = [];
             const elements = root.querySelectorAll('*');
             elements.forEach(el => {
-                if (el.matches(locators)) {
+                if (isInteractive(el)) {
                     nodes.push(el);
                 }
                 if (el.shadowRoot) {
@@ -60,7 +97,7 @@ window.RomyDomMapper = {
                 node.setAttribute('data-romy-id', uniqueId);
 
                 // Build standard JSON schema expected by the Backend AI Execution Layer
-                let textContent = node.innerText || node.value || node.getAttribute('aria-label') || node.getAttribute('placeholder') || "";
+                let textContent = node.innerText || node.value || node.getAttribute('aria-label') || node.getAttribute('placeholder') || node.title || node.name || node.alt || "";
                 if (typeof textContent === 'string') {
                     textContent = textContent.trim();
                 } else {
