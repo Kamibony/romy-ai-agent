@@ -181,7 +181,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (message.type === MESSAGE_TYPES.TELEMETRY_LOG) {
             appendTelemetry(message.payload);
         } else if (message.type === MESSAGE_TYPES.EXECUTION_COMPLETE) {
-            statusText.innerText = "Ready to assist";
+            if (message.result && message.result.helpNeeded) {
+                statusText.innerText = "Awaiting human input on mobile.";
+            } else {
+                statusText.innerText = "Ready to assist";
+            }
             btnRecord.disabled = false;
             btnSubmit.disabled = false;
             textInput.disabled = false;
@@ -206,10 +210,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (chrome.runtime.lastError) {
                 console.error(chrome.runtime.lastError);
                 statusText.innerText = "Connection error.";
-            } else if (response.error) {
+            } else if (response && response.error) {
                 statusText.innerText = "Execution error.";
-            } else {
+            } else if (response && response.helpNeeded) {
+                statusText.innerText = "Awaiting human input on mobile.";
+            } else if (response && response.actionsExecuted !== undefined) {
                 statusText.innerText = `Success. Actions executed: ${response.actionsExecuted}`;
+            } else {
+                statusText.innerText = "Ready to assist";
             }
         });
     }

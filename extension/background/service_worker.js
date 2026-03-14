@@ -80,6 +80,9 @@ export async function startRemoteListener() {
                         if (result.success) {
                             await updateDoc(docRef, { status: "completed" });
                             console.log(`Remote command ${docId} completed successfully.`);
+                        } else if (result.helpNeeded) {
+                            await updateDoc(docRef, { status: "help_needed", error: result.reason });
+                            console.log(`Remote command ${docId} needs help: ${result.reason}`);
                         } else {
                             await updateDoc(docRef, { status: "failed", error: result.error });
                             console.log(`Remote command ${docId} failed: ${result.error}`);
@@ -238,7 +241,7 @@ async function processCommandInternally(payload) {
         }
 
         const apiPayload = {
-            audio_base64: iteration === 0 ? audioBase64 : "",
+            audio_base64: audioBase64,
             command_text: commandText,
             ui_elements: uiElements,
             thread_history: threadHistory
@@ -277,6 +280,8 @@ async function processCommandInternally(payload) {
         // Add actions to history
         threadHistory.push(...actions);
         let hasTerminalAction = false;
+        let needsHumanHelp = false;
+        let humanHelpReason = "";
 
         // 4. Execute Actions Sequentially
         for (let i = 0; i < actions.length; i++) {
@@ -284,9 +289,13 @@ async function processCommandInternally(payload) {
 
             if (action.action === "DONE" || action.action === "ASK_HUMAN" || action.action === "ERROR") {
                 hasTerminalAction = true;
+                if (action.action === "ASK_HUMAN") {
+                    needsHumanHelp = true;
+                    humanHelpReason = action.reason || action.text || "Human help needed.";
+                }
             }
 
-            if (action.action !== "DONE" && action.action !== "ERROR") {
+            if (action.action !== "DONE" && action.action !== "ERROR" && action.action !== "ASK_HUMAN") {
                 sendTelemetryLog(`Executing [${i+1}/${actions.length}]: ${action.action} ${action.target_id ? 'target ' + action.target_id : ''}`);
 
                 // Check if action is for OS or Web (Phase 2 integration)
@@ -306,11 +315,14 @@ async function processCommandInternally(payload) {
                 // Optional micro-sleep here for DOM stability
                 await new Promise(r => setTimeout(r, 500));
             } else {
-                sendTelemetryLog(`Received terminal action: ${action.action}`);
+                sendTelemetryLog(`Received terminal action: ${action.action}${action.action === "ASK_HUMAN" ? " - " + humanHelpReason : ""}`);
             }
         }
 
         if (hasTerminalAction || iteration > 50) { // Safety break
+            if (needsHumanHelp) {
+                return { success: false, helpNeeded: true, reason: humanHelpReason, actionsExecuted: totalActionsExecuted };
+            }
             break;
         }
 
@@ -324,19 +336,21 @@ async function processCommandInternally(payload) {
 
 async function handleProcessCommand(payload, sender, sendResponse) {
     isProcessing = true;
+    let finalResult = null;
     try {
-        const result = await processCommandInternally(payload);
-        sendResponse(result);
+        finalResult = await processCommandInternally(payload);
+        sendResponse(finalResult);
     } catch (error) {
         console.error("Error processing command:", error);
         let errorMsg = error.message;
         if (error.name === 'AbortError') {
             errorMsg = "Backend request timed out.";
         }
-        sendResponse({ success: false, error: errorMsg });
+        finalResult = { success: false, error: errorMsg };
+        sendResponse(finalResult);
     } finally {
         isProcessing = false;
-        chrome.runtime.sendMessage({ type: MESSAGE_TYPES.EXECUTION_COMPLETE }).catch(() => {
+        chrome.runtime.sendMessage({ type: MESSAGE_TYPES.EXECUTION_COMPLETE, result: finalResult }).catch(() => {
             // Popup might be closed, ignore
         });
     }
