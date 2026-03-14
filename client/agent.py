@@ -409,7 +409,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                     command_text += "\nHuman instruction: " + data.get("human_response")
                     doc_ref.update({"human_response": firestore.DELETE_FIELD})
 
-            ui_elements, memory_map = scan_web_ui()
+            ui_elements, memory_map = scan_ui_elements()
 
             payload = {
                 "ui_elements": ui_elements,
@@ -460,27 +460,14 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                     elif action_upper == "CLICK" and "target_id" in act:
                         target_id = str(act["target_id"])
                         if target_id in memory_map:
-                            logging.info(f"Clicking element with ID {target_id} using Playwright locator...")
-
+                            logging.info(f"Clicking element with ID {target_id} using PyAutoGUI...")
                             try:
-                                active_page = _get_active_page()
-                                if active_page:
-                                    # Use the injected data-romy-id for precise clicking
-                                    locator = active_page.locator(f'[data-romy-id="{target_id}"]').first
-                                    locator.click(force=True, no_wait_after=True)
-                                    logging.info(f"Successfully clicked element {target_id} via Playwright locator.")
-                                else:
-                                    x = memory_map[target_id]["x"]
-                                    y = memory_map[target_id]["y"]
-                                    logging.warning("No active Playwright page found for click. Falling back to PyAutoGUI.")
-                                    pyautogui.moveTo(x, y, duration=0.5)
-                                    pyautogui.click()
-                            except Exception as click_e:
                                 x = memory_map[target_id]["x"]
                                 y = memory_map[target_id]["y"]
-                                logging.error(f"Error executing click via Playwright: {click_e}. Falling back to PyAutoGUI.")
                                 pyautogui.moveTo(x, y, duration=0.5)
                                 pyautogui.click()
+                            except Exception as click_e:
+                                logging.error(f"Error executing click via PyAutoGUI: {click_e}.")
                         else:
                             logging.error(f"Error: target_id {target_id} not found in memory map.")
 
@@ -488,38 +475,18 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                         target_id = str(act["target_id"])
                         text_to_type = act["text"]
                         if target_id in memory_map:
-                            logging.info(f"Typing '{text_to_type}' at element {target_id} using Playwright locator...")
-
+                            logging.info(f"Typing '{text_to_type}' at element {target_id} using PyAutoGUI...")
                             try:
-                                active_page = _get_active_page()
-                                if active_page:
-                                    locator = active_page.locator(f'[data-romy-id="{target_id}"]').first
-                                    locator.click(force=True, click_count=3)
-                                    time.sleep(0.1)
-                                    active_page.keyboard.press("Backspace")
-                                    time.sleep(0.2)
-                                    active_page.keyboard.type(text_to_type)
-                                    logging.info(f"Successfully typed via Playwright locator.")
-                                else:
-                                    x = memory_map[target_id]["x"]
-                                    y = memory_map[target_id]["y"]
-                                    logging.warning("No active Playwright page found for typing. Falling back to PyAutoGUI.")
-                                    pyautogui.moveTo(x, y, duration=0.5)
-                                    pyautogui.click()
-                                    pyautogui.hotkey('ctrl', 'a')
-                                    pyautogui.press('backspace')
-                                    time.sleep(0.2)
-                                    pyautogui.write(text_to_type)
-                            except Exception as type_e:
                                 x = memory_map[target_id]["x"]
                                 y = memory_map[target_id]["y"]
-                                logging.error(f"Error executing type via Playwright: {type_e}. Falling back to PyAutoGUI.")
                                 pyautogui.moveTo(x, y, duration=0.5)
                                 pyautogui.click()
                                 pyautogui.hotkey('ctrl', 'a')
                                 pyautogui.press('backspace')
                                 time.sleep(0.2)
                                 pyautogui.write(text_to_type)
+                            except Exception as type_e:
+                                logging.error(f"Error executing type via PyAutoGUI: {type_e}.")
                         else:
                             logging.error(f"Error: target_id {target_id} not found in memory map.")
 
@@ -527,19 +494,10 @@ def run_remote_agent_loop(doc_id: str, command_text: str) -> None:
                         direction = act["direction"].lower()
                         logging.info(f"Scrolling {direction}...")
                         try:
-                            active_page = _get_active_page()
-                            if active_page:
-                                amount = 500 if direction == "down" else -500
-                                active_page.mouse.wheel(0, amount)
-                                logging.info(f"Successfully scrolled {direction} via Playwright.")
-                            else:
-                                logging.warning("No active Playwright page found for scrolling. Falling back to PyAutoGUI.")
-                                amount = -500 if direction == "down" else 500
-                                pyautogui.scroll(amount)
-                        except Exception as scroll_e:
-                            logging.error(f"Error executing scroll via Playwright: {scroll_e}. Falling back to PyAutoGUI.")
                             amount = -500 if direction == "down" else 500
                             pyautogui.scroll(amount)
+                        except Exception as scroll_e:
+                            logging.error(f"Error executing scroll via PyAutoGUI: {scroll_e}.")
                         time.sleep(1) # Let the DOM settle
 
                     elif action_upper == "REPLY" and "text" in act:
@@ -748,7 +706,7 @@ def execute_voice_agent_loop() -> None:
                 logging.error(f"Error checking human response: {e}")
 
             # 3. Scan UI Elements
-            ui_elements, memory_map = scan_web_ui()
+            ui_elements, memory_map = scan_ui_elements()
 
             # 4. Construct JSON payload
             payload = {
@@ -806,26 +764,14 @@ def execute_voice_agent_loop() -> None:
                     elif action_upper == "CLICK" and "target_id" in act:
                         target_id = str(act["target_id"])
                         if target_id in memory_map:
-                            logging.info(f"Clicking element with ID {target_id} using Playwright locator...")
-
+                            logging.info(f"Clicking element with ID {target_id} using PyAutoGUI...")
                             try:
-                                active_page = _get_active_page()
-                                if active_page:
-                                    locator = active_page.locator(f'[data-romy-id="{target_id}"]').first
-                                    locator.click(force=True, no_wait_after=True)
-                                    logging.info(f"Successfully clicked element {target_id} via Playwright locator.")
-                                else:
-                                    x = memory_map[target_id]["x"]
-                                    y = memory_map[target_id]["y"]
-                                    logging.warning("No active Playwright page found for click. Falling back to PyAutoGUI.")
-                                    pyautogui.moveTo(x, y, duration=0.5)
-                                    pyautogui.click()
-                            except Exception as click_e:
                                 x = memory_map[target_id]["x"]
                                 y = memory_map[target_id]["y"]
-                                logging.error(f"Error executing click via Playwright: {click_e}. Falling back to PyAutoGUI.")
                                 pyautogui.moveTo(x, y, duration=0.5)
                                 pyautogui.click()
+                            except Exception as click_e:
+                                logging.error(f"Error executing click via PyAutoGUI: {click_e}.")
                         else:
                             logging.error(f"Error: target_id {target_id} not found in memory map.")
 
@@ -833,38 +779,18 @@ def execute_voice_agent_loop() -> None:
                         target_id = str(act["target_id"])
                         text_to_type = act["text"]
                         if target_id in memory_map:
-                            logging.info(f"Typing '{text_to_type}' at element {target_id} using Playwright locator...")
-
+                            logging.info(f"Typing '{text_to_type}' at element {target_id} using PyAutoGUI...")
                             try:
-                                active_page = _get_active_page()
-                                if active_page:
-                                    locator = active_page.locator(f'[data-romy-id="{target_id}"]').first
-                                    locator.click(force=True, click_count=3)
-                                    time.sleep(0.1)
-                                    active_page.keyboard.press("Backspace")
-                                    time.sleep(0.2)
-                                    active_page.keyboard.type(text_to_type)
-                                    logging.info(f"Successfully typed via Playwright locator.")
-                                else:
-                                    x = memory_map[target_id]["x"]
-                                    y = memory_map[target_id]["y"]
-                                    logging.warning("No active Playwright page found for typing. Falling back to PyAutoGUI.")
-                                    pyautogui.moveTo(x, y, duration=0.5)
-                                    pyautogui.click()
-                                    pyautogui.hotkey('ctrl', 'a')
-                                    pyautogui.press('backspace')
-                                    time.sleep(0.2)
-                                    pyautogui.write(text_to_type)
-                            except Exception as type_e:
                                 x = memory_map[target_id]["x"]
                                 y = memory_map[target_id]["y"]
-                                logging.error(f"Error executing type via Playwright: {type_e}. Falling back to PyAutoGUI.")
                                 pyautogui.moveTo(x, y, duration=0.5)
                                 pyautogui.click()
                                 pyautogui.hotkey('ctrl', 'a')
                                 pyautogui.press('backspace')
                                 time.sleep(0.2)
                                 pyautogui.write(text_to_type)
+                            except Exception as type_e:
+                                logging.error(f"Error executing type via PyAutoGUI: {type_e}.")
                         else:
                             logging.error(f"Error: target_id {target_id} not found in memory map.")
 
@@ -872,19 +798,10 @@ def execute_voice_agent_loop() -> None:
                         direction = act["direction"].lower()
                         logging.info(f"Scrolling {direction}...")
                         try:
-                            active_page = _get_active_page()
-                            if active_page:
-                                amount = 500 if direction == "down" else -500
-                                active_page.mouse.wheel(0, amount)
-                                logging.info(f"Successfully scrolled {direction} via Playwright.")
-                            else:
-                                logging.warning("No active Playwright page found for scrolling. Falling back to PyAutoGUI.")
-                                amount = -500 if direction == "down" else 500
-                                pyautogui.scroll(amount)
-                        except Exception as scroll_e:
-                            logging.error(f"Error executing scroll via Playwright: {scroll_e}. Falling back to PyAutoGUI.")
                             amount = -500 if direction == "down" else 500
                             pyautogui.scroll(amount)
+                        except Exception as scroll_e:
+                            logging.error(f"Error executing scroll via PyAutoGUI: {scroll_e}.")
                         time.sleep(1) # Let the DOM settle
 
                     elif action_upper == "REPLY" and "text" in act:
