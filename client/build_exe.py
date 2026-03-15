@@ -41,7 +41,6 @@ def build():
         "--windowed",
         "--icon=icon.ico",
         f"--add-data=icon.ico{sep}.",
-        "--collect-all=playwright_stealth",
         "--collect-all=plyer",
         "--hidden-import=tkinter",
         "--hidden-import=pystray",
