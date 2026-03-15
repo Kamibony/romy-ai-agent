@@ -17,6 +17,14 @@ def build():
     current_dir = os.path.dirname(os.path.abspath(__file__))
     os.chdir(current_dir)
 
+    # Install project dependencies
+    print("Installing project dependencies from requirements.txt...")
+    req_path = os.path.join(current_dir, "requirements.txt")
+    if os.path.exists(req_path):
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", req_path])
+    else:
+        print(f"Warning: {req_path} not found. Skipping dependency installation.")
+
     # Clean up previous builds
     for d in ['build', 'dist']:
         if os.path.exists(d):
