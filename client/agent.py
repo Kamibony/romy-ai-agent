@@ -83,7 +83,7 @@ def firestore_update_document(collection: str, doc_id: str, updates: Dict[str, A
         logging.error("Missing token, cannot update Firestore.")
         return
 
-    url = f"https://firestore.googleapis.com/v1/projects/romy-backend-1049976869239/databases/(default)/documents/{collection}/{doc_id}"
+    url = f"https://firestore.googleapis.com/v1/projects/romy-ai-agent/databases/(default)/documents/{collection}/{doc_id}"
 
     fields = {}
     update_mask = []
@@ -114,7 +114,7 @@ def firestore_update_document(collection: str, doc_id: str, updates: Dict[str, A
     if query_string:
         url += "?" + query_string
 
-    payload = {"name": f"projects/romy-backend-1049976869239/databases/(default)/documents/{collection}/{doc_id}"}
+    payload = {"name": f"projects/romy-ai-agent/databases/(default)/documents/{collection}/{doc_id}"}
     if fields:
         payload["fields"] = fields
 
@@ -134,7 +134,7 @@ def firestore_get_document(collection: str, doc_id: str) -> Dict[str, Any]:
     if not CURRENT_TOKEN:
         return {}
 
-    url = f"https://firestore.googleapis.com/v1/projects/romy-backend-1049976869239/databases/(default)/documents/{collection}/{doc_id}"
+    url = f"https://firestore.googleapis.com/v1/projects/romy-ai-agent/databases/(default)/documents/{collection}/{doc_id}"
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}"}
 
     try:
@@ -168,7 +168,7 @@ def start_remote_listener() -> None:
 
     def _poll_loop():
         logging.info("Started listening for remote commands on Firestore via REST polling.")
-        url = "https://firestore.googleapis.com/v1/projects/romy-backend-1049976869239/databases/(default)/documents:runQuery"
+        url = "https://firestore.googleapis.com/v1/projects/romy-ai-agent/databases/(default)/documents:runQuery"
 
         while True:
             if not CURRENT_TOKEN:
