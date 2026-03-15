@@ -15,8 +15,6 @@ try:
     import winsound
 except ImportError:
     winsound = None
-import firebase_admin
-from firebase_admin import firestore
 from typing import Dict, Any, Tuple
 from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
@@ -26,7 +24,6 @@ pyautogui.FAILSAFE = False
 BACKEND_URL = os.environ.get("BACKEND_URL", "https://romy-backend-1049976869239.europe-west1.run.app/api/v1/agent/command")
 
 CURRENT_TOKEN = None
-_db = None
 
 COMMAND_QUEUE = queue.Queue()
 ABORT_AGENT = False
@@ -80,52 +77,163 @@ def set_firebase_token(token: str) -> None:
     global CURRENT_TOKEN
     CURRENT_TOKEN = token
 
-def get_firestore_client():
-    """Initializes Firebase Admin if not already initialized and returns a Firestore client."""
-    global _db
-    if _db is None:
-        if not firebase_admin._apps:
-            # We assume ADC is set up for the desktop client, or the token is enough for our MVP.
-            # In a real environment with a desktop client, you might want to authenticate using
-            # custom tokens or a specific service account. Since the MVP requirement indicates
-            # "uses Google Cloud's Application Default Credentials (ADC) for zero-config initialization",
-            # we will initialize without credentials, which relies on ADC.
-            firebase_admin.initialize_app()
-        _db = firestore.client()
-    return _db
+def firestore_update_document(collection: str, doc_id: str, updates: Dict[str, Any], delete_fields: list = None) -> None:
+    """Updates a Firestore document using the REST API."""
+    if not CURRENT_TOKEN:
+        logging.error("Missing token, cannot update Firestore.")
+        return
+
+    url = f"https://firestore.googleapis.com/v1/projects/romy-backend-1049976869239/databases/(default)/documents/{collection}/{doc_id}"
+
+    fields = {}
+    update_mask = []
+
+    for key, val in updates.items():
+        update_mask.append(key)
+        if isinstance(val, str):
+            fields[key] = {"stringValue": val}
+        elif isinstance(val, bool):
+            fields[key] = {"booleanValue": val}
+        elif isinstance(val, int):
+            fields[key] = {"integerValue": str(val)}
+        elif isinstance(val, float):
+            fields[key] = {"doubleValue": val}
+        elif isinstance(val, dict):
+            # A simplistic map approach if needed, not fully featured
+            pass
+
+    if delete_fields:
+        for key in delete_fields:
+            update_mask.append(key)
+
+    params = []
+    for mask in update_mask:
+        params.append(f"updateMask.fieldPaths={mask}")
+
+    query_string = "&".join(params)
+    if query_string:
+        url += "?" + query_string
+
+    payload = {"name": f"projects/romy-backend-1049976869239/databases/(default)/documents/{collection}/{doc_id}"}
+    if fields:
+        payload["fields"] = fields
+
+    headers = {
+        "Authorization": f"Bearer {CURRENT_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        response = requests.patch(url, json=payload, headers=headers)
+        response.raise_for_status()
+    except Exception as e:
+        logging.error(f"Error updating Firestore doc {doc_id}: {e}")
+
+def firestore_get_document(collection: str, doc_id: str) -> Dict[str, Any]:
+    """Gets a Firestore document using the REST API."""
+    if not CURRENT_TOKEN:
+        return {}
+
+    url = f"https://firestore.googleapis.com/v1/projects/romy-backend-1049976869239/databases/(default)/documents/{collection}/{doc_id}"
+    headers = {"Authorization": f"Bearer {CURRENT_TOKEN}"}
+
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 404:
+            return {}
+        response.raise_for_status()
+        data = response.json()
+
+        # Convert from Firestore REST format to simple dict
+        result = {}
+        fields = data.get("fields", {})
+        for key, val_dict in fields.items():
+            if "stringValue" in val_dict:
+                result[key] = val_dict["stringValue"]
+            elif "booleanValue" in val_dict:
+                result[key] = val_dict["booleanValue"]
+            elif "integerValue" in val_dict:
+                result[key] = int(val_dict["integerValue"])
+            elif "doubleValue" in val_dict:
+                result[key] = float(val_dict["doubleValue"])
+
+        return result
+    except Exception as e:
+        logging.error(f"Error getting Firestore doc {doc_id}: {e}")
+        return {}
 
 def start_remote_listener() -> None:
-    """Starts a Firestore listener for pending remote commands."""
-    try:
-        db = get_firestore_client()
-        query = db.collection("remote_commands").where("status", "==", "pending")
+    """Starts a polling loop for pending remote commands using REST API in a background thread."""
+    import threading
 
-        def on_snapshot(col_snapshot, changes, read_time):
-            for change in changes:
-                if change.type.name == 'ADDED':
-                    doc = change.document
-                    doc_id = doc.id
-                    data = doc.to_dict()
-                    command_text = data.get("command", "")
-                    audio_b64 = data.get("audio_b64", "")
-                    logging.info(f"Detected new remote command. Text: '{command_text}', Audio present: {bool(audio_b64)}")
+    def _poll_loop():
+        logging.info("Started listening for remote commands on Firestore via REST polling.")
+        url = "https://firestore.googleapis.com/v1/projects/romy-backend-1049976869239/databases/(default)/documents:runQuery"
 
-                    # Update status to in_progress
-                    doc.reference.update({"status": "in_progress"})
+        while True:
+            if not CURRENT_TOKEN:
+                time.sleep(3)
+                continue
 
-                    # Add to command queue instead of executing directly
-                    COMMAND_QUEUE.put({
-                        "type": "remote",
-                        "doc_id": doc_id,
-                        "command_text": command_text,
-                        "audio_b64": audio_b64
-                    })
+            payload = {
+                "structuredQuery": {
+                    "from": [{"collectionId": "remote_commands"}],
+                    "where": {
+                        "fieldFilter": {
+                            "field": {"fieldPath": "status"},
+                            "op": "EQUAL",
+                            "value": {"stringValue": "pending"}
+                        }
+                    }
+                }
+            }
 
-        # Watch the collection query
-        query.on_snapshot(on_snapshot)
-        logging.info("Started listening for remote commands on Firestore.")
-    except Exception as e:
-        logging.error(f"Error starting remote listener: {e}")
+            headers = {
+                "Authorization": f"Bearer {CURRENT_TOKEN}",
+                "Content-Type": "application/json"
+            }
+
+            try:
+                response = requests.post(url, json=payload, headers=headers)
+                if response.status_code == 401:
+                    logging.error("Unauthorized in start_remote_listener. Handling token expiry.")
+                    handle_token_expiry()
+                    time.sleep(3)
+                    continue
+
+                response.raise_for_status()
+                results = response.json()
+
+                for res in results:
+                    if "document" in res:
+                        doc = res["document"]
+                        doc_name = doc.get("name", "")
+                        doc_id = doc_name.split("/")[-1]
+
+                        fields = doc.get("fields", {})
+                        command_text = fields.get("command", {}).get("stringValue", "")
+                        audio_b64 = fields.get("audio_b64", {}).get("stringValue", "")
+
+                        logging.info(f"Detected new remote command. Text: '{command_text}', Audio present: {bool(audio_b64)}")
+
+                        # Update status to in_progress
+                        firestore_update_document("remote_commands", doc_id, {"status": "in_progress"})
+
+                        # Add to command queue instead of executing directly
+                        COMMAND_QUEUE.put({
+                            "type": "remote",
+                            "doc_id": doc_id,
+                            "command_text": command_text,
+                            "audio_b64": audio_b64
+                        })
+            except Exception as e:
+                logging.error(f"Error in remote listener poll: {e}")
+
+            time.sleep(3)  # Poll every 3 seconds
+
+    # Start the polling loop in a background thread
+    t = threading.Thread(target=_poll_loop, daemon=True)
+    t.start()
 
 def handle_token_expiry():
     """Handles 401 Unauthorized by deleting the token and prompting for re-login."""
@@ -399,9 +507,6 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
         except Exception:
             if winsound: winsound.Beep(800, 200)
 
-        db = get_firestore_client()
-        doc_ref = db.collection("remote_commands").document(doc_id)
-
         iteration = 0
         final_status = "completed"
 
@@ -416,9 +521,8 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                 continue
 
             # Check for human response
-            doc_snapshot = doc_ref.get()
-            if doc_snapshot.exists:
-                data = doc_snapshot.to_dict()
+            data = firestore_get_document("remote_commands", doc_id)
+            if data:
                 if data.get("status") == "help_needed":
                     logging.info("Agent paused, waiting for human input...")
                     time.sleep(2)
@@ -426,7 +530,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
 
                 if data.get("human_response"):
                     command_text += "\nHuman instruction: " + data.get("human_response")
-                    doc_ref.update({"human_response": firestore.DELETE_FIELD})
+                    firestore_update_document("remote_commands", doc_id, {}, delete_fields=["human_response"])
 
             ui_elements, memory_map = scan_ui_elements()
 
@@ -542,14 +646,14 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                             buffered = io.BytesIO()
                             screenshot.save(buffered, format="PNG")
                             img_str = base64.b64encode(buffered.getvalue()).decode()
-                            doc_ref.update({
+                            firestore_update_document("remote_commands", doc_id, {
                                 "status": "help_needed",
                                 "help_reason": reason,
                                 "screenshot_b64": img_str
                             })
                         except Exception as img_e:
                             logging.error(f"Error capturing screenshot: {img_e}")
-                            doc_ref.update({
+                            firestore_update_document("remote_commands", doc_id, {
                                 "status": "help_needed",
                                 "help_reason": reason
                             })
@@ -582,14 +686,13 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
             iteration += 1
 
         # Update final document status
-        doc_ref.update({"status": final_status})
+        firestore_update_document("remote_commands", doc_id, {"status": final_status})
         logging.info(f"Remote command {doc_id} marked as {final_status}.")
 
     except Exception as e:
         logging.error(f"Error executing remote command: {e}")
         try:
-            db = get_firestore_client()
-            db.collection("remote_commands").document(doc_id).update({"status": "failed"})
+            firestore_update_document("remote_commands", doc_id, {"status": "failed"})
         except Exception:
             pass
 
@@ -699,12 +802,14 @@ def execute_voice_agent_loop() -> None:
         iteration = 0
         doc_id = "voice_session_1"
         command_text = ""
-        db = get_firestore_client()
-        doc_ref = db.collection("remote_commands").document(doc_id)
 
         # Create or ensure the document exists
         try:
-            doc_ref.set({"status": "in_progress", "command": "voice command"}, merge=True)
+            # For set with merge = true using REST we can just patch
+            firestore_update_document("remote_commands", doc_id, {
+                "status": "in_progress",
+                "command": "voice command"
+            })
         except Exception as e:
             logging.error(f"Error setting up voice session document: {e}")
 
@@ -719,9 +824,8 @@ def execute_voice_agent_loop() -> None:
 
             # Check for human response
             try:
-                doc_snapshot = doc_ref.get()
-                if doc_snapshot.exists:
-                    data = doc_snapshot.to_dict()
+                data = firestore_get_document("remote_commands", doc_id)
+                if data:
                     if data.get("status") == "help_needed":
                         logging.info("Agent paused, waiting for human input...")
                         time.sleep(2)
@@ -729,7 +833,7 @@ def execute_voice_agent_loop() -> None:
 
                     if data.get("human_response"):
                         command_text += "\nHuman instruction: " + data.get("human_response")
-                        doc_ref.update({"human_response": firestore.DELETE_FIELD})
+                        firestore_update_document("remote_commands", doc_id, {}, delete_fields=["human_response"])
             except Exception as e:
                 logging.error(f"Error checking human response: {e}")
 
@@ -850,14 +954,14 @@ def execute_voice_agent_loop() -> None:
                             buffered = io.BytesIO()
                             screenshot.save(buffered, format="PNG")
                             img_str = base64.b64encode(buffered.getvalue()).decode()
-                            doc_ref.update({
+                            firestore_update_document("remote_commands", doc_id, {
                                 "status": "help_needed",
                                 "help_reason": reason,
                                 "screenshot_b64": img_str
                             })
                         except Exception as img_e:
                             logging.error(f"Error capturing screenshot: {img_e}")
-                            doc_ref.update({
+                            firestore_update_document("remote_commands", doc_id, {
                                 "status": "help_needed",
                                 "help_reason": reason
                             })

@@ -7,7 +7,6 @@ requests
 python-dotenv
 pyautogui
 plyer
-firebase-admin
 uiautomation
 playwright
 playwright-stealth>=2.0.0
