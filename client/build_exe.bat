@@ -26,7 +26,6 @@ pyinstaller --noconfirm ^
             --windowed ^
             --icon=icon.ico ^
             --add-data="icon.ico;." ^
-            --collect-all=playwright_stealth ^
             --collect-all=plyer ^
             --hidden-import=tkinter ^
             --hidden-import=pystray ^
