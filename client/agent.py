@@ -302,7 +302,10 @@ def scan_ui_elements() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]
 
         # Traverse the tree
         element_id = 1
-        for control, depth in auto.WalkTree(active_window, getChildren=lambda c: c.GetChildren(), includeTop=True):
+        for walk_result in auto.WalkTree(active_window, getChildren=lambda c: c.GetChildren(), includeTop=True):
+            control = walk_result[0]
+            depth = walk_result[1]
+
             # Filter for elements that are likely interactive or provide context
             control_type = control.ControlTypeName
             name = control.Name
@@ -396,11 +399,15 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                 response.raise_for_status()
                 data = response.json()
 
-                actions = data.get("actions", [])
-
-                # If backend returned older single-action format, wrap it
-                if not actions and "action" in data:
-                    actions = [data]
+                if isinstance(data, list):
+                    actions = data
+                elif isinstance(data, dict):
+                    actions = data.get("actions", [])
+                    # If backend returned older single-action format, wrap it
+                    if not actions and "action" in data:
+                        actions = [data]
+                else:
+                    actions = []
 
                 break_outer = False
                 had_terminal_action = False
@@ -705,10 +712,14 @@ def execute_voice_agent_loop() -> None:
                 data = response.json()
 
                 # 6. Check response
-                actions = data.get("actions", [])
-
-                if not actions and "action" in data:
-                    actions = [data]
+                if isinstance(data, list):
+                    actions = data
+                elif isinstance(data, dict):
+                    actions = data.get("actions", [])
+                    if not actions and "action" in data:
+                        actions = [data]
+                else:
+                    actions = []
 
                 break_outer = False
                 had_terminal_action = False
