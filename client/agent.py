@@ -303,8 +303,15 @@ def scan_ui_elements() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]
         # Traverse the tree
         element_id = 1
         for walk_result in auto.WalkTree(active_window, getChildren=lambda c: c.GetChildren(), includeTop=True):
-            control = walk_result[0]
-            depth = walk_result[1]
+            if isinstance(walk_result, (tuple, list)):
+                control = walk_result[0] if len(walk_result) > 0 else None
+                depth = walk_result[1] if len(walk_result) > 1 else 0
+            else:
+                control = walk_result
+                depth = 0
+
+            if not control:
+                continue
 
             # Filter for elements that are likely interactive or provide context
             control_type = control.ControlTypeName
@@ -412,6 +419,10 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                 break_outer = False
                 had_terminal_action = False
                 for act in actions:
+                    if not isinstance(act, dict):
+                        logging.warning(f"Skipping invalid action type: {type(act)}")
+                        continue
+
                     if ABORT_AGENT:
                         logging.info("Emergency abort triggered during action sequence.")
                         final_status = "failed"
@@ -724,6 +735,10 @@ def execute_voice_agent_loop() -> None:
                 break_outer = False
                 had_terminal_action = False
                 for act in actions:
+                    if not isinstance(act, dict):
+                        logging.warning(f"Skipping invalid action type: {type(act)}")
+                        continue
+
                     if ABORT_AGENT:
                         logging.info("Emergency abort triggered during action sequence.")
                         break_outer = True
