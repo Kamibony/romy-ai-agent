@@ -7,6 +7,9 @@ cd /d "%~dp0"
 :: Install PyInstaller if not already installed
 pip install pyinstaller
 
+:: Install project dependencies before building
+pip install -r requirements.txt
+
 :: Clean up previous builds
 rmdir /s /q build
 rmdir /s /q dist
