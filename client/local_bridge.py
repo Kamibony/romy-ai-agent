@@ -31,12 +31,16 @@ class LocalBridgeHandler(http.server.BaseHTTPRequestHandler):
     def handle_get_command(self):
         try:
             cmd = getattr(self.server, 'bridge_manager').get_pending_command()
+            response = json.dumps(cmd if cmd else {})
+            response_bytes = response.encode('utf-8')
+
             self.send_response(200)
             self.send_header('Access-Control-Allow-Origin', '*')
             self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(response_bytes)))
             self.end_headers()
-            response = json.dumps(cmd if cmd else {})
-            self.wfile.write(response.encode('utf-8'))
+
+            self.wfile.write(response_bytes)
         except Exception as e:
             logging.error(f"Error handling GET /command: {e}")
             self.send_error(500, 'Internal Server Error')
@@ -47,11 +51,16 @@ class LocalBridgeHandler(http.server.BaseHTTPRequestHandler):
             post_data = self.rfile.read(content_length)
             result = json.loads(post_data.decode('utf-8'))
             getattr(self.server, 'bridge_manager').receive_result(result)
+
+            response_bytes = b'{"status": "ok"}'
+
             self.send_response(200)
             self.send_header('Access-Control-Allow-Origin', '*')
             self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(response_bytes)))
             self.end_headers()
-            self.wfile.write(b'{"status": "ok"}')
+
+            self.wfile.write(response_bytes)
         except Exception as e:
             logging.error(f"Error handling POST /result: {e}")
             self.send_error(500, 'Internal Server Error')
