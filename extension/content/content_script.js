@@ -109,6 +109,39 @@ function handleExecuteAction(action, sendResponse) {
                 // Standard scroll fallback
                 window.scrollBy({ top: action.direction === 'down' ? window.innerHeight : -window.innerHeight, behavior: 'smooth' });
                 break;
+            case "PRESS_KEY":
+                const targetElem = document.activeElement || document.body;
+                targetElem.dispatchEvent(new KeyboardEvent('keydown', { key: action.key, bubbles: true }));
+                targetElem.dispatchEvent(new KeyboardEvent('keypress', { key: action.key, bubbles: true }));
+                targetElem.dispatchEvent(new KeyboardEvent('keyup', { key: action.key, bubbles: true }));
+                break;
+            case "HOVER":
+                const hoverTarget = document.querySelector(`[data-romy-id="${action.target_id}"]`);
+                if (!hoverTarget) throw new Error(`Target ID ${action.target_id} not found.`);
+                hoverTarget.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+                hoverTarget.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                break;
+            case "WAIT_FOR":
+                if (!action.selector) throw new Error(`WAIT_FOR requires a selector.`);
+                const maxWaitMs = (action.max_wait_seconds || 5) * 1000;
+
+                let isDone = false;
+                const checkExist = setInterval(() => {
+                    if (document.querySelector(action.selector) && !isDone) {
+                        isDone = true;
+                        clearInterval(checkExist);
+                        sendResponse({ success: true });
+                    }
+                }, 500); // Check every 500ms
+
+                setTimeout(() => {
+                    if (!isDone) {
+                        isDone = true;
+                        clearInterval(checkExist);
+                        sendResponse({ success: true }); // We still return success and just continue after timeout
+                    }
+                }, maxWaitMs);
+                return; // Return here to avoid immediate sendResponse below
             case "REPLY":
                 // Basic implementation (or system toast fallback logic)
                 alert(`Agent says: ${action.text}`);
