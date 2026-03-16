@@ -76,11 +76,36 @@
             </div>
         </section>
 
-        <!-- Live AI Telemetry Section -->
-        <section class="bg-indigo-900 rounded-lg shadow-md p-6 text-gray-200 mt-8" style="height: 500px; display: flex; flex-direction: column;">
-            <h2 class="text-2xl font-semibold mb-4 text-white border-b border-indigo-700 pb-2">Live AI Telemetry (Brain)</h2>
-            <div id="telemetry-log" class="flex-1 overflow-y-auto font-mono text-xs space-y-3">
-                <p class="text-indigo-300 italic">Listening for AI thoughts...</p>
+        <!-- MVP Tester Control Panel -->
+        <section class="bg-white rounded-lg shadow-md p-6 border border-gray-200 mt-8">
+            <h2 class="text-2xl font-semibold mb-4 text-gray-800 border-b pb-2">MVP Tester Control Panel</h2>
+
+            <!-- Dual Status Indicators -->
+            <div class="flex space-x-8 mb-6">
+                <div class="flex items-center space-x-2">
+                    <div id="os-agent-status-dot" class="w-4 h-4 rounded-full bg-red-500"></div>
+                    <span class="text-sm font-medium text-gray-700">OS Agent Status</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <div id="ext-status-dot" class="w-4 h-4 rounded-full bg-green-500"></div>
+                    <span class="text-sm font-medium text-gray-700">Extension Status</span>
+                </div>
+            </div>
+
+            <!-- Human-Readable Activity Feed -->
+            <div class="mb-6">
+                <h3 class="text-lg font-medium text-gray-800 mb-2">Live Activity</h3>
+                <div id="activity-feed" class="bg-gray-50 border border-gray-200 rounded-md p-4 h-64 overflow-y-auto text-sm space-y-2 font-mono text-gray-700">
+                    <p class="text-gray-400 italic">Waiting for activity...</p>
+                </div>
+            </div>
+
+            <!-- Emergency Kill Switch -->
+            <div>
+                <button id="btn-emergency-stop" class="w-full inline-flex justify-center py-4 px-4 border border-transparent shadow-sm text-lg font-bold rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
+                    Stop Agent
+                </button>
+                <p id="stop-status" class="mt-2 text-sm text-red-600 hidden font-semibold text-center">Emergency stop flag sent!</p>
             </div>
         </section>
 
@@ -90,7 +115,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc, collection, query, orderBy, limit, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, query, orderBy, limit, onSnapshot, where, getDocs } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyBF2KBDgfYOzMbdSjFgCrGUygQbFaSfSxI",
@@ -123,58 +148,142 @@
         const btnLogout = document.getElementById('btn-logout');
         const loginError = document.getElementById('login-error');
 
-        const telemetryLog = document.getElementById('telemetry-log');
-        let unsubscribeTelemetry = null;
+        const osAgentStatusDot = document.getElementById('os-agent-status-dot');
+        const extStatusDot = document.getElementById('ext-status-dot');
+        const activityFeed = document.getElementById('activity-feed');
+        const btnEmergencyStop = document.getElementById('btn-emergency-stop');
+        const stopStatus = document.getElementById('stop-status');
 
-        function startTelemetryListener() {
-            if (unsubscribeTelemetry) {
-                unsubscribeTelemetry();
-            }
+        let unsubscribeActivity = null;
+        let unsubscribeStatus = null;
+        let currentUserId = null;
 
-            const q = query(collection(db, "telemetry"), orderBy("timestamp", "desc"), limit(10));
+        function startActivityListener(uid) {
+            if (unsubscribeActivity) unsubscribeActivity();
+
+            const q = query(
+                collection(db, "remote_commands"),
+                where("uid", "==", uid),
+                orderBy("created_at", "desc"),
+                limit(20)
+            );
+
             try {
-                unsubscribeTelemetry = onSnapshot(q, (snapshot) => {
+                unsubscribeActivity = onSnapshot(q, (snapshot) => {
                     if (snapshot.empty) {
-                        telemetryLog.innerHTML = '<p class="text-indigo-300 italic">No telemetry data yet.</p>';
+                        activityFeed.innerHTML = '<p class="text-gray-400 italic">No activity yet.</p>';
                         return;
                     }
 
                     let html = '';
                     snapshot.forEach((doc) => {
                         const data = doc.data();
-                        const time = data.timestamp ? data.timestamp.toDate().toLocaleTimeString() : new Date().toLocaleTimeString();
-                        const geminiText = data.gemini_context ? data.gemini_context : 'N/A';
+                        const time = data.created_at ? data.created_at.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        const command = data.command || "Unknown command";
+                        const status = data.status || "unknown";
 
-                        html += `
-                            <div class="bg-indigo-800 p-3 rounded border border-indigo-700">
-                                <div class="text-indigo-300 text-[10px] mb-1">[${time}]</div>
-                                <div class="mb-2"><span class="font-bold text-indigo-200">Gemini:</span> <div class="whitespace-pre-wrap break-all">${geminiText}</div></div>
-                                <div><span class="font-bold text-green-400">Claude:</span> <div class="whitespace-pre-wrap break-all">${data.claude_action || 'N/A'}</div></div>
-                            </div>
-                        `;
+                        let statusColor = "text-gray-500";
+                        if (status === "completed") statusColor = "text-green-600";
+                        if (status === "in_progress") statusColor = "text-blue-600";
+                        if (status === "failed") statusColor = "text-red-600";
+                        if (status === "help_needed") statusColor = "text-orange-600";
+                        if (status === "pending") statusColor = "text-yellow-600";
+
+                        html += `<div class="border-b border-gray-100 pb-2 mb-2"><span class="font-semibold text-gray-500">${time}</span> - Command: "${command}" | Status: <span class="${statusColor} font-semibold">${status}</span></div>`;
                     });
-                    telemetryLog.innerHTML = html;
+                    activityFeed.innerHTML = html;
                 }, (error) => {
-                    console.warn("Firestore read error (possibly security rules):", error);
-                    telemetryLog.innerHTML = `
-                        <div class="bg-red-900/50 p-3 rounded border border-red-700 text-red-200">
-                            <p class="font-bold mb-1">Access Denied</p>
-                            <p>Unable to read live telemetry. Security rules may be blocking access for unauthenticated users.</p>
-                        </div>
-                    `;
+                    console.warn("Firestore read error (activity):", error);
+                    activityFeed.innerHTML = `<p class="text-red-500">Error loading activity. Check console.</p>`;
                 });
             } catch (error) {
-                console.error("Error setting up Firestore listener:", error);
+                console.error("Error setting up activity listener:", error);
             }
         }
 
-        function stopTelemetryListener() {
-            if (unsubscribeTelemetry) {
-                unsubscribeTelemetry();
-                unsubscribeTelemetry = null;
+        function startStatusListener(uid) {
+            if (unsubscribeStatus) unsubscribeStatus();
+
+            try {
+                unsubscribeStatus = onSnapshot(doc(db, "users", uid), (docSnap) => {
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        if (data.status === 'online') {
+                            osAgentStatusDot.classList.replace('bg-red-500', 'bg-green-500');
+                        } else {
+                            osAgentStatusDot.classList.replace('bg-green-500', 'bg-red-500');
+                        }
+                    } else {
+                        osAgentStatusDot.classList.replace('bg-green-500', 'bg-red-500');
+                    }
+                }, (error) => {
+                    console.warn("Firestore read error (status):", error);
+                });
+            } catch (error) {
+                console.error("Error setting up status listener:", error);
             }
-            telemetryLog.innerHTML = '<p class="text-indigo-300 italic">Listening for AI thoughts...</p>';
         }
+
+        function stopListeners() {
+            if (unsubscribeActivity) {
+                unsubscribeActivity();
+                unsubscribeActivity = null;
+            }
+            if (unsubscribeStatus) {
+                unsubscribeStatus();
+                unsubscribeStatus = null;
+            }
+            activityFeed.innerHTML = '<p class="text-gray-400 italic">Waiting for activity...</p>';
+            osAgentStatusDot.classList.replace('bg-green-500', 'bg-red-500');
+            currentUserId = null;
+        }
+
+        async function handleEmergencyStop() {
+            if (!currentUserId) return;
+
+            btnEmergencyStop.disabled = true;
+            btnEmergencyStop.textContent = 'Stopping...';
+            stopStatus.classList.add('hidden');
+
+            try {
+                // Find any pending or in_progress commands and mark them as failed
+                const q = query(
+                    collection(db, "remote_commands"),
+                    where("uid", "==", currentUserId),
+                    where("status", "in", ["pending", "in_progress"])
+                );
+
+                const querySnapshot = await getDocs(q);
+
+                if (!querySnapshot.empty) {
+                    const updatePromises = [];
+                    querySnapshot.forEach((docSnapshot) => {
+                        updatePromises.push(updateDoc(doc(db, "remote_commands", docSnapshot.id), {
+                            status: "failed",
+                            error: "User aborted"
+                        }));
+                    });
+                    await Promise.all(updatePromises);
+                }
+
+                stopStatus.textContent = "Emergency stop flag sent!";
+                stopStatus.classList.remove('hidden');
+
+                setTimeout(() => {
+                    stopStatus.classList.add('hidden');
+                }, 3000);
+
+            } catch (error) {
+                console.error("Error sending emergency stop:", error);
+                stopStatus.textContent = "Error stopping agent: " + error.message;
+                stopStatus.classList.remove('hidden');
+            } finally {
+                btnEmergencyStop.disabled = false;
+                btnEmergencyStop.textContent = 'Stop Agent';
+            }
+        }
+
+        btnEmergencyStop.addEventListener('click', handleEmergencyStop);
 
         async function loadSettings() {
             try {
@@ -211,18 +320,20 @@
                         const userData = userDoc.data();
                         const role = (userData.role || "").toLowerCase();
                         if (role === "admin" || role === "partner") {
+                            currentUserId = user.uid;
                             loginContainer.style.display = 'none';
                             adminDashboard.style.display = 'block';
                             userInfo.textContent = `Logged in as ${user.email} (${role})`;
                             loadSettings();
-                            startTelemetryListener();
+                            startActivityListener(user.uid);
+                            startStatusListener(user.uid);
                         } else {
                             await signOut(auth);
                             loginError.textContent = "Access denied: Requires Admin or Partner role.";
                             loginError.classList.remove('hidden');
                             loginContainer.style.display = 'block';
                             adminDashboard.style.display = 'none';
-                            stopTelemetryListener();
+                            stopListeners();
                         }
                     } else {
                         await signOut(auth);
@@ -230,18 +341,18 @@
                         loginError.classList.remove('hidden');
                         loginContainer.style.display = 'block';
                         adminDashboard.style.display = 'none';
-                        stopTelemetryListener();
+                        stopListeners();
                     }
                 } catch (error) {
                     console.error("Error checking role:", error);
                     loginError.textContent = "Error checking permissions.";
                     loginError.classList.remove('hidden');
-                    stopTelemetryListener();
+                    stopListeners();
                 }
             } else {
                 loginContainer.style.display = 'block';
                 adminDashboard.style.display = 'none';
-                stopTelemetryListener();
+                stopListeners();
             }
         });
 
