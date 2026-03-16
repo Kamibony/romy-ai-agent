@@ -62,6 +62,11 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "- {\"action\": \"CLICK\", \"target_id\": \"<the_number>\"}\n"
             "- {\"action\": \"TYPE\", \"target_id\": \"<the_number>\", \"text\": \"<text to type>\"}\n"
             "- {\"action\": \"SCROLL\", \"direction\": \"down\"} (or \"up\". Use this if the user asks for something likely out of view or if requested explicitly)\n"
+            "- {\"action\": \"NAVIGATE\", \"url\": \"<url>\"} (Change the current tab's URL. Prioritize NAVIGATE or OPEN_TAB if the user asks to interact with a specific website but the current extracted DOM doesn't belong to that website)\n"
+            "- {\"action\": \"OPEN_TAB\", \"url\": \"<url>\"} (Create a completely new tab with a target URL)\n"
+            "- {\"action\": \"PRESS_KEY\", \"key\": \"<key>\"} (Simulate keyboard events, e.g., 'Enter', 'Escape' on document.activeElement)\n"
+            "- {\"action\": \"HOVER\", \"target_id\": \"<the_number>\"} (Simulate a mouseenter event to reveal hidden dropdowns/menus)\n"
+            "- {\"action\": \"WAIT_FOR\", \"selector\": \"<css_selector>\", \"max_wait_seconds\": 5} (Dynamic wait pausing the execution loop up to max_wait_seconds for a specific DOM element to appear)\n"
             "- {\"action\": \"REPLY\", \"text\": \"<the answer>\"} (Use this to answer questions, extract prices, or summarize data from the UI elements, instead of just clicking)\n"
             "- {\"action\": \"DONE\"} (when the task is fully completed)\n"
             "If the audio is completely silent or indiscernible, return exactly: [{\"action\": \"ASK_HUMAN\", \"reason\": \"EMPTY_AUDIO\"}]\n"
@@ -118,6 +123,32 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                                 "action": "SCROLL",
                                 "direction": str(action_data["direction"])
                             })
+                        elif action_data.get("action") == "NAVIGATE" and "url" in action_data:
+                            parsed_actions.append({
+                                "action": "NAVIGATE",
+                                "url": str(action_data["url"])
+                            })
+                        elif action_data.get("action") == "OPEN_TAB" and "url" in action_data:
+                            parsed_actions.append({
+                                "action": "OPEN_TAB",
+                                "url": str(action_data["url"])
+                            })
+                        elif action_data.get("action") == "PRESS_KEY" and "key" in action_data:
+                            parsed_actions.append({
+                                "action": "PRESS_KEY",
+                                "key": str(action_data["key"])
+                            })
+                        elif action_data.get("action") == "HOVER" and "target_id" in action_data:
+                            parsed_actions.append({
+                                "action": "HOVER",
+                                "target_id": str(action_data["target_id"])
+                            })
+                        elif action_data.get("action") == "WAIT_FOR" and "selector" in action_data:
+                            parsed_actions.append({
+                                "action": "WAIT_FOR",
+                                "selector": str(action_data["selector"]),
+                                "max_wait_seconds": float(action_data.get("max_wait_seconds", 5))
+                            })
                         elif action_data.get("action") == "REPLY" and "text" in action_data:
                             parsed_actions.append({
                                 "action": "REPLY",
@@ -159,6 +190,32 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                     return [{
                         "action": "SCROLL",
                         "direction": str(action_data["direction"])
+                    }]
+                elif action_data.get("action") == "NAVIGATE" and "url" in action_data:
+                    return [{
+                        "action": "NAVIGATE",
+                        "url": str(action_data["url"])
+                    }]
+                elif action_data.get("action") == "OPEN_TAB" and "url" in action_data:
+                    return [{
+                        "action": "OPEN_TAB",
+                        "url": str(action_data["url"])
+                    }]
+                elif action_data.get("action") == "PRESS_KEY" and "key" in action_data:
+                    return [{
+                        "action": "PRESS_KEY",
+                        "key": str(action_data["key"])
+                    }]
+                elif action_data.get("action") == "HOVER" and "target_id" in action_data:
+                    return [{
+                        "action": "HOVER",
+                        "target_id": str(action_data["target_id"])
+                    }]
+                elif action_data.get("action") == "WAIT_FOR" and "selector" in action_data:
+                    return [{
+                        "action": "WAIT_FOR",
+                        "selector": str(action_data["selector"]),
+                        "max_wait_seconds": float(action_data.get("max_wait_seconds", 5))
                     }]
                 elif action_data.get("action") == "REPLY" and "text" in action_data:
                     return [{

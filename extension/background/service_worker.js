@@ -243,24 +243,62 @@ async function processCommandInternally(payload) {
             }
 
             if (action.action !== "DONE" && action.action !== "ERROR" && action.action !== "ASK_HUMAN") {
-                sendTelemetryLog(`Executing [${i+1}/${actions.length}]: ${action.action} ${action.target_id ? 'target ' + action.target_id : ''}`);
+                sendTelemetryLog(`Executing [${i+1}/${actions.length}]: ${action.action} ${action.target_id ? 'target ' + action.target_id : (action.url ? 'url ' + action.url : '')}`);
 
-                // Check if action is for OS or Web (Phase 2 integration)
-                // if (isOSAction(action)) { ... } else {
-
-                await new Promise((resolve, reject) => {
-                    chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.EXECUTE_ACTION, payload: action }, (res) => {
-                        if (chrome.runtime.lastError) {
-                            console.warn("Execute action error, tab closed?", chrome.runtime.lastError);
-                            resolve({error: chrome.runtime.lastError.message});
-                        }
-                        else if (res && res.error) reject(new Error(res.error));
-                        else resolve(res);
+                if (action.action === "NAVIGATE") {
+                    await new Promise((resolve, reject) => {
+                        chrome.tabs.update(tab.id, { url: action.url }, (updatedTab) => {
+                            if (chrome.runtime.lastError) {
+                                reject(new Error(chrome.runtime.lastError.message));
+                            } else {
+                                // Wait for tab to load
+                                const listener = (tabId, info) => {
+                                    if (tabId === updatedTab.id && info.status === 'complete') {
+                                        chrome.tabs.onUpdated.removeListener(listener);
+                                        resolve();
+                                    }
+                                };
+                                chrome.tabs.onUpdated.addListener(listener);
+                            }
+                        });
                     });
-                });
-                totalActionsExecuted++;
-                // Optional micro-sleep here for DOM stability
-                await new Promise(r => setTimeout(r, 500));
+                    totalActionsExecuted++;
+                    await new Promise(r => setTimeout(r, 1000));
+                } else if (action.action === "OPEN_TAB") {
+                    await new Promise((resolve, reject) => {
+                        chrome.tabs.create({ url: action.url }, (newTab) => {
+                            if (chrome.runtime.lastError) {
+                                reject(new Error(chrome.runtime.lastError.message));
+                            } else {
+                                tab = newTab; // Update the active tab reference to the new tab
+                                const listener = (tabId, info) => {
+                                    if (tabId === newTab.id && info.status === 'complete') {
+                                        chrome.tabs.onUpdated.removeListener(listener);
+                                        resolve();
+                                    }
+                                };
+                                chrome.tabs.onUpdated.addListener(listener);
+                            }
+                        });
+                    });
+                    totalActionsExecuted++;
+                    await new Promise(r => setTimeout(r, 1000));
+                } else {
+                    // Send other actions (CLICK, TYPE, SCROLL, PRESS_KEY, HOVER, WAIT_FOR) to the content script
+                    await new Promise((resolve, reject) => {
+                        chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.EXECUTE_ACTION, payload: action }, (res) => {
+                            if (chrome.runtime.lastError) {
+                                console.warn("Execute action error, tab closed?", chrome.runtime.lastError);
+                                resolve({error: chrome.runtime.lastError.message});
+                            }
+                            else if (res && res.error) reject(new Error(res.error));
+                            else resolve(res);
+                        });
+                    });
+                    totalActionsExecuted++;
+                    // Optional micro-sleep here for DOM stability
+                    await new Promise(r => setTimeout(r, 500));
+                }
             } else {
                 sendTelemetryLog(`Received terminal action: ${action.action}${action.action === "ASK_HUMAN" ? " - " + humanHelpReason : ""}`);
             }
