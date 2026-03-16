@@ -2,6 +2,12 @@ import logging
 import tkinter as tk
 import requests
 
+CURRENT_UID = None
+
+def get_current_uid() -> str | None:
+    """Returns the currently authenticated user's UID."""
+    return CURRENT_UID
+
 def login_window() -> str | None:
     """
     Displays a tkinter GUI login window for Firebase Authentication.
@@ -42,6 +48,8 @@ def login_window() -> str | None:
                 data = response.json()
 
                 if response.status_code == 200:
+                    global CURRENT_UID
+                    CURRENT_UID = data.get("localId")
                     token_result[0] = data.get("idToken")
                     root.destroy()
                 else:
