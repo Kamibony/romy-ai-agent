@@ -159,22 +159,41 @@ def firestore_get_document(collection: str, doc_id: str) -> Dict[str, Any]:
         logging.error(f"Error getting Firestore doc {doc_id}: {e}")
         return {}
 
+def _get_uid_from_token() -> str | None:
+    """Extracts the UID (user_id) from the current JWT token."""
+    if not CURRENT_TOKEN:
+        return None
+    try:
+        import json
+        parts = CURRENT_TOKEN.split('.')
+        if len(parts) != 3:
+            return None
+        payload_b64 = parts[1]
+        # Pad with = to make it a multiple of 4
+        payload_b64 += "=" * ((4 - len(payload_b64) % 4) % 4)
+        payload_json = base64.urlsafe_b64decode(payload_b64).decode('utf-8')
+        payload = json.loads(payload_json)
+        return payload.get('user_id')
+    except Exception as e:
+        logging.error(f"Error extracting UID from token: {e}")
+        return None
+
 def set_agent_online() -> None:
     """Sets the agent status to online in Firestore."""
     # Note: Using REST API doesn't support serverTimestamp() directly, we'll just write online.
     try:
-        from auth_window import get_current_uid
-        uid = get_current_uid()
+        uid = _get_uid_from_token()
         if uid:
             firestore_update_document("users", uid, {"status": "online"})
+        else:
+            logging.warning("Could not set agent online: No UID found in token.")
     except Exception as e:
         logging.error(f"Failed to set agent online status: {e}")
 
 def set_agent_offline() -> None:
     """Sets the agent status to offline in Firestore."""
     try:
-        from auth_window import get_current_uid
-        uid = get_current_uid()
+        uid = _get_uid_from_token()
         if uid:
             firestore_update_document("users", uid, {"status": "offline"})
     except Exception as e:

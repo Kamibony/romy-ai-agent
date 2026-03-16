@@ -44,6 +44,12 @@ def main() -> None:
         # Set the token for the agent
         set_firebase_token(token)
 
+        # Import to handle graceful shutdown
+        from agent import set_agent_online, set_agent_offline
+
+        # Set agent to online
+        set_agent_online()
+
         logging.info("Login successful. Starting background tasks...")
 
         # Start the hotkey listener in a daemon thread so it doesn't
@@ -73,12 +79,6 @@ def main() -> None:
         # Start local bridge for Chrome Extension
         from local_bridge import bridge
         bridge.start()
-
-        # Import to handle graceful shutdown
-        from agent import set_agent_online, set_agent_offline
-
-        # Set agent to online
-        set_agent_online()
 
         try:
             # Run the agent worker loop on the main thread
