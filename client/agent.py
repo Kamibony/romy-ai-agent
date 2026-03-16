@@ -172,6 +172,10 @@ def start_remote_listener() -> None:
                 time.sleep(3)
                 continue
 
+            if PAUSE_AGENT:
+                time.sleep(3)
+                continue
+
             payload = {
                 "structuredQuery": {
                     "from": [{"collectionId": "remote_commands"}],
@@ -234,7 +238,11 @@ def start_remote_listener() -> None:
 
 def handle_token_expiry():
     """Handles 401 Unauthorized by deleting the token and prompting for re-login."""
+    global CURRENT_TOKEN
     logging.critical("Handling Token Expiry (401 Unauthorized).")
+
+    # Clear global token to stop polling loop
+    CURRENT_TOKEN = None
 
     # 1. Delete token.json from local AppData
     local_app_data = os.environ.get("LOCALAPPDATA", "")
@@ -253,33 +261,9 @@ def handle_token_expiry():
 
     try:
         from plyer import notification
-        notification.notify(title="ROMY AI Error", message="Authentication expired. Please re-login.", app_name="ROMY", timeout=5)
+        notification.notify(title="ROMY AI Error", message="Session expired. Please log in from the tray menu.", app_name="ROMY", timeout=5)
     except Exception:
         pass
-
-    # 2. Trigger Auth Window to get a new token
-    try:
-        import auth_window
-        new_token = auth_window.login_window()
-        if new_token:
-            set_firebase_token(new_token)
-            logging.info("Successfully acquired new token.")
-        else:
-            logging.error("Failed to acquire new token. Prompting user to restart.")
-            import tkinter as tk
-            from tkinter import messagebox
-            root = tk.Tk()
-            root.withdraw()
-            messagebox.showerror("Authentication Error", "Session expired and login failed. Please restart the application.")
-            root.destroy()
-    except Exception as e:
-        logging.error(f"Error showing auth window during token expiry: {e}")
-        import tkinter as tk
-        from tkinter import messagebox
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showerror("Authentication Error", "Session expired. Please restart the application to log in again.")
-        root.destroy()
 
 
 def scan_ui_elements() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:

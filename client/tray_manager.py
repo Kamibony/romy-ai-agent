@@ -70,7 +70,9 @@ def get_pause_text(item: pystray.MenuItem) -> str:
     return "Resume" if PAUSE_AGENT else "Pause"
 
 def get_status_text(item: pystray.MenuItem) -> str:
-    from agent import PAUSE_AGENT
+    from agent import PAUSE_AGENT, CURRENT_TOKEN
+    if not CURRENT_TOKEN:
+        return "Status: Disconnected"
     return "Status: Paused" if PAUSE_AGENT else "Status: Listening for mobile..."
 
 def run_tray_icon() -> None:
@@ -86,9 +88,29 @@ def run_tray_icon() -> None:
             icon_image = create_image()
 
         # Define the menu
+        def is_logged_in(item):
+            from agent import CURRENT_TOKEN
+            return bool(CURRENT_TOKEN)
+
+        def is_disconnected(item):
+            from agent import CURRENT_TOKEN
+            return not bool(CURRENT_TOKEN)
+
+        def on_login(icon, item):
+            try:
+                import auth_window
+                from agent import set_firebase_token
+                new_token = auth_window.login_window()
+                if new_token:
+                    set_firebase_token(new_token)
+            except Exception as e:
+                logging.error(f"Error during manual login: {e}")
+
+        # Define the menu
         menu = pystray.Menu(
             pystray.MenuItem(get_status_text, None, enabled=False),
-            pystray.MenuItem(get_pause_text, on_pause_resume),
+            pystray.MenuItem("Login", on_login, visible=is_disconnected),
+            pystray.MenuItem(get_pause_text, on_pause_resume, visible=is_logged_in),
             pystray.MenuItem("Exit", on_quit)
         )
 
