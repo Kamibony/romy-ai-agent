@@ -378,7 +378,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
 
         # Command Routing
         # If command is web-related, delegate the whole loop to the Chrome extension
-        if is_web_command(command_text) or (not command_text and audio_b64):
+        if is_web_command(command_text):
             logging.info("Command routed to Web (Chrome Extension).")
             from local_bridge import bridge
             payload = {
