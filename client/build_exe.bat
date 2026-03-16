@@ -23,7 +23,7 @@ rmdir /s /q dist
 
 pyinstaller --noconfirm ^
             --onefile ^
-            --console ^
+            --windowed ^
             --icon=icon.ico ^
             --add-data="icon.ico;." ^
             --collect-all=plyer ^

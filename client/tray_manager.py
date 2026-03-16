@@ -1,5 +1,4 @@
 import logging
-import logging
 import pystray
 from PIL import Image
 

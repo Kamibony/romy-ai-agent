@@ -46,7 +46,6 @@ def trigger_abort() -> None:
 def agent_worker_loop() -> None:
     """
     Main Loop running on the primary thread to process commands from the COMMAND_QUEUE.
-    This ensures Playwright actions are safely isolated to the main thread.
     """
     global ABORT_AGENT
     logging.info("Starting Agent Worker Loop on primary thread...")
@@ -314,8 +313,11 @@ def scan_ui_elements() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]
                 continue
 
             # Filter for elements that are likely interactive or provide context
-            control_type = control.ControlTypeName
-            name = control.Name
+            try:
+                control_type = control.ControlTypeName
+                name = control.Name
+            except AttributeError:
+                continue
 
             if control_type in ['ButtonControl', 'HyperlinkControl', 'TextControl', 'EditControl', 'MenuItemControl', 'ListItemControl', 'TabItemControl']:
                 rect = control.BoundingRectangle
@@ -414,6 +416,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                     if not actions and "action" in data:
                         actions = [data]
                 else:
+                    logging.warning(f"Unexpected response type from backend: {type(data)}")
                     actions = []
 
                 break_outer = False
@@ -730,6 +733,7 @@ def execute_voice_agent_loop() -> None:
                     if not actions and "action" in data:
                         actions = [data]
                 else:
+                    logging.warning(f"Unexpected response type from backend: {type(data)}")
                     actions = []
 
                 break_outer = False
