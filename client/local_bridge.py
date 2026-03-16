@@ -95,6 +95,9 @@ class LocalBridgeManager:
             self.server = None
 
     def delegate_command(self, payload: dict, timeout=300):
+        # Import inside the method to avoid circular imports if any
+        import agent
+
         with self.condition:
             self.pending_command = payload
             self.result = None
@@ -103,11 +106,19 @@ class LocalBridgeManager:
             # Wait for result
             start_time = time.time()
             while self.result is None:
+                # Check for emergency abort
+                if agent.ABORT_AGENT:
+                    logging.warning("Emergency abort triggered while waiting for Chrome Extension result.")
+                    self.pending_command = None
+                    return {"success": False, "error": "User aborted execution"}
+
                 remaining = timeout - (time.time() - start_time)
                 if remaining <= 0:
                     self.pending_command = None
                     return {"success": False, "error": "Timeout waiting for extension result"}
-                self.condition.wait(timeout=remaining)
+
+                # Wait for a short duration to allow checking the abort flag frequently
+                self.condition.wait(timeout=min(1.0, remaining))
 
             res = self.result
             self.result = None

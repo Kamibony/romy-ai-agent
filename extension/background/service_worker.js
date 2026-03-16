@@ -31,7 +31,13 @@ function startLocalBridgePolling() {
                 const cmd = await response.json();
                 if (cmd && Object.keys(cmd).length > 0) {
                     console.log("Received command from Python Agent:", cmd);
-                    const result = await processCommandInternally(cmd);
+                    let result;
+                    try {
+                        result = await processCommandInternally(cmd);
+                    } catch (err) {
+                        console.error("Error processing command internally:", err);
+                        result = { success: false, error: err.message || String(err) };
+                    }
                     // Send result back
                     await fetch('http://127.0.0.1:8765/result', {
                         method: 'POST',
