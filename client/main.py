@@ -70,6 +70,10 @@ def main() -> None:
         )
         tray_thread.start()
 
+        # Start local bridge for Chrome Extension
+        from local_bridge import bridge
+        bridge.start()
+
         # Run the agent worker loop on the main thread
         agent_worker_loop()
 
