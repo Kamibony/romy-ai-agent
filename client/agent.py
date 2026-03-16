@@ -190,6 +190,8 @@ def start_remote_listener() -> None:
 
         # Keep track of loops to periodically update online status
         loop_counter = 0
+        error_count = 0
+        session = requests.Session()
 
         while True:
             if not CURRENT_TOKEN:
@@ -202,7 +204,9 @@ def start_remote_listener() -> None:
 
             loop_counter += 1
             if loop_counter >= 20: # roughly every minute
-                set_agent_online()
+                # Only set agent online if we are not in a sustained error state
+                if error_count < 3:
+                    set_agent_online()
                 loop_counter = 0
 
             payload = {
@@ -224,7 +228,8 @@ def start_remote_listener() -> None:
             }
 
             try:
-                response = requests.post(url, json=payload, headers=headers)
+                response = session.post(url, json=payload, headers=headers, timeout=10)
+
                 if response.status_code == 401:
                     logging.error("Unauthorized in start_remote_listener. Handling token expiry.")
                     handle_token_expiry()
@@ -233,6 +238,7 @@ def start_remote_listener() -> None:
 
                 response.raise_for_status()
                 results = response.json()
+                error_count = 0 # Reset error count on successful fetch
 
                 for res in results:
                     if "document" in res:
@@ -256,10 +262,21 @@ def start_remote_listener() -> None:
                             "command_text": command_text,
                             "audio_b64": audio_b64
                         })
+            except requests.exceptions.RequestException as e:
+                error_count += 1
+                logging.error(f"Network error in remote listener poll (attempt {error_count}): {e}")
+                # Re-initialize session on network errors to clear potentially bad sockets
+                if error_count >= 3:
+                    session.close()
+                    session = requests.Session()
+                    logging.warning("Re-initializing requests session due to repeated errors.")
+
             except Exception as e:
                 logging.error(f"Error in remote listener poll: {e}")
 
-            time.sleep(3)  # Poll every 3 seconds
+            # Dynamic backoff based on error count (max 15s)
+            sleep_time = min(3 * (2 ** max(0, error_count - 1)), 15) if error_count > 0 else 3
+            time.sleep(sleep_time)
 
     # Start the polling loop in a background thread
     t = threading.Thread(target=_poll_loop, daemon=True)
@@ -359,6 +376,9 @@ def scan_ui_elements() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]
 
 def is_web_command(command_text: str) -> bool:
     """Simple heuristic to determine if a command is web-related."""
+    if not command_text or not command_text.strip():
+        return False
+
     text = command_text.lower()
     keywords = ["browser", "web", "chrome", "website", "http", "www", "url", "tab", "page"]
     if any(kw in text for kw in keywords):
@@ -611,22 +631,30 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                 if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
                     handle_token_expiry()
                     final_status = "failed"
+                    error_msg = "Token expired"
                     break
                 logging.info(f"Request failed: {req_e}")
                 final_status = "failed"
+                error_msg = f"Network request failed: {req_e}"
                 break
 
             time.sleep(2)
             iteration += 1
 
         # Update final document status
-        firestore_update_document("remote_commands", doc_id, {"status": final_status})
-        logging.info(f"Remote command {doc_id} marked as {final_status}.")
+        try:
+            update_payload = {"status": final_status}
+            if final_status == "failed":
+                update_payload["error"] = error_msg if "error_msg" in locals() else "Unknown agent loop termination"
+            firestore_update_document("remote_commands", doc_id, update_payload)
+            logging.info(f"Remote command {doc_id} marked as {final_status}.")
+        except Exception:
+            pass
 
     except Exception as e:
         logging.error(f"Error executing remote command: {e}")
         try:
-            firestore_update_document("remote_commands", doc_id, {"status": "failed"})
+            firestore_update_document("remote_commands", doc_id, {"status": "failed", "error": str(e)})
         except Exception:
             pass
 
