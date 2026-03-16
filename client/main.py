@@ -74,8 +74,17 @@ def main() -> None:
         from local_bridge import bridge
         bridge.start()
 
-        # Run the agent worker loop on the main thread
-        agent_worker_loop()
+        # Import to handle graceful shutdown
+        from agent import set_agent_online, set_agent_offline
+
+        # Set agent to online
+        set_agent_online()
+
+        try:
+            # Run the agent worker loop on the main thread
+            agent_worker_loop()
+        finally:
+            set_agent_offline()
 
     except Exception as e:
         logging.error(f"Error starting main client application: {e}")

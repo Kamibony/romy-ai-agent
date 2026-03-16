@@ -159,6 +159,27 @@ def firestore_get_document(collection: str, doc_id: str) -> Dict[str, Any]:
         logging.error(f"Error getting Firestore doc {doc_id}: {e}")
         return {}
 
+def set_agent_online() -> None:
+    """Sets the agent status to online in Firestore."""
+    # Note: Using REST API doesn't support serverTimestamp() directly, we'll just write online.
+    try:
+        from auth_window import get_current_uid
+        uid = get_current_uid()
+        if uid:
+            firestore_update_document("users", uid, {"status": "online"})
+    except Exception as e:
+        logging.error(f"Failed to set agent online status: {e}")
+
+def set_agent_offline() -> None:
+    """Sets the agent status to offline in Firestore."""
+    try:
+        from auth_window import get_current_uid
+        uid = get_current_uid()
+        if uid:
+            firestore_update_document("users", uid, {"status": "offline"})
+    except Exception as e:
+        logging.error(f"Failed to set agent offline status: {e}")
+
 def start_remote_listener() -> None:
     """Starts a polling loop for pending remote commands using REST API in a background thread."""
     import threading
@@ -166,6 +187,9 @@ def start_remote_listener() -> None:
     def _poll_loop():
         logging.info("Started listening for remote commands on Firestore via REST polling.")
         url = "https://firestore.googleapis.com/v1/projects/romy-ai-agent/databases/(default)/documents:runQuery"
+
+        # Keep track of loops to periodically update online status
+        loop_counter = 0
 
         while True:
             if not CURRENT_TOKEN:
@@ -175,6 +199,11 @@ def start_remote_listener() -> None:
             if PAUSE_AGENT:
                 time.sleep(3)
                 continue
+
+            loop_counter += 1
+            if loop_counter >= 20: # roughly every minute
+                set_agent_online()
+                loop_counter = 0
 
             payload = {
                 "structuredQuery": {
