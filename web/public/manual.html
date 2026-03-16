@@ -44,24 +44,34 @@
             <!-- Instalace (Installation) -->
             <section class="mb-10">
                 <h2 class="text-2xl font-semibold text-gray-800 mb-4">Instalace (Installation)</h2>
-                <p class="text-gray-600 mb-4">Zprovoznění agenta vyžaduje dva jednoduché kroky:</p>
                 <div class="space-y-6">
                     <div class="bg-gray-50 p-6 rounded-lg border border-gray-100">
-                        <h3 class="text-lg font-medium text-indigo-900 mb-2">Krok 1: Instalace OS Agenta</h3>
-                        <p class="text-gray-600 text-sm">
-                            Nejprve si stáhněte a nainstalujte spustitelný soubor <code>ROMY-Agent-MVP.exe</code>. Tento program musí běžet na pozadí vašeho počítače (uvidíte jej v systémové liště - tray ikonách). Slouží k přijímání vzdálených příkazů a řízení Chrome rozšíření.
+                        <h3 class="text-lg font-bold text-indigo-900 mb-4">Krok 1: Stažení a spuštění Windows OS Agenta</h3>
+                        <p class="text-gray-600 text-sm mb-4">
+                            Tento program slouží jako 'mozek' celého systému.
                         </p>
+                        <ul class="list-disc list-inside text-sm text-gray-700 space-y-3 ml-2">
+                            <li>Jděte na naši hlavní stránku a klikněte na tlačítko <strong>Download Agent (Windows)</strong>.</li>
+                            <li>Stažený soubor <strong>ROMY Agent.exe</strong> si uložte někam, kde ho snadno najdete (ideálně na Plochu nebo do složky Dokumenty).</li>
+                            <li>Dvojklikem soubor <strong>ROMY Agent.exe</strong> spusťte.</li>
+                            <li><strong class="text-red-600">DŮLEŽITÉ (Modré okno Windows):</strong> Protože je tento program interní novinkou, může na vás vyskočit modré varovné okno s nápisem 'Systém Windows ochránil váš počítač'. Nepanikařte, jde o standardní ochranu před neznámými programy. Klikněte na nenápadný text <strong>Další informace</strong> a následně na tlačítko <strong>Přesto spustit</strong>.</li>
+                            <li><strong class="text-indigo-600">Hotovo!</strong> Podívejte se do pravého dolního rohu obrazovky k hodinám. Uvidíte tam malou ikonku Romy. To znamená, že agent úspěšně běží na pozadí.</li>
+                        </ul>
                     </div>
+
                     <div class="bg-gray-50 p-6 rounded-lg border border-gray-100">
-                        <h3 class="text-lg font-medium text-indigo-900 mb-2">Krok 2: Přidání Chrome Rozšíření</h3>
-                        <p class="text-gray-600 text-sm mb-3">
-                            Webové rozšíření je třeba přidat do prohlížeče Chrome manuálně z rozbaleného ZIP souboru:
+                        <h3 class="text-lg font-bold text-indigo-900 mb-4">Krok 2: Přidání Chrome Rozšíření (Webové ruce)</h3>
+                        <p class="text-gray-600 text-sm mb-4">
+                            Aby Romy mohla klikat na webu, musíme jí do prohlížeče Chrome přidat 'ruce'.
                         </p>
-                        <ol class="list-decimal list-inside text-sm text-gray-700 space-y-2 ml-2">
-                            <li>Otevřete v prohlížeči stránku <code>chrome://extensions/</code>.</li>
-                            <li>V pravém horním rohu zapněte <strong>"Režim pro vývojáře"</strong> (Developer mode).</li>
-                            <li>Rozbalte stažený soubor <code>ROMY-Extension-MVP.zip</code> do libovolné složky.</li>
-                            <li>Klikněte na tlačítko <strong>"Načíst rozbalené"</strong> (Load unpacked) a vyberte složku s rozšířením, nebo tuto složku jednoduše přetáhněte myší do okna prohlížeče.</li>
+                        <ol class="list-decimal list-inside text-sm text-gray-700 space-y-3 ml-2">
+                            <li>Na hlavní stránce klikněte na tlačítko <strong>Download Web Module (.zip)</strong> a soubor stáhněte.</li>
+                            <li>Najděte stažený .zip soubor ve vašem počítači, klikněte na něj pravým tlačítkem myši a zvolte <strong>Extrahovat vše...</strong> (složku si uložte např. do Dokumentů).</li>
+                            <li>Otevřete prohlížeč Google Chrome. Do horního adresního řádku (tam, kam píšete www.google.cz) zadejte přesně tento text: <strong>chrome://extensions/</strong> a stiskněte <strong>Enter</strong>.</li>
+                            <li>V pravém horním rohu obrazovky najděte přepínač <strong>Režim pro vývojáře (Developer mode)</strong> a kliknutím jej zapněte (aby svítil modře).</li>
+                            <li>Vlevo nahoře se objeví nová tlačítka. Klikněte na první z nich: <strong>Načíst rozbalené (Load unpacked)</strong>.</li>
+                            <li>Otevře se okno pro výběr složky. Najděte složku, kterou jste extrahovali v bodě 2, označte ji a klikněte na <strong>Vybrat složku</strong> (vybírejte žlutou složku, nikoliv původní ZIP soubor!).</li>
+                            <li><strong class="text-indigo-600">Hotovo!</strong> V seznamu se vám nyní objevila karta 'ROMY AI Hybrid Agent'. Prohlížeč je propojen.</li>
                         </ol>
                     </div>
                 </div>
