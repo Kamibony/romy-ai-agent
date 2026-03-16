@@ -8,7 +8,9 @@ if app_dir not in sys.path:
     sys.path.insert(0, app_dir)
 
 import threading
-import subprocess
+
+# Import logger_setup explicitly at the top to configure logging for the entire app before any other imports grab the root logger
+import logger_setup
 
 def resource_path(relative_path: str) -> str:
     """Get absolute path to resource, works for dev and for PyInstaller"""
@@ -18,20 +20,6 @@ def resource_path(relative_path: str) -> str:
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
-
-def setup_logging():
-    user_data_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "RomyAgentBrowserData")
-    os.makedirs(user_data_dir, exist_ok=True)
-    log_file = os.path.join(user_data_dir, "romy_agent.log")
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
 
 def main() -> None:
     """
@@ -89,6 +77,4 @@ def main() -> None:
         logging.error(f"Error starting main client application: {e}")
 
 if __name__ == "__main__":
-    setup_logging()
-
     main()
