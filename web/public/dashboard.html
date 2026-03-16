@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ROMY Admin Panel</title>
+    <title>ROMY Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-100 font-sans leading-normal tracking-normal text-gray-800">
@@ -13,7 +13,7 @@
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex items-center justify-between h-16">
                 <div class="flex items-center">
-                    <span class="font-bold text-xl tracking-wide">ROMY Admin Panel</span>
+                    <span class="font-bold text-xl tracking-wide">ROMY Dashboard</span>
                 </div>
                 <div>
                     <a href="index.html" class="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Back to Home</a>
@@ -25,7 +25,7 @@
     <!-- Main Content -->
     <main class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pb-12">
         <div id="login-container" class="bg-white rounded-lg shadow-md p-6 border border-gray-200 mb-8" style="display: none;">
-            <h2 class="text-2xl font-semibold mb-4 text-gray-800 border-b pb-2">Admin Login</h2>
+            <h2 class="text-2xl font-semibold mb-4 text-gray-800 border-b pb-2">Dashboard Login</h2>
             <div class="space-y-4">
                 <input type="email" id="login-email" placeholder="Email" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2" />
                 <input type="password" id="login-password" placeholder="Password" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2" />
@@ -75,13 +75,22 @@
                 </div>
             </div>
         </section>
+
+        <!-- Live AI Telemetry Section -->
+        <section class="bg-indigo-900 rounded-lg shadow-md p-6 text-gray-200 mt-8" style="height: 500px; display: flex; flex-direction: column;">
+            <h2 class="text-2xl font-semibold mb-4 text-white border-b border-indigo-700 pb-2">Live AI Telemetry (Brain)</h2>
+            <div id="telemetry-log" class="flex-1 overflow-y-auto font-mono text-xs space-y-3">
+                <p class="text-indigo-300 italic">Listening for AI thoughts...</p>
+            </div>
+        </section>
+
         </div>
     </main>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+        import { getFirestore, doc, getDoc, setDoc, collection, query, orderBy, limit, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyBF2KBDgfYOzMbdSjFgCrGUygQbFaSfSxI",
@@ -113,6 +122,59 @@
         const btnLogin = document.getElementById('btn-login');
         const btnLogout = document.getElementById('btn-logout');
         const loginError = document.getElementById('login-error');
+
+        const telemetryLog = document.getElementById('telemetry-log');
+        let unsubscribeTelemetry = null;
+
+        function startTelemetryListener() {
+            if (unsubscribeTelemetry) {
+                unsubscribeTelemetry();
+            }
+
+            const q = query(collection(db, "telemetry"), orderBy("timestamp", "desc"), limit(10));
+            try {
+                unsubscribeTelemetry = onSnapshot(q, (snapshot) => {
+                    if (snapshot.empty) {
+                        telemetryLog.innerHTML = '<p class="text-indigo-300 italic">No telemetry data yet.</p>';
+                        return;
+                    }
+
+                    let html = '';
+                    snapshot.forEach((doc) => {
+                        const data = doc.data();
+                        const time = data.timestamp ? data.timestamp.toDate().toLocaleTimeString() : new Date().toLocaleTimeString();
+                        const geminiText = data.gemini_context ? data.gemini_context : 'N/A';
+
+                        html += `
+                            <div class="bg-indigo-800 p-3 rounded border border-indigo-700">
+                                <div class="text-indigo-300 text-[10px] mb-1">[${time}]</div>
+                                <div class="mb-2"><span class="font-bold text-indigo-200">Gemini:</span> <div class="whitespace-pre-wrap break-all">${geminiText}</div></div>
+                                <div><span class="font-bold text-green-400">Claude:</span> <div class="whitespace-pre-wrap break-all">${data.claude_action || 'N/A'}</div></div>
+                            </div>
+                        `;
+                    });
+                    telemetryLog.innerHTML = html;
+                }, (error) => {
+                    console.warn("Firestore read error (possibly security rules):", error);
+                    telemetryLog.innerHTML = `
+                        <div class="bg-red-900/50 p-3 rounded border border-red-700 text-red-200">
+                            <p class="font-bold mb-1">Access Denied</p>
+                            <p>Unable to read live telemetry. Security rules may be blocking access for unauthenticated users.</p>
+                        </div>
+                    `;
+                });
+            } catch (error) {
+                console.error("Error setting up Firestore listener:", error);
+            }
+        }
+
+        function stopTelemetryListener() {
+            if (unsubscribeTelemetry) {
+                unsubscribeTelemetry();
+                unsubscribeTelemetry = null;
+            }
+            telemetryLog.innerHTML = '<p class="text-indigo-300 italic">Listening for AI thoughts...</p>';
+        }
 
         async function loadSettings() {
             try {
@@ -153,12 +215,14 @@
                             adminDashboard.style.display = 'block';
                             userInfo.textContent = `Logged in as ${user.email} (${role})`;
                             loadSettings();
+                            startTelemetryListener();
                         } else {
                             await signOut(auth);
                             loginError.textContent = "Access denied: Requires Admin or Partner role.";
                             loginError.classList.remove('hidden');
                             loginContainer.style.display = 'block';
                             adminDashboard.style.display = 'none';
+                            stopTelemetryListener();
                         }
                     } else {
                         await signOut(auth);
@@ -166,15 +230,18 @@
                         loginError.classList.remove('hidden');
                         loginContainer.style.display = 'block';
                         adminDashboard.style.display = 'none';
+                        stopTelemetryListener();
                     }
                 } catch (error) {
                     console.error("Error checking role:", error);
                     loginError.textContent = "Error checking permissions.";
                     loginError.classList.remove('hidden');
+                    stopTelemetryListener();
                 }
             } else {
                 loginContainer.style.display = 'block';
                 adminDashboard.style.display = 'none';
+                stopTelemetryListener();
             }
         });
 
