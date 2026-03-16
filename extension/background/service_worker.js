@@ -1,14 +1,10 @@
 import { API_ENDPOINTS, API_CONFIG } from '../utils/api.js';
 import { MESSAGE_TYPES } from '../utils/message_types.js';
 import { getAuthToken } from '../utils/auth.js';
-import { db, collection, query, where, onSnapshot, doc, updateDoc } from '../utils/firebase-init.js';
+// Removed firebase imports because Chrome is now decoupled from Firestore
 
 // Central orchestrator for the Chrome Extension
 console.log("Romy Agent Service Worker initialized.");
-
-let isListeningToRemoteCommands = false;
-let remoteCommandUnsubscribe = null;
-const processedCommandIds = new Set();
 
 let isRecording = false;
 let isProcessing = false;
@@ -22,91 +18,42 @@ async function setupOffscreenDocument(path) {
     });
 }
 
-// Initialize the remote listener immediately if token is available
-async function initRemoteListener() {
-    const token = await getAuthToken();
-    if (token) {
-        startRemoteListener();
-    }
-}
-initRemoteListener();
+// Local bridge polling to receive commands from the Desktop Agent Orchestrator
+let localBridgeInterval = null;
 
-export async function startRemoteListener() {
-    const token = await getAuthToken();
-    if (!token) {
-        console.warn("Attempted to start remote listener without auth token.");
-        return;
-    }
-
-    if (isListeningToRemoteCommands) {
-        console.log("Remote listener already running.");
-        return;
-    }
-
-    try {
-        console.log("Starting remote command listener...");
-        const q = query(collection(db, "remote_commands"), where("status", "==", "pending"));
-
-        remoteCommandUnsubscribe = onSnapshot(q, (snapshot) => {
-            snapshot.docChanges().forEach(async (change) => {
-                if (change.type === "added") {
-                    const data = change.doc.data();
-                    const docId = change.doc.id;
-                    const commandText = data.command || "";
-                    const audioBase64 = data.audio_b64 || "";
-
-                    if (processedCommandIds.has(docId)) {
-                        console.log(`Command ${docId} already processed. Skipping to prevent double execution.`);
-                        return;
-                    }
-
-                    processedCommandIds.add(docId);
-                    if (processedCommandIds.size > 50) {
-                        const iterator = processedCommandIds.values();
-                        processedCommandIds.delete(iterator.next().value);
-                    }
-
-                    console.log(`Received new remote command: "${commandText}" (ID: ${docId}, has audio: ${!!audioBase64})`);
-
-                    // Mark as in_progress immediately
-                    const docRef = doc(db, "remote_commands", docId);
-                    await updateDoc(docRef, { status: "in_progress" });
-
-                    // Execute command
-                    try {
-                        const payload = { audioBase64: audioBase64, commandText: commandText };
-                        const result = await processCommandInternally(payload);
-
-                        if (result.success) {
-                            await updateDoc(docRef, { status: "completed" });
-                            console.log(`Remote command ${docId} completed successfully.`);
-                        } else if (result.helpNeeded) {
-                            await updateDoc(docRef, { status: "help_needed", error: result.reason });
-                            console.log(`Remote command ${docId} needs help: ${result.reason}`);
-                        } else {
-                            await updateDoc(docRef, { status: "failed", error: result.error });
-                            console.log(`Remote command ${docId} failed: ${result.error}`);
-                        }
-                    } catch (error) {
-                        await updateDoc(docRef, { status: "failed", error: error.message });
-                        console.error(`Remote command ${docId} failed with exception:`, error);
-                    }
+function startLocalBridgePolling() {
+    if (localBridgeInterval) return;
+    console.log("Starting local bridge polling...");
+    localBridgeInterval = setInterval(async () => {
+        try {
+            const response = await fetch('http://127.0.0.1:8765/command');
+            if (response.ok) {
+                const cmd = await response.json();
+                if (cmd && Object.keys(cmd).length > 0) {
+                    console.log("Received command from Python Agent:", cmd);
+                    const result = await processCommandInternally(cmd);
+                    // Send result back
+                    await fetch('http://127.0.0.1:8765/result', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(result)
+                    });
                 }
-            });
-        });
-
-        isListeningToRemoteCommands = true;
-    } catch (error) {
-        console.error("Failed to start remote listener:", error);
-    }
+            }
+        } catch (error) {
+            // Silence network errors to avoid spamming the console when Python agent is down
+            // console.error("Local bridge polling error:", error);
+        }
+    }, 2000); // Poll every 2 seconds
 }
 
-export function stopRemoteListener() {
-    if (remoteCommandUnsubscribe) {
-        remoteCommandUnsubscribe();
-        remoteCommandUnsubscribe = null;
-        isListeningToRemoteCommands = false;
-        console.log("Remote command listener stopped.");
+startLocalBridgePolling();
+
+export function stopLocalBridgePolling() {
+    if (localBridgeInterval) {
+        clearInterval(localBridgeInterval);
+        localBridgeInterval = null;
+        console.log("Local bridge polling stopped.");
     }
 }
 

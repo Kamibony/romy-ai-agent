@@ -342,6 +342,23 @@ def scan_ui_elements() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]
 
     return ui_elements, memory_map
 
+def is_web_command(command_text: str) -> bool:
+    """Simple heuristic to determine if a command is web-related."""
+    text = command_text.lower()
+    keywords = ["browser", "web", "chrome", "website", "http", "www", "url", "tab", "page"]
+    if any(kw in text for kw in keywords):
+        return True
+
+    # Also check if the active window is Chrome
+    try:
+        active_window = auto.GetForegroundControl()
+        if active_window and ("chrome" in active_window.Name.lower() or "browser" in active_window.Name.lower()):
+            return True
+    except Exception:
+        pass
+
+    return False
+
 def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -> None:
     """Runs the agent loop triggered by a remote text command."""
     if not CURRENT_TOKEN:
@@ -357,6 +374,49 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
         except Exception:
             if winsound: winsound.Beep(800, 200)
 
+        # Command Routing
+        # If command is web-related, delegate the whole loop to the Chrome extension
+        if is_web_command(command_text) or (not command_text and audio_b64):
+            logging.info("Command routed to Web (Chrome Extension).")
+            from local_bridge import bridge
+            payload = {
+                "commandText": command_text,
+                "audioBase64": audio_b64
+            }
+            # Wait for Chrome to execute and return the result
+            result = bridge.delegate_command(payload)
+            if result.get("success"):
+                final_status = "completed"
+            elif result.get("helpNeeded"):
+                final_status = "help_needed"
+                try:
+                    firestore_update_document("remote_commands", doc_id, {
+                        "status": "help_needed",
+                        "help_reason": result.get("reason", "Human help needed.")
+                    })
+                except Exception as e:
+                    logging.error(f"Error updating help status: {e}")
+                return # We don't mark as final_status here because we already updated with help_reason
+            else:
+                final_status = "failed"
+                try:
+                    firestore_update_document("remote_commands", doc_id, {
+                        "status": "failed",
+                        "error": result.get("error", "Unknown web execution error.")
+                    })
+                except Exception as e:
+                    logging.error(f"Error updating failed status: {e}")
+                return
+
+            # Update final document status
+            try:
+                firestore_update_document("remote_commands", doc_id, {"status": final_status})
+                logging.info(f"Remote command {doc_id} marked as {final_status} from Web execution.")
+            except Exception as e:
+                pass
+            return
+
+        logging.info("Command routed to OS (Native).")
         iteration = 0
         final_status = "completed"
 
