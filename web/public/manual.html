@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ROMY Manuál - Autonomous B2B AI Agent</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 text-gray-900 font-sans leading-normal tracking-normal antialiased">
+
+    <!-- Header / Nav -->
+    <nav class="bg-indigo-900 shadow-md">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center">
+                    <a href="index.html" class="flex-shrink-0 flex items-center">
+                        <span class="font-bold text-2xl text-white">ROMY</span>
+                    </a>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <a href="index.html" class="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition duration-150 ease-in-out">Domů</a>
+                    <a href="dashboard.html" class="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition duration-150 ease-in-out">Dashboard</a>
+                    <a href="manual.html" class="bg-indigo-800 text-white px-3 py-2 rounded-md text-sm font-medium">Manuál</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        <div class="bg-white rounded-lg shadow-md p-8 border border-gray-200">
+            <h1 class="text-3xl font-extrabold text-gray-900 mb-8 border-b pb-4">Uživatelský Manuál</h1>
+
+            <!-- Úvod (Welcome) -->
+            <section class="mb-10">
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4">Úvod (Welcome)</h2>
+                <p class="text-gray-600 leading-relaxed">
+                    Vítejte v testovacím prostředí ROMY (MVP). ROMY využívá <strong>hybridní architekturu</strong>, která se skládá ze dvou hlavních částí:
+                    lokálního <strong>Windows OS Agenta</strong> a webového modulu ve formě <strong>Chrome Rozšíření</strong>.
+                    Tento přístup umožňuje agentovi provádět jak komplexní webovou automatizaci přímo v prohlížeči, tak spouštět úkony na úrovni operačního systému Windows. Obě části spolu úzce komunikují a zajišťují hladký průběh zadaných úkolů.
+                </p>
+            </section>
+
+            <!-- Instalace (Installation) -->
+            <section class="mb-10">
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4">Instalace (Installation)</h2>
+                <p class="text-gray-600 mb-4">Zprovoznění agenta vyžaduje dva jednoduché kroky:</p>
+                <div class="space-y-6">
+                    <div class="bg-gray-50 p-6 rounded-lg border border-gray-100">
+                        <h3 class="text-lg font-medium text-indigo-900 mb-2">Krok 1: Instalace OS Agenta</h3>
+                        <p class="text-gray-600 text-sm">
+                            Nejprve si stáhněte a nainstalujte spustitelný soubor <code>ROMY-Agent-MVP.exe</code>. Tento program musí běžet na pozadí vašeho počítače (uvidíte jej v systémové liště - tray ikonách). Slouží k přijímání vzdálených příkazů a řízení Chrome rozšíření.
+                        </p>
+                    </div>
+                    <div class="bg-gray-50 p-6 rounded-lg border border-gray-100">
+                        <h3 class="text-lg font-medium text-indigo-900 mb-2">Krok 2: Přidání Chrome Rozšíření</h3>
+                        <p class="text-gray-600 text-sm mb-3">
+                            Webové rozšíření je třeba přidat do prohlížeče Chrome manuálně z rozbaleného ZIP souboru:
+                        </p>
+                        <ol class="list-decimal list-inside text-sm text-gray-700 space-y-2 ml-2">
+                            <li>Otevřete v prohlížeči stránku <code>chrome://extensions/</code>.</li>
+                            <li>V pravém horním rohu zapněte <strong>"Režim pro vývojáře"</strong> (Developer mode).</li>
+                            <li>Rozbalte stažený soubor <code>ROMY-Extension-MVP.zip</code> do libovolné složky.</li>
+                            <li>Klikněte na tlačítko <strong>"Načíst rozbalené"</strong> (Load unpacked) a vyberte složku s rozšířením, nebo tuto složku jednoduše přetáhněte myší do okna prohlížeče.</li>
+                        </ol>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Ovládací panel (Dashboard) -->
+            <section class="mb-10">
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4">Ovládací panel (Dashboard)</h2>
+                <p class="text-gray-600 mb-6">
+                    Dashboard slouží jako řídící a monitorovací centrum vašeho agenta.
+                </p>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                    <!-- Status Dots -->
+                    <div class="bg-gray-50 p-5 rounded-lg border border-gray-100">
+                        <h3 class="text-md font-bold text-gray-800 mb-3 border-b pb-2">Status Indikátory</h3>
+                        <ul class="space-y-3 text-sm text-gray-600">
+                            <li class="flex items-start">
+                                <div class="w-4 h-4 rounded-full bg-green-500 mt-0.5 mr-3 flex-shrink-0"></div>
+                                <span><strong>Zelená tečka:</strong> Modul je online, správně připojen a připraven k akci.</span>
+                            </li>
+                            <li class="flex items-start">
+                                <div class="w-4 h-4 rounded-full bg-red-500 mt-0.5 mr-3 flex-shrink-0"></div>
+                                <span><strong>Červená tečka:</strong> Modul je offline, odpojen nebo aktuálně neběží.</span>
+                            </li>
+                        </ul>
+                        <p class="mt-3 text-xs text-gray-500">Tyto indikátory odděleně zobrazují stav vašeho Windows OS Agenta a webového Chrome rozšíření.</p>
+                    </div>
+
+                    <!-- Activity Feed -->
+                    <div class="bg-gray-50 p-5 rounded-lg border border-gray-100">
+                        <h3 class="text-md font-bold text-gray-800 mb-3 border-b pb-2">Live Activity (Zdroj aktivit)</h3>
+                        <p class="text-sm text-gray-600">
+                            Výpis "Live Activity" vám v reálném čase ukazuje, co přesně agent právě dělá. Můžete zde sledovat odeslané příkazy a jejich aktuální stav (např. v procesu, dokončeno, selhalo, nebo čeká na asistenci člověka).
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Kill Switch -->
+                <div class="bg-red-50 p-5 rounded-lg border border-red-100">
+                    <h3 class="text-md font-bold text-red-800 mb-2">Tlačítko Stop Agent (Nouzové zastavení)</h3>
+                    <p class="text-sm text-red-700">
+                        Červené tlačítko <strong>"Stop Agent"</strong> funguje jako záchranná brzda. Po jeho stisknutí jsou všechny aktuálně probíhající a čekající příkazy okamžitě označeny jako selhané s důvodem "Zrušeno uživatelem" (User aborted). Agent okamžitě přeruší svou činnost.
+                    </p>
+                </div>
+            </section>
+
+            <!-- Knihovna Rolí -->
+            <section>
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4">Knihovna Rolí</h2>
+                <p class="text-gray-600 mb-6">
+                    Zkopírujte si níže uvedené příkazy (prompty) a vložte je do pole <strong>Global System Prompt</strong> na vašem Dashboardu. Tím určíte, jak se má agent chovat a jakou roli má plnit.
+                </p>
+
+                <div class="space-y-6">
+                    <!-- Role 1 -->
+                    <div>
+                        <h3 class="text-lg font-medium text-indigo-900 mb-2">Role 1 (Realitní makléř)</h3>
+                        <div class="bg-gray-800 rounded-md p-4 overflow-x-auto">
+                            <code class="text-green-400 text-sm whitespace-pre-wrap">Jsi autonomní AI agent pracující jako asistent prodeje v realitní kanceláři. Tvým hlavním úkolem je vyhledávat informace o nových apartmánech, analyzovat trh a pomáhat s administrativou prodeje. Pravidla chování: 1. Pokud nemáš otevřený správný web, použij OPEN_TAB nebo NAVIGATE. 2. Při dynamických webech použij WAIT_FOR. 3. Komunikuj profesionálně. 4. Nikdy neschvaluj slevy, použij ASK_HUMAN.</code>
+                        </div>
+                    </div>
+
+                    <!-- Role 2 -->
+                    <div>
+                        <h3 class="text-lg font-medium text-indigo-900 mb-2">Role 2 (Finanční asistent)</h3>
+                        <div class="bg-gray-800 rounded-md p-4 overflow-x-auto">
+                            <code class="text-green-400 text-sm whitespace-pre-wrap">Jsi autonomní AI agent pracující ve finančním oddělení. Tvou prioritou je 100% přesnost a nula chyb při přepisování dat. Pravidla chování: 1. Zpracovávej data pomocí CLICK a TYPE. 2. Pokud si nejsi jistý, OKAMŽITĚ přeruš práci a použij ASK_HUMAN. 3. Pro zrychlení používej PRESS_KEY (např. 'Tab' nebo 'Enter').</code>
+                        </div>
+                    </div>
+
+                    <!-- Role 3 -->
+                    <div>
+                        <h3 class="text-lg font-medium text-indigo-900 mb-2">Role 3 (Executive Assistant)</h3>
+                        <div class="bg-gray-800 rounded-md p-4 overflow-x-auto">
+                            <code class="text-green-400 text-sm whitespace-pre-wrap">Jsi můj osobní Executive AI Assistant. Tvým úkolem je šetřit můj čas. Pravidla chování: 1. Jsi proaktivní. Sám si otevři novou záložku (OPEN_TAB), najdi informace a pošli shrnutí přes REPLY. 2. Pokud nevidíš tlačítko přímo, zkus použít HOVER pro rozbalení menu. 3. Odpovídej stručně a k věci.</code>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-gray-50 border-t border-gray-200 mt-12">
+        <div class="max-w-7xl mx-auto py-8 px-4 overflow-hidden sm:px-6 lg:px-8">
+            <p class="text-center text-sm text-gray-500">
+                &copy; 2024 ROMY AI. Všechna práva vyhrazena.
+            </p>
+        </div>
+    </footer>
+
+</body>
+</html>
