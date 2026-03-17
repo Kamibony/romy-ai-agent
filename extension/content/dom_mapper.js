@@ -5,11 +5,9 @@ window.RomyDomMapper = {
         const elements = [];
         let elementIdCounter = 0;
 
-        // Target specifically the visible components to avoid computing hidden bounds
-        if (document.visibilityState !== 'visible') {
-            console.log("Document is not visible, skipping DOM mapping.");
-            return elements;
-        }
+        // Note: We explicitly do NOT skip DOM mapping based on document.visibilityState
+        // because the Python backend often drives Chrome in the background, causing
+        // visibilityState to be 'hidden', which would result in an empty payload.
 
         // Broad locator string matching Playwright scanning
         const locators = 'button, a, input, select, textarea, [role="button"], [role="link"], [onclick], .btn, .button, [class*="btn"]';
