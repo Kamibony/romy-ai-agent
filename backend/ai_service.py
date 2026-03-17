@@ -130,16 +130,16 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
 
         system_instruction = (
             "You are a structural RPA assistant. You are provided with a list of UI elements currently on the screen. "
-            "Each element has an ID and a description/name. Based on the user's command (which may be provided as audio or text), identify the correct target "
+            "Each element has an ID, xpath, and a description/name. Based on the user's command (which may be provided as audio or text), identify the correct target "
             "elements and return ONLY a JSON array of sequential action objects. "
             "Supported actions:\n"
-            "- {\"action\": \"CLICK\", \"target_id\": \"<the_number>\"}\n"
-            "- {\"action\": \"TYPE\", \"target_id\": \"<the_number>\", \"text\": \"<text to type>\"}\n"
+            "- {\"action\": \"CLICK\", \"target_id\": \"<the_number>\", \"xpath\": \"<optional_xpath_fallback>\"}\n"
+            "- {\"action\": \"TYPE\", \"target_id\": \"<the_number>\", \"xpath\": \"<optional_xpath_fallback>\", \"text\": \"<text to type>\"}\n"
             "- {\"action\": \"SCROLL\", \"direction\": \"down\"} (or \"up\". Use this if the user asks for something likely out of view or if requested explicitly)\n"
             "- {\"action\": \"NAVIGATE\", \"url\": \"<url>\"} (Change the current tab's URL. Prioritize NAVIGATE or OPEN_TAB if the user asks to interact with a specific website but the current extracted DOM doesn't belong to that website)\n"
             "- {\"action\": \"OPEN_TAB\", \"url\": \"<url>\"} (Create a completely new tab with a target URL)\n"
             "- {\"action\": \"PRESS_KEY\", \"key\": \"<key>\"} (Simulate keyboard events, e.g., 'Enter', 'Escape' on document.activeElement)\n"
-            "- {\"action\": \"HOVER\", \"target_id\": \"<the_number>\"} (Simulate a mouseenter event to reveal hidden dropdowns/menus)\n"
+            "- {\"action\": \"HOVER\", \"target_id\": \"<the_number>\", \"xpath\": \"<optional_xpath_fallback>\"} (Simulate a mouseenter event to reveal hidden dropdowns/menus)\n"
             "- {\"action\": \"WAIT_FOR\", \"selector\": \"<css_selector>\", \"max_wait_seconds\": 5} (Dynamic wait pausing the execution loop up to max_wait_seconds for a specific DOM element to appear)\n"
             "- {\"action\": \"REPLY\", \"text\": \"<the answer>\"} (Use this to answer questions, extract prices, or summarize data from the UI elements, instead of just clicking)\n"
             "- {\"action\": \"DONE\"} (when the task is fully completed)\n"
@@ -147,7 +147,8 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "If you encounter an unexpected popup, captcha, or cannot find the target, DO NOT guess or fail. "
             "Instead, return an array with a single JSON action: [{\"action\": \"ASK_HUMAN\", \"reason\": \"<your specific question>\"}].\n"
             "Audio Dictation Rule: Format dictated text appropriately for UI inputs. For example, if the user dictates an email address and speaks symbols phonetically (e.g., 'at sign' or Slovak 'zavináč' -> '@', 'dot' or Slovak 'bodka' -> '.'), replace the spoken words with the actual mathematical/email symbols.\n"
-            "Return ONLY a valid JSON array, for example: [{\"action\": \"CLICK\", \"target_id\": \"1\"}, {\"action\": \"TYPE\", \"target_id\": \"2\", \"text\": \"hello\"}]\n"
+            "Provide the 'xpath' field for CLICK, TYPE, and HOVER actions as a fallback to 'target_id', copying the exact 'xpath' value from the provided UI element.\n"
+            "Return ONLY a valid JSON array, for example: [{\"action\": \"CLICK\", \"target_id\": \"1\", \"xpath\": \"//div\"}, {\"action\": \"TYPE\", \"target_id\": \"2\", \"text\": \"hello\"}]\n"
         )
         if global_prompt:
             system_instruction += f"Global Instructions:\n{global_prompt}\n\n"
@@ -182,16 +183,22 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                     parsed_actions = []
                     for action_data in actions_data:
                         if action_data.get("action") == "CLICK" and "target_id" in action_data:
-                            parsed_actions.append({
+                            action_dict = {
                                 "action": "CLICK",
                                 "target_id": str(action_data["target_id"])
-                            })
+                            }
+                            if "xpath" in action_data:
+                                action_dict["xpath"] = str(action_data["xpath"])
+                            parsed_actions.append(action_dict)
                         elif action_data.get("action") == "TYPE" and "target_id" in action_data and "text" in action_data:
-                            parsed_actions.append({
+                            action_dict = {
                                 "action": "TYPE",
                                 "target_id": str(action_data["target_id"]),
                                 "text": str(action_data["text"])
-                            })
+                            }
+                            if "xpath" in action_data:
+                                action_dict["xpath"] = str(action_data["xpath"])
+                            parsed_actions.append(action_dict)
                         elif action_data.get("action") == "SCROLL" and "direction" in action_data:
                             parsed_actions.append({
                                 "action": "SCROLL",
@@ -213,10 +220,13 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                                 "key": str(action_data["key"])
                             })
                         elif action_data.get("action") == "HOVER" and "target_id" in action_data:
-                            parsed_actions.append({
+                            action_dict = {
                                 "action": "HOVER",
                                 "target_id": str(action_data["target_id"])
-                            })
+                            }
+                            if "xpath" in action_data:
+                                action_dict["xpath"] = str(action_data["xpath"])
+                            parsed_actions.append(action_dict)
                         elif action_data.get("action") == "WAIT_FOR" and "selector" in action_data:
                             parsed_actions.append({
                                 "action": "WAIT_FOR",
@@ -250,16 +260,22 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             try:
                 action_data = json.loads(match_single.group(0))
                 if action_data.get("action") == "CLICK" and "target_id" in action_data:
-                    return [{
+                    action_dict = {
                         "action": "CLICK",
                         "target_id": str(action_data["target_id"])
-                    }]
+                    }
+                    if "xpath" in action_data:
+                        action_dict["xpath"] = str(action_data["xpath"])
+                    return [action_dict]
                 elif action_data.get("action") == "TYPE" and "target_id" in action_data and "text" in action_data:
-                    return [{
+                    action_dict = {
                         "action": "TYPE",
                         "target_id": str(action_data["target_id"]),
                         "text": str(action_data["text"])
-                    }]
+                    }
+                    if "xpath" in action_data:
+                        action_dict["xpath"] = str(action_data["xpath"])
+                    return [action_dict]
                 elif action_data.get("action") == "SCROLL" and "direction" in action_data:
                     return [{
                         "action": "SCROLL",
@@ -281,10 +297,13 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                         "key": str(action_data["key"])
                     }]
                 elif action_data.get("action") == "HOVER" and "target_id" in action_data:
-                    return [{
+                    action_dict = {
                         "action": "HOVER",
                         "target_id": str(action_data["target_id"])
-                    }]
+                    }
+                    if "xpath" in action_data:
+                        action_dict["xpath"] = str(action_data["xpath"])
+                    return [action_dict]
                 elif action_data.get("action") == "WAIT_FOR" and "selector" in action_data:
                     return [{
                         "action": "WAIT_FOR",

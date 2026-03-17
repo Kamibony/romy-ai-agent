@@ -65,6 +65,35 @@ window.RomyDomMapper = {
             return nodes;
         }
 
+        function getXPath(element) {
+            if (!element) return '';
+            const id = element.getAttribute ? element.getAttribute('id') : null;
+            if (id) {
+                return 'id("' + id + '")';
+            }
+            if (element === document.body) {
+                return element.tagName.toLowerCase();
+            }
+            if (!element.parentNode) {
+                return '';
+            }
+
+            var ix = 0;
+            var siblings = element.parentNode.childNodes;
+            for (var i = 0; i < siblings.length; i++) {
+                var sibling = siblings[i];
+                if (sibling === element) {
+                    const parentXPath = getXPath(element.parentNode);
+                    if (!parentXPath) return '';
+                    return parentXPath + '/' + element.tagName.toLowerCase() + '[' + (ix + 1) + ']';
+                }
+                if (sibling.nodeType === 1 && sibling.tagName === element.tagName) {
+                    ix++;
+                }
+            }
+            return '';
+        }
+
         const allNodes = getAllNodes(document);
 
         allNodes.forEach((node) => {
@@ -108,6 +137,7 @@ window.RomyDomMapper = {
                     id: uniqueId,
                     type: node.tagName.toLowerCase(),
                     text: textContent,
+                    xpath: getXPath(node),
                     // Optionally calculate center coordinates if needed for fallback
                     bounds: {
                         x: rect.x,
