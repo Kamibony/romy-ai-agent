@@ -47,10 +47,18 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
 
         contents = []
         if audio_b64:
+            audio_data = base64.b64decode(audio_b64)
+            # Detect mime type based on magic bytes
+            # WebM starts with 1A 45 DF A3
+            if audio_data.startswith(b'\x1aE\xdf\xa3'):
+                mime_type = "audio/webm"
+            else:
+                mime_type = "audio/wav"
+
             contents.append(
                 types.Part.from_bytes(
-                    data=base64.b64decode(audio_b64),
-                    mime_type="audio/wav"  # Defaulting to wav as client captures wav
+                    data=audio_data,
+                    mime_type=mime_type
                 )
             )
 

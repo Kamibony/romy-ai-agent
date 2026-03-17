@@ -127,6 +127,7 @@ def firestore_update_document(collection: str, doc_id: str, updates: Dict[str, A
             # to mitigate stubborn [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol
             with requests.Session() as session:
                 response = session.patch(url, json=payload, headers=headers, timeout=10)
+                logging.info(f"Status update response for {doc_id}: {response.status_code} - {response.text}")
                 response.raise_for_status()
                 return  # Success, exit the function
         except requests.exceptions.HTTPError as e:
