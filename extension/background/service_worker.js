@@ -18,18 +18,32 @@ async function setupOffscreenDocument(path) {
     });
 }
 
-// Local bridge polling to receive commands from the Desktop Agent Orchestrator
-let localBridgeInterval = null;
+// Local bridge WebSocket to receive commands from the Desktop Agent Orchestrator
+let localBridgeWs = null;
+let reconnectTimeout = null;
 
-function startLocalBridgePolling() {
-    if (localBridgeInterval) return;
-    console.log("Starting local bridge polling...");
-    localBridgeInterval = setInterval(async () => {
-        try {
-            const response = await fetch('http://127.0.0.1:8765/command');
-            if (response.ok) {
-                const cmd = await response.json();
-                if (cmd && Object.keys(cmd).length > 0) {
+function connectLocalBridge() {
+    if (localBridgeWs) {
+        return;
+    }
+
+    console.log("Connecting to local bridge via WebSocket...");
+    try {
+        localBridgeWs = new WebSocket('ws://127.0.0.1:8765');
+
+        localBridgeWs.onopen = () => {
+            console.log("WebSocket connected to local bridge.");
+            if (reconnectTimeout) {
+                clearTimeout(reconnectTimeout);
+                reconnectTimeout = null;
+            }
+        };
+
+        localBridgeWs.onmessage = async (event) => {
+            try {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'command') {
+                    const cmd = msg.payload;
                     console.log("Received command from Python Agent:", cmd);
                     let result;
                     try {
@@ -38,28 +52,48 @@ function startLocalBridgePolling() {
                         console.error("Error processing command internally:", err);
                         result = { success: false, error: err.message || String(err) };
                     }
+
                     // Send result back
-                    await fetch('http://127.0.0.1:8765/result', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(result)
-                    });
+                    if (localBridgeWs && localBridgeWs.readyState === WebSocket.OPEN) {
+                        localBridgeWs.send(JSON.stringify({ type: 'result', payload: result }));
+                    } else {
+                        console.error("WebSocket not open. Cannot send result.");
+                    }
                 }
+            } catch (err) {
+                console.error("Error handling WebSocket message:", err);
             }
-        } catch (error) {
+        };
+
+        localBridgeWs.onclose = () => {
+            console.log("WebSocket connection closed. Reconnecting in 2s...");
+            localBridgeWs = null;
+            reconnectTimeout = setTimeout(connectLocalBridge, 2000);
+        };
+
+        localBridgeWs.onerror = (error) => {
             // Silence network errors to avoid spamming the console when Python agent is down
-            // console.error("Local bridge polling error:", error);
-        }
-    }, 2000); // Poll every 2 seconds
+            // console.error("WebSocket error:", error);
+            if (localBridgeWs) {
+                localBridgeWs.close(); // Force close to trigger reconnect
+            }
+        };
+    } catch (e) {
+        console.error("Error setting up WebSocket:", e);
+        reconnectTimeout = setTimeout(connectLocalBridge, 2000);
+    }
 }
 
-startLocalBridgePolling();
+connectLocalBridge();
 
-export function stopLocalBridgePolling() {
-    if (localBridgeInterval) {
-        clearInterval(localBridgeInterval);
-        localBridgeInterval = null;
-        console.log("Local bridge polling stopped.");
+export function disconnectLocalBridge() {
+    if (localBridgeWs) {
+        localBridgeWs.close();
+        localBridgeWs = null;
+    }
+    if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+        reconnectTimeout = null;
     }
 }
 
@@ -301,7 +335,63 @@ async function processCommandInternally(payload) {
         const uiElements = domMapResponse.elements;
         sendTelemetryLog(`Extracted ${uiElements.length} elements from DOM.`);
 
-        // 3. Send to Backend
+        // 3. Capture SoM Screenshot using CDP
+        sendTelemetryLog(`Capturing Set-of-Mark (SoM) screenshot via CDP...`);
+        let screenshotBase64 = null;
+        try {
+            // Ensure debugger is attached
+            await new Promise((resolve, reject) => {
+                chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
+                    if (chrome.runtime.lastError && !chrome.runtime.lastError.message.includes("Cannot attach to this target")) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                    } else {
+                        resolve();
+                    }
+                });
+            });
+
+            // Inject SoM overlay
+            await new Promise((resolve) => {
+                chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.INJECT_SOM }, resolve);
+            });
+
+            // Give the browser a moment to render the SVG overlay
+            await new Promise(r => setTimeout(r, 100));
+
+            // Capture Screenshot
+            const captureResult = await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: tab.id }, "Page.captureScreenshot", { format: "webp", quality: 80 }, (result) => {
+                    if (chrome.runtime.lastError) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                    } else {
+                        resolve(result);
+                    }
+                });
+            });
+
+            if (captureResult && captureResult.data) {
+                screenshotBase64 = captureResult.data;
+                sendTelemetryLog(`Successfully captured SoM screenshot.`);
+            } else {
+                sendTelemetryLog(`Failed to capture screenshot data.`);
+            }
+
+        } catch (cdpError) {
+            sendTelemetryLog(`CDP Screenshot Error: ${cdpError.message}`);
+        } finally {
+            // Always remove the SoM overlay immediately
+            await new Promise((resolve) => {
+                chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.REMOVE_SOM }, resolve);
+            });
+
+            // Detach debugger
+            chrome.debugger.detach({ tabId: tab.id }, () => {
+                // Ignore detach errors since it might have already been detached
+                const err = chrome.runtime.lastError;
+            });
+        }
+
+        // 4. Send to Backend
         sendTelemetryLog(`Sending payload to Backend...`);
         const token = await getAuthToken();
         if (!token) {
@@ -312,6 +402,7 @@ async function processCommandInternally(payload) {
             audio_base64: audioBase64,
             command_text: commandText,
             ui_elements: uiElements,
+            screenshot_base64: screenshotBase64,
             thread_history: threadHistory
         };
 

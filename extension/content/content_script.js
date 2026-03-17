@@ -9,6 +9,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         case window.MESSAGE_TYPES.EXECUTE_ACTION:
             handleExecuteAction(request.payload, sendResponse);
             return true; // async
+        case window.MESSAGE_TYPES.INJECT_SOM:
+            handleInjectSom(sendResponse);
+            return true;
+        case window.MESSAGE_TYPES.REMOVE_SOM:
+            handleRemoveSom(sendResponse);
+            return true;
     }
 });
 
@@ -175,6 +181,101 @@ function handleExecuteAction(action, sendResponse) {
         sendResponse({ success: true });
     } catch (error) {
         console.error("Execution error:", error);
+        sendResponse({ error: error.message });
+    }
+}
+// --- Set-of-Mark (SoM) Logic ---
+function handleInjectSom(sendResponse) {
+    try {
+        // Remove existing overlay if present
+        handleRemoveSom(() => {});
+
+        const elements = window.RomyDomMapper.extractUIElements();
+
+        const overlayContainer = document.createElement('div');
+        overlayContainer.id = 'romy-som-overlay-container';
+        // Make sure it sits on top of everything but doesn't block interactions
+        Object.assign(overlayContainer.style, {
+            position: 'absolute',
+            top: '0',
+            left: '0',
+            width: '100%',
+            height: '100%',
+            pointerEvents: 'none',
+            zIndex: '2147483647', // Max z-index
+            overflow: 'hidden' // prevents adding scrollbars
+        });
+
+        elements.forEach(el => {
+            const target = document.querySelector(`[data-romy-id="${el.id}"]`);
+            if (!target) return;
+
+            const rect = target.getBoundingClientRect();
+            // Ensure element is actually visible in the viewport before drawing
+            if (rect.width === 0 || rect.height === 0 || rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth) {
+                return;
+            }
+
+            const computedStyle = window.getComputedStyle(target);
+            if (computedStyle.visibility === 'hidden' || computedStyle.display === 'none' || computedStyle.opacity === '0') {
+                return;
+            }
+
+            const tag = document.createElement('div');
+            tag.textContent = el.id;
+            Object.assign(tag.style, {
+                position: 'absolute',
+                top: `${window.scrollY + rect.top}px`,
+                left: `${window.scrollX + rect.left}px`,
+                backgroundColor: 'red',
+                color: 'white',
+                padding: '1px 3px',
+                fontSize: '10px',
+                fontWeight: 'bold',
+                borderRadius: '3px',
+                border: '1px solid white',
+                pointerEvents: 'none',
+                boxShadow: '0 0 2px black',
+                zIndex: '2147483647',
+                // Add slight offset so it doesn't cover the exact corner completely if needed
+                transform: 'translate(-50%, -50%)'
+            });
+
+            // Optional: Draw a bounding box frame
+            const box = document.createElement('div');
+            Object.assign(box.style, {
+                position: 'absolute',
+                top: `${window.scrollY + rect.top}px`,
+                left: `${window.scrollX + rect.left}px`,
+                width: `${rect.width}px`,
+                height: `${rect.height}px`,
+                border: '1px dashed red',
+                pointerEvents: 'none',
+                zIndex: '2147483646',
+                boxSizing: 'border-box'
+            });
+
+            overlayContainer.appendChild(box);
+            overlayContainer.appendChild(tag);
+        });
+
+        document.body.appendChild(overlayContainer);
+        sendResponse({ success: true, count: elements.length });
+    } catch (error) {
+        console.error("Failed to inject SoM overlay:", error);
+        sendResponse({ error: error.message });
+    }
+}
+
+function handleRemoveSom(sendResponse) {
+    try {
+        const overlay = document.getElementById('romy-som-overlay-container');
+        if (overlay) {
+            overlay.remove();
+        }
+        sendResponse({ success: true });
+    } catch (error) {
+        console.error("Failed to remove SoM overlay:", error);
         sendResponse({ error: error.message });
     }
 }

@@ -30,6 +30,7 @@ pyinstaller --noconfirm ^
             --hidden-import=tkinter ^
             --hidden-import=pystray ^
             --hidden-import=PIL ^
+            --hidden-import=websockets ^
             --name="ROMY Agent" ^
             main.py
 
