@@ -5,7 +5,7 @@ from typing import Optional
 
 from auth import verify_firebase_token
 from db import check_user_license, get_task_session, update_task_session, create_task_session
-from ai_service import process_with_gemini
+from ai_service import process_with_gemini, transcribe_audio_with_gemini, classify_intent_with_gemini
 from firebase_admin import firestore
 
 app = FastAPI(title="ROMY AI Agent Backend")
@@ -17,6 +17,10 @@ class AgentCommandRequest(BaseModel):
     audio_base64: Optional[str] = None
     command_text: Optional[str] = None
     session_id: Optional[str] = None
+
+class ClassifyIntentRequest(BaseModel):
+    command_text: Optional[str] = None
+    audio_base64: Optional[str] = None
 
 # Allow all origins, methods, and headers for CORS (adjust as needed in production)
 app.add_middleware(
@@ -31,6 +35,35 @@ app.add_middleware(
 def health_check():
     """Health-check endpoint."""
     return {"status": "ROMY API is running"}
+
+@app.post("/api/classify_intent")
+def classify_intent(request: ClassifyIntentRequest, uid: str = Depends(verify_firebase_token)):
+    """
+    Endpoint to dynamically classify user intent (WEB or OS).
+    Also transcribes audio if command_text is empty.
+    """
+    if not check_user_license(uid):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User license is not active.",
+        )
+
+    command_text = request.command_text or ""
+
+    if not command_text and request.audio_base64:
+        # Transcribe audio to get the command text
+        command_text = transcribe_audio_with_gemini(request.audio_base64)
+
+    if not command_text:
+        # If still empty, default to OS or could be an error
+        return {"intent": "OS", "command_text": ""}
+
+    intent = classify_intent_with_gemini(command_text)
+
+    return {
+        "intent": intent,
+        "command_text": command_text
+    }
 
 @app.post("/api/v1/agent/command")
 def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_firebase_token)):

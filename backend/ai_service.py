@@ -20,6 +20,72 @@ if genai is not None:
     except Exception as e:
         print(f"Failed to initialize Gemini client: {e}")
 
+def transcribe_audio_with_gemini(audio_b64: str) -> str:
+    """
+    Transcribes audio to text using Gemini 2.5 Flash.
+    """
+    if not audio_b64 or gemini_client is None:
+        return ""
+
+    try:
+        audio_data = base64.b64decode(audio_b64)
+        if audio_data.startswith(b'\x1aE\xdf\xa3'):
+            mime_type = "audio/webm"
+        else:
+            mime_type = "audio/wav"
+
+        contents = [
+            types.Part.from_bytes(
+                data=audio_data,
+                mime_type=mime_type
+            ),
+            "Transcribe this audio. Return ONLY the transcribed text without any extra explanation or formatting."
+        ]
+
+        response = gemini_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=contents,
+            config=types.GenerateContentConfig(
+                temperature=0.0,
+            )
+        )
+        return response.text.strip()
+    except Exception as e:
+        print(f"Error transcribing audio: {e}")
+        return ""
+
+def classify_intent_with_gemini(command_text: str) -> str:
+    """
+    Classifies the user intent strictly as 'WEB' or 'OS' using Gemini 2.5 Flash.
+    """
+    if not command_text or gemini_client is None:
+        return "OS"
+
+    try:
+        system_instruction = (
+            "You are a routing dispatcher for an AI agent. Read the user's command. "
+            "If the task requires a web browser (e.g., searching for flights, interacting with websites like pelikan.cz, scraping data), "
+            "output exactly the word 'WEB'. If it requires interacting with native desktop applications or the OS, "
+            "output exactly the word 'OS'. Do not include any other text."
+        )
+
+        response = gemini_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[command_text],
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.0,
+            )
+        )
+
+        result = response.text.strip().upper()
+        if result == "WEB":
+            return "WEB"
+        return "OS"
+    except Exception as e:
+        print(f"Error classifying intent: {e}")
+        return "OS"
+
 def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[str] = None, command_text: Optional[str] = None, thread_history: str = "") -> list[Dict[str, Any]]:
     """
     Uses Gemini 2.5 Flash to process audio/text commands and UI elements, returning a list of actions.

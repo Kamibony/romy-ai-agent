@@ -412,40 +412,48 @@ def scan_ui_elements() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]
 
     return ui_elements, memory_map
 
-def is_web_command(command_text: str) -> bool:
-    """Simple heuristic to determine if a command is web-related."""
-    if not command_text or not command_text.strip():
-        return False
+def classify_intent(command_text: str, audio_b64: str) -> Tuple[str, str]:
+    """
+    Calls the backend API to dynamically classify if a command is meant for WEB or OS.
+    If command_text is empty, the backend uses audio_b64 to transcribe first.
+    Returns (intent_string, transcribed_or_original_command_text).
+    """
+    if not CURRENT_TOKEN:
+        logging.error("Missing token, cannot classify intent.")
+        return "OS", command_text
 
-    text = command_text.lower()
+    # Derive base URL from BACKEND_URL, replacing the path
+    # Default is https://romy-backend-1049976869239.europe-west1.run.app/api/v1/agent/command
+    # We want https://romy-backend-1049976869239.europe-west1.run.app/api/classify_intent
+    base_url = BACKEND_URL.split("/api/v1")[0] if "/api/v1" in BACKEND_URL else BACKEND_URL.rsplit('/', 1)[0]
+    # Handle local cases where it might just be the base URL
+    if not base_url.endswith("/"):
+        base_url += "/"
+    url = f"{base_url.rstrip('/')}/api/classify_intent"
 
-    # Extended keywords and regex for domain extensions
-    keywords = ["browser", "web", "chrome", "website", "http", "www", "url", "tab", "page",
-                "youtube", "google", "wikipedia", "facebook", "twitter", "linkedin", "search for",
-                "open site"]
+    payload = {
+        "command_text": command_text,
+        "audio_base64": audio_b64
+    }
 
-    if any(kw in text for kw in keywords):
-        return True
+    headers = {
+        "Authorization": f"Bearer {CURRENT_TOKEN}",
+        "Content-Type": "application/json"
+    }
 
-    # Check for domain-like strings (e.g., pelikan.cz, google.com)
-    domain_pattern = r'\b[a-zA-Z0-9-]+\.(com|cz|org|net|io|co|edu|gov|info|biz)\b'
-    if re.search(domain_pattern, text):
-        return True
-
-    # Generic "open <word>" could mean open an app or a site, but we can safely route "open <domain>"
-    # "open pelikan" or similar
-    if "open " in text and ("pelikan" in text or "site" in text):
-        return True
-
-    # Also check if the active window is Chrome
     try:
-        active_window = auto.GetForegroundControl()
-        if active_window and ("chrome" in active_window.Name.lower() or "browser" in active_window.Name.lower()):
-            return True
-    except Exception:
-        pass
+        response = requests.post(url, json=payload, headers=headers, timeout=20)
+        response.raise_for_status()
+        data = response.json()
 
-    return False
+        intent = data.get("intent", "OS")
+        final_text = data.get("command_text", command_text)
+
+        logging.info(f"Intent classified dynamically as '{intent}' with text: '{final_text}'")
+        return intent, final_text
+    except Exception as e:
+        logging.error(f"Error classifying intent with backend: {e}. Defaulting to OS.")
+        return "OS", command_text
 
 def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -> None:
     """Runs the agent loop triggered by a remote text command."""
@@ -462,9 +470,11 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
         except Exception:
             if winsound: winsound.Beep(800, 200)
 
-        # Command Routing
+        # Command Routing via AI
+        intent, command_text = classify_intent(command_text, audio_b64)
+
         # If command is web-related, delegate the whole loop to the Chrome extension
-        if is_web_command(command_text):
+        if intent == "WEB":
             logging.info("Command routed to Web (Chrome Extension).")
             from local_bridge import bridge
             payload = {
@@ -813,10 +823,25 @@ def execute_voice_agent_loop() -> None:
         except Exception:
             if winsound: winsound.Beep(800, 200)
 
-        # 2. Start Agentic Loop
+        # 2. Command Routing via AI
+        intent, command_text = classify_intent("", audio_b64)
+
+        # If it's a web intent, pass to the Chrome Extension
+        if intent == "WEB":
+            logging.info("Voice command routed to Web (Chrome Extension).")
+            from local_bridge import bridge
+            payload = {
+                "commandText": command_text,
+                "audioBase64": audio_b64
+            }
+            # Wait for Chrome to execute and return the result
+            result = bridge.delegate_command(payload)
+            return
+
+        # Start Agentic Loop for OS
+        logging.info("Voice command routed to OS (Native).")
         iteration = 0
         doc_id = "voice_session_1"
-        command_text = ""
 
         # Create or ensure the document exists
         try:
