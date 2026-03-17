@@ -3,6 +3,7 @@ import base64
 import io
 import time
 import os
+import re
 import requests
 import queue
 
@@ -75,7 +76,7 @@ def set_firebase_token(token: str) -> None:
     CURRENT_TOKEN = token
 
 def firestore_update_document(collection: str, doc_id: str, updates: Dict[str, Any], delete_fields: list = None) -> None:
-    """Updates a Firestore document using the REST API."""
+    """Updates a Firestore document using the REST API with retries for network resilience."""
     if not CURRENT_TOKEN:
         logging.error("Missing token, cannot update Firestore.")
         return
@@ -96,7 +97,6 @@ def firestore_update_document(collection: str, doc_id: str, updates: Dict[str, A
         elif isinstance(val, float):
             fields[key] = {"doubleValue": val}
         elif isinstance(val, dict):
-            # A simplistic map approach if needed, not fully featured
             pass
 
     if delete_fields:
@@ -120,11 +120,29 @@ def firestore_update_document(collection: str, doc_id: str, updates: Dict[str, A
         "Content-Type": "application/json"
     }
 
-    try:
-        response = requests.patch(url, json=payload, headers=headers)
-        response.raise_for_status()
-    except Exception as e:
-        logging.error(f"Error updating Firestore doc {doc_id}: {e}")
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # Using Session object specifically inside the loop can help reset the connection pool
+            # to mitigate stubborn [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol
+            with requests.Session() as session:
+                response = session.patch(url, json=payload, headers=headers, timeout=10)
+                response.raise_for_status()
+                return  # Success, exit the function
+        except requests.exceptions.HTTPError as e:
+            logging.error(f"HTTPError updating Firestore doc {doc_id} on attempt {attempt+1}: {e} - Response: {e.response.text}")
+            if e.response.status_code in [400, 401, 403, 404]:
+                break # Non-retriable HTTP errors
+        except requests.exceptions.RequestException as e:
+            logging.warning(f"Network/SSL error updating Firestore doc {doc_id} on attempt {attempt+1}: {e}")
+        except Exception as e:
+            logging.error(f"Unexpected error updating Firestore doc {doc_id} on attempt {attempt+1}: {e}")
+            break
+
+        if attempt < max_retries - 1:
+            time.sleep(2 ** attempt)
+
+    logging.error(f"Failed to update Firestore doc {doc_id} after {max_retries} attempts.")
 
 def firestore_get_document(collection: str, doc_id: str) -> Dict[str, Any]:
     """Gets a Firestore document using the REST API."""
@@ -399,8 +417,23 @@ def is_web_command(command_text: str) -> bool:
         return False
 
     text = command_text.lower()
-    keywords = ["browser", "web", "chrome", "website", "http", "www", "url", "tab", "page"]
+
+    # Extended keywords and regex for domain extensions
+    keywords = ["browser", "web", "chrome", "website", "http", "www", "url", "tab", "page",
+                "youtube", "google", "wikipedia", "facebook", "twitter", "linkedin", "search for",
+                "open site"]
+
     if any(kw in text for kw in keywords):
+        return True
+
+    # Check for domain-like strings (e.g., pelikan.cz, google.com)
+    domain_pattern = r'\b[a-zA-Z0-9-]+\.(com|cz|org|net|io|co|edu|gov|info|biz)\b'
+    if re.search(domain_pattern, text):
+        return True
+
+    # Generic "open <word>" could mean open an app or a site, but we can safely route "open <domain>"
+    # "open pelikan" or similar
+    if "open " in text and ("pelikan" in text or "site" in text):
         return True
 
     # Also check if the active window is Chrome
