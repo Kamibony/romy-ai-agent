@@ -473,42 +473,161 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
         # Command Routing via AI
         intent, command_text = classify_intent(command_text, audio_b64)
 
-        # If command is web-related, delegate the whole loop to the Chrome extension
+        # If command is web-related, orchestrate the ReAct loop with the Chrome extension
         if intent == "WEB":
-            logging.info("Command routed to Web (Chrome Extension).")
+            logging.info("Command routed to Web (Chrome Extension). Starting ReAct loop.")
             from local_bridge import bridge
-            payload = {
-                "commandText": command_text,
-                "audioBase64": audio_b64
-            }
-            # Wait for Chrome to execute and return the result
-            result = bridge.delegate_command(payload)
-            if result.get("success"):
-                final_status = "completed"
-            elif result.get("helpNeeded"):
-                final_status = "help_needed"
+
+            iteration = 0
+            final_status = "completed"
+
+            while True:
+                if ABORT_AGENT:
+                    logging.info("Emergency abort triggered. Stopping remote agent loop.")
+                    final_status = "failed"
+                    break
+
+                if PAUSE_AGENT:
+                    time.sleep(1)
+                    continue
+
+                # Check for human response
+                data = firestore_get_document("remote_commands", doc_id)
+                if data:
+                    if data.get("status") == "help_needed":
+                        logging.info("Agent paused, waiting for human input...")
+                        time.sleep(2)
+                        continue
+
+                    if data.get("human_response"):
+                        command_text += "\nHuman instruction: " + data.get("human_response")
+                        firestore_update_document("remote_commands", doc_id, {}, delete_fields=["human_response"])
+
+                # 1. Ask extension for the current state
+                state_payload = {
+                    "action_type": "GET_STATE",
+                    "commandText": command_text,
+                    "audioBase64": audio_b64 if iteration == 0 else ""
+                }
+                logging.info(f"Requesting WEB state from extension (iteration {iteration})...")
+                state_result = bridge.delegate_command(state_payload)
+
+                if not state_result.get("success"):
+                    logging.error(f"Failed to get state from extension: {state_result.get('error')}")
+                    final_status = "failed"
+                    error_msg = state_result.get("error", "Failed to get web state.")
+                    break
+
+                ui_elements = state_result.get("ui_elements", [])
+                screenshot_base64 = state_result.get("screenshot_base64", "")
+
+                # 2. Send state to backend to receive ONE action
+                payload = {
+                    "ui_elements": ui_elements,
+                    "session_id": doc_id,
+                    "command_text": command_text,
+                    "screenshot_base64": screenshot_base64
+                }
+                if iteration == 0 and audio_b64:
+                    payload["audio_base64"] = audio_b64
+                else:
+                    payload["audio_base64"] = ""
+
+                headers = {
+                    "Authorization": f"Bearer {CURRENT_TOKEN}",
+                    "Content-Type": "application/json"
+                }
+
+                logging.info("Sending WEB state payload to backend...")
                 try:
-                    firestore_update_document("remote_commands", doc_id, {
-                        "status": "help_needed",
-                        "help_reason": result.get("reason", "Human help needed.")
-                    })
-                except Exception as e:
-                    logging.error(f"Error updating help status: {e}")
-                return # We don't mark as final_status here because we already updated with help_reason
-            else:
-                final_status = "failed"
-                try:
-                    firestore_update_document("remote_commands", doc_id, {
-                        "status": "failed",
-                        "error": result.get("error", "Unknown web execution error.")
-                    })
-                except Exception as e:
-                    logging.error(f"Error updating failed status: {e}")
-                return
+                    response = requests.post(BACKEND_URL, json=payload, headers=headers, timeout=30)
+                    response.raise_for_status()
+                    backend_data = response.json()
+
+                    if isinstance(backend_data, list):
+                        actions = backend_data
+                    elif isinstance(backend_data, dict):
+                        actions = backend_data.get("actions", [])
+                        if not actions and "action" in backend_data:
+                            actions = [backend_data]
+                    else:
+                        logging.warning(f"Unexpected response type from backend: {type(backend_data)}")
+                        actions = []
+
+                    if not actions:
+                        logging.info("No actions returned from backend. Considering task completed.")
+                        break
+
+                    # We expect strictly ONE action per the ReAct loop
+                    act = actions[0]
+                    if not isinstance(act, dict):
+                        logging.warning(f"Skipping invalid action type: {type(act)}")
+                        continue
+
+                    action_type = act.get("action", "")
+                    action_upper = str(action_type).upper()
+
+                    logging.info(f"Backend returned action: {action_upper}")
+
+                    if action_upper == "DONE":
+                        logging.info("Web task finished successfully.")
+                        break
+                    elif "ERROR" in action_upper:
+                        raw_response = act.get("raw_response", "No raw response provided")
+                        error_msg = act.get("error", "No error message provided")
+                        logging.error(f"Web agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
+                        final_status = "failed"
+                        break
+                    elif action_upper == "ASK_HUMAN":
+                        reason = act.get("reason", "No reason provided")
+                        logging.info(f"Agent asking human for help: {reason}")
+                        try:
+                            firestore_update_document("remote_commands", doc_id, {
+                                "status": "help_needed",
+                                "help_reason": reason,
+                                "screenshot_b64": screenshot_base64
+                            })
+                        except Exception as img_e:
+                            logging.error(f"Error saving help request: {img_e}")
+
+                        # We don't mark as final_status here because we already updated with help_reason
+                        # But we break out of the loop since we need to wait
+                        return
+
+                    # 3. Delegate action to the extension
+                    exec_payload = {
+                        "action_type": "EXECUTE_ACTION",
+                        "action": act
+                    }
+                    logging.info("Delegating action to extension...")
+                    exec_result = bridge.delegate_command(exec_payload)
+
+                    if not exec_result.get("success"):
+                        logging.error(f"Failed to execute action in extension: {exec_result.get('error')}")
+                        final_status = "failed"
+                        error_msg = exec_result.get("error", "Action execution failed in Chrome.")
+                        break
+
+                except requests.exceptions.RequestException as req_e:
+                    if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
+                        handle_token_expiry()
+                        final_status = "failed"
+                        error_msg = "Token expired"
+                        break
+                    logging.info(f"Request failed: {req_e}")
+                    final_status = "failed"
+                    error_msg = f"Network request failed: {req_e}"
+                    break
+
+                time.sleep(1)
+                iteration += 1
 
             # Update final document status
             try:
-                firestore_update_document("remote_commands", doc_id, {"status": final_status})
+                update_payload = {"status": final_status}
+                if final_status == "failed" and "error_msg" in locals():
+                    update_payload["error"] = error_msg
+                firestore_update_document("remote_commands", doc_id, update_payload)
                 logging.info(f"Remote command {doc_id} marked as {final_status} from Web execution.")
             except Exception as e:
                 pass
@@ -828,14 +947,153 @@ def execute_voice_agent_loop() -> None:
 
         # If it's a web intent, pass to the Chrome Extension
         if intent == "WEB":
-            logging.info("Voice command routed to Web (Chrome Extension).")
+            logging.info("Voice command routed to Web (Chrome Extension). Starting ReAct loop.")
             from local_bridge import bridge
-            payload = {
-                "commandText": command_text,
-                "audioBase64": audio_b64
-            }
-            # Wait for Chrome to execute and return the result
-            result = bridge.delegate_command(payload)
+
+            iteration = 0
+            doc_id = "voice_session_1"
+
+            # Create or ensure the document exists
+            try:
+                firestore_update_document("remote_commands", doc_id, {
+                    "status": "in_progress",
+                    "command": "voice command"
+                })
+            except Exception as e:
+                logging.error(f"Error setting up voice session document: {e}")
+
+            while True:
+                if ABORT_AGENT:
+                    logging.info("Emergency abort triggered. Stopping voice agent loop.")
+                    break
+
+                if PAUSE_AGENT:
+                    time.sleep(1)
+                    continue
+
+                # Check for human response
+                try:
+                    data = firestore_get_document("remote_commands", doc_id)
+                    if data:
+                        if data.get("status") == "help_needed":
+                            logging.info("Agent paused, waiting for human input...")
+                            time.sleep(2)
+                            continue
+
+                        if data.get("human_response"):
+                            command_text += "\nHuman instruction: " + data.get("human_response")
+                            firestore_update_document("remote_commands", doc_id, {}, delete_fields=["human_response"])
+                except Exception as e:
+                    logging.error(f"Error checking human response: {e}")
+
+                # 1. Ask extension for the current state
+                state_payload = {
+                    "action_type": "GET_STATE",
+                    "commandText": command_text,
+                    "audioBase64": audio_b64 if iteration == 0 else ""
+                }
+                logging.info(f"Requesting WEB state from extension (iteration {iteration})...")
+                state_result = bridge.delegate_command(state_payload)
+
+                if not state_result.get("success"):
+                    logging.error(f"Failed to get state from extension: {state_result.get('error')}")
+                    break
+
+                ui_elements = state_result.get("ui_elements", [])
+                screenshot_base64 = state_result.get("screenshot_base64", "")
+
+                # 2. Send state to backend to receive ONE action
+                payload = {
+                    "ui_elements": ui_elements,
+                    "session_id": doc_id,
+                    "command_text": command_text,
+                    "screenshot_base64": screenshot_base64
+                }
+                if iteration == 0 and audio_b64:
+                    payload["audio_base64"] = audio_b64
+                else:
+                    payload["audio_base64"] = ""
+
+                headers = {
+                    "Authorization": f"Bearer {CURRENT_TOKEN}",
+                    "Content-Type": "application/json"
+                }
+
+                logging.info("Sending WEB state payload to backend...")
+                try:
+                    response = requests.post(BACKEND_URL, json=payload, headers=headers, timeout=30)
+                    response.raise_for_status()
+                    backend_data = response.json()
+
+                    if isinstance(backend_data, list):
+                        actions = backend_data
+                    elif isinstance(backend_data, dict):
+                        actions = backend_data.get("actions", [])
+                        if not actions and "action" in backend_data:
+                            actions = [backend_data]
+                    else:
+                        logging.warning(f"Unexpected response type from backend: {type(backend_data)}")
+                        actions = []
+
+                    if not actions:
+                        logging.info("No actions returned from backend. Considering task completed.")
+                        break
+
+                    # We expect strictly ONE action per the ReAct loop
+                    act = actions[0]
+                    if not isinstance(act, dict):
+                        logging.warning(f"Skipping invalid action type: {type(act)}")
+                        continue
+
+                    action_type = act.get("action", "")
+                    action_upper = str(action_type).upper()
+
+                    logging.info(f"Backend returned action: {action_upper}")
+
+                    if action_upper == "DONE":
+                        logging.info("Web task finished successfully.")
+                        break
+                    elif "ERROR" in action_upper:
+                        raw_response = act.get("raw_response", "No raw response provided")
+                        error_msg = act.get("error", "No error message provided")
+                        logging.error(f"Web agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
+                        break
+                    elif action_upper == "ASK_HUMAN":
+                        reason = act.get("reason", "No reason provided")
+                        logging.info(f"Agent asking human for help: {reason}")
+                        try:
+                            firestore_update_document("remote_commands", doc_id, {
+                                "status": "help_needed",
+                                "help_reason": reason,
+                                "screenshot_b64": screenshot_base64
+                            })
+                        except Exception as img_e:
+                            logging.error(f"Error saving help request: {img_e}")
+                        break
+
+                    # 3. Delegate action to the extension
+                    exec_payload = {
+                        "action_type": "EXECUTE_ACTION",
+                        "action": act
+                    }
+                    logging.info("Delegating action to extension...")
+                    exec_result = bridge.delegate_command(exec_payload)
+
+                    if not exec_result.get("success"):
+                        logging.error(f"Failed to execute action in extension: {exec_result.get('error')}")
+                        break
+
+                except requests.exceptions.RequestException as req_e:
+                    if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
+                        handle_token_expiry()
+                        break
+                    logging.info(f"Request failed: {req_e}")
+                    break
+
+                time.sleep(1)
+                iteration += 1
+
+            # Finish voice loop for Web
             return
 
         # Start Agentic Loop for OS

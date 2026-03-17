@@ -47,7 +47,14 @@ function connectLocalBridge() {
                     console.log("Received command from Python Agent:", cmd);
                     let result;
                     try {
-                        result = await processCommandInternally(cmd);
+                        if (cmd.action_type === 'GET_STATE') {
+                            result = await handleGetState(cmd);
+                        } else if (cmd.action_type === 'EXECUTE_ACTION') {
+                            result = await handleExecuteNativeAction(cmd);
+                        } else {
+                            // Legacy fallback if needed
+                            result = await processCommandInternally(cmd);
+                        }
                     } catch (err) {
                         console.error("Error processing command internally:", err);
                         result = { success: false, error: err.message || String(err) };
@@ -179,6 +186,277 @@ function sendTelemetryLog(message) {
     chrome.runtime.sendMessage({ type: MESSAGE_TYPES.TELEMETRY_LOG, payload: message }).catch(() => {
         // Popup might be closed, ignore
     });
+}
+
+// Store the latest DOM bounds globally for native execution
+let latestDomBounds = {};
+
+async function handleGetState(payload) {
+    const { commandText } = payload;
+    sendTelemetryLog(`Requesting WEB State...`);
+
+    // 1. Get Active Tab
+    let [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab) {
+        [tab] = await chrome.tabs.query({ active: true });
+    }
+    if (!tab) {
+        throw new Error("No active tab found");
+    }
+
+    // Extract target URL from command text if available
+    let targetUrl = null;
+    if (commandText) {
+        const urlRegex = /(?:https?:\/\/)?(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{2,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)/i;
+        const urlMatch = commandText.match(urlRegex);
+        if (urlMatch) {
+            targetUrl = urlMatch[0];
+            if (!targetUrl.startsWith('http')) {
+                targetUrl = 'https://' + targetUrl;
+            }
+        }
+    }
+
+    const isEmptyOrNewTab = (url) => {
+        return !url || url === 'about:blank' || url.startsWith('chrome://newtab') || url.startsWith('edge://newtab');
+    };
+
+    const isRestrictedUrl = (url) => {
+        if (!url) return true;
+        return (url.startsWith('chrome://') && !url.startsWith('chrome://newtab')) ||
+               (url.startsWith('edge://') && !url.startsWith('edge://newtab')) ||
+               (url.startsWith('about:') && url !== 'about:blank') ||
+               url.startsWith('chrome-extension://');
+    };
+
+    if (targetUrl && isEmptyOrNewTab(tab.url)) {
+        sendTelemetryLog(`Navigating empty/new tab to extracted URL: ${targetUrl}`);
+        tab = await new Promise((resolve, reject) => {
+            chrome.tabs.update(tab.id, { url: targetUrl }, (updatedTab) => {
+                if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+                const listener = (tabId, info) => {
+                    if (tabId === updatedTab.id && info.status === 'complete') {
+                        chrome.tabs.onUpdated.removeListener(listener);
+                        resolve(updatedTab);
+                    }
+                };
+                chrome.tabs.onUpdated.addListener(listener);
+            });
+        });
+        await new Promise(r => setTimeout(r, 1000));
+    } else if (isRestrictedUrl(tab.url)) {
+        sendTelemetryLog(`Restricted tab detected. Opening new tab: ${targetUrl || 'https://www.google.com'}`);
+        tab = await new Promise((resolve, reject) => {
+            chrome.tabs.create({ url: targetUrl || 'https://www.google.com' }, (newTab) => {
+                if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+                const listener = (tabId, info) => {
+                    if (tabId === newTab.id && info.status === 'complete') {
+                        chrome.tabs.onUpdated.removeListener(listener);
+                        resolve(newTab);
+                    }
+                };
+                chrome.tabs.onUpdated.addListener(listener);
+            });
+        });
+        await new Promise(r => setTimeout(r, 1000));
+    }
+
+    // 2. Request DOM Map
+    sendTelemetryLog(`Extracting DOM from tab...`);
+    const requestDomMap = () => {
+        return new Promise((resolve) => {
+            chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.REQUEST_DOM_MAP }, (response) => {
+                if (chrome.runtime.lastError) {
+                    resolve({ error: chrome.runtime.lastError.message });
+                } else {
+                    resolve(response || { error: 'No response from content script' });
+                }
+            });
+        });
+    };
+
+    let domMapResponse = await requestDomMap();
+
+    if (domMapResponse.error && (domMapResponse.error.includes("Receiving end does not exist") || domMapResponse.error.includes("No response"))) {
+        sendTelemetryLog(`Content script not found. Injecting dynamically...`);
+        try {
+            await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                files: ['content/message_types_content.js', 'content/dom_mapper.js', 'content/content_script.js']
+            });
+            await new Promise(r => setTimeout(r, 500));
+            domMapResponse = await requestDomMap();
+        } catch (injectError) {
+            throw new Error(`Failed to inject content scripts: ${injectError.message}`);
+        }
+    }
+
+    if (domMapResponse.error) {
+        throw new Error(domMapResponse.error);
+    }
+
+    const uiElements = domMapResponse.elements;
+
+    // Store bounds for native execution
+    latestDomBounds = {};
+    uiElements.forEach(el => {
+        if (el.bounds) {
+            latestDomBounds[el.id] = el.bounds;
+        }
+    });
+
+    // 3. Capture SoM Screenshot using CDP
+    sendTelemetryLog(`Capturing Set-of-Mark (SoM) screenshot via CDP...`);
+    let screenshotBase64 = null;
+    try {
+        await new Promise((resolve, reject) => {
+            chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
+                if (chrome.runtime.lastError && !chrome.runtime.lastError.message.includes("Cannot attach to this target")) {
+                    reject(new Error(chrome.runtime.lastError.message));
+                } else {
+                    resolve();
+                }
+            });
+        });
+
+        await new Promise((resolve) => {
+            chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.INJECT_SOM }, resolve);
+        });
+        await new Promise(r => setTimeout(r, 100));
+
+        const captureResult = await new Promise((resolve, reject) => {
+            chrome.debugger.sendCommand({ tabId: tab.id }, "Page.captureScreenshot", { format: "webp", quality: 80 }, (result) => {
+                if (chrome.runtime.lastError) {
+                    reject(new Error(chrome.runtime.lastError.message));
+                } else {
+                    resolve(result);
+                }
+            });
+        });
+
+        if (captureResult && captureResult.data) {
+            screenshotBase64 = captureResult.data;
+        }
+    } catch (cdpError) {
+        sendTelemetryLog(`CDP Screenshot Error: ${cdpError.message}`);
+    } finally {
+        await new Promise((resolve) => {
+            chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.REMOVE_SOM }, resolve);
+        });
+        chrome.debugger.detach({ tabId: tab.id }, () => {
+            const err = chrome.runtime.lastError;
+        });
+    }
+
+    return { success: true, ui_elements: uiElements, screenshot_base64: screenshotBase64, tabId: tab.id };
+}
+
+async function handleExecuteNativeAction(payload) {
+    const action = payload.action;
+    sendTelemetryLog(`Executing Native Action: ${action.action}`);
+
+    let [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab) {
+        [tab] = await chrome.tabs.query({ active: true });
+    }
+    if (!tab) throw new Error("No active tab found");
+
+    if (action.action === "NAVIGATE") {
+        await new Promise((resolve, reject) => {
+            chrome.tabs.update(tab.id, { url: action.url }, (updatedTab) => {
+                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                else resolve();
+            });
+        });
+        return { success: true };
+    } else if (action.action === "OPEN_TAB") {
+        await new Promise((resolve, reject) => {
+            chrome.tabs.create({ url: action.url }, (newTab) => {
+                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                else resolve();
+            });
+        });
+        return { success: true };
+    } else if (action.action === "CLICK" || action.action === "TYPE") {
+        const bounds = latestDomBounds[action.target_id];
+        if (!bounds) {
+            // Fallback to content script if bounds not found
+            sendTelemetryLog(`Bounds not found for ID ${action.target_id}, falling back to content script execution.`);
+            return await new Promise((resolve, reject) => {
+                chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.EXECUTE_ACTION, payload: action }, (res) => {
+                    if (chrome.runtime.lastError) resolve({error: chrome.runtime.lastError.message});
+                    else if (res && res.error) reject(new Error(res.error));
+                    else resolve(res);
+                });
+            });
+        }
+
+        // Calculate center point for CDP click
+        const x = Math.round(bounds.x + bounds.width / 2);
+        const y = Math.round(bounds.y + bounds.height / 2);
+
+        try {
+            await new Promise((resolve, reject) => {
+                chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
+                    if (chrome.runtime.lastError && !chrome.runtime.lastError.message.includes("Cannot attach to this target")) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                    } else {
+                        resolve();
+                    }
+                });
+            });
+
+            // Native Click
+            await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
+                    type: 'mousePressed', x: x, y: y, button: 'left', clickCount: 1
+                }, (result) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(result);
+                });
+            });
+            await new Promise(r => setTimeout(r, 50)); // Tiny delay
+            await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
+                    type: 'mouseReleased', x: x, y: y, button: 'left', clickCount: 1
+                }, (result) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(result);
+                });
+            });
+
+            if (action.action === "TYPE") {
+                await new Promise(r => setTimeout(r, 100));
+
+                // Natively insert text
+                await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.insertText', {
+                        text: action.text
+                    }, (result) => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve(result);
+                    });
+                });
+
+                // Optionally press enter or trigger events
+            }
+
+        } finally {
+            chrome.debugger.detach({ tabId: tab.id }, () => {
+                const err = chrome.runtime.lastError;
+            });
+        }
+        return { success: true };
+    } else {
+        // SCROLL, PRESS_KEY, WAIT_FOR, HOVER, REPLY fall back to content script
+        return await new Promise((resolve, reject) => {
+            chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.EXECUTE_ACTION, payload: action }, (res) => {
+                if (chrome.runtime.lastError) resolve({error: chrome.runtime.lastError.message});
+                else if (res && res.error) reject(new Error(res.error));
+                else resolve(res);
+            });
+        });
+    }
 }
 
 async function processCommandInternally(payload) {

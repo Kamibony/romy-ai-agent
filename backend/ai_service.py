@@ -86,9 +86,9 @@ def classify_intent_with_gemini(command_text: str) -> str:
         print(f"Error classifying intent: {e}")
         return "OS"
 
-def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[str] = None, command_text: Optional[str] = None, thread_history: str = "") -> list[Dict[str, Any]]:
+def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[str] = None, command_text: Optional[str] = None, thread_history: str = "", screenshot_base64: Optional[str] = None) -> list[Dict[str, Any]]:
     """
-    Uses Gemini 2.5 Flash to process audio/text commands and UI elements, returning a list of actions.
+    Uses Gemini 2.5 Flash to process audio/text commands, a visual screenshot, and UI elements, returning exactly ONE action in a list.
     """
     if not audio_b64 and not command_text:
         return [{"action": "ASK_HUMAN", "reason": "EMPTY_AUDIO"}]
@@ -112,6 +112,21 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
         client = gemini_client
 
         contents = []
+        if screenshot_base64:
+            try:
+                # Remove data URI scheme if present (e.g., data:image/webp;base64,)
+                if "," in screenshot_base64:
+                    _, screenshot_base64 = screenshot_base64.split(",", 1)
+                img_data = base64.b64decode(screenshot_base64)
+                contents.append(
+                    types.Part.from_bytes(
+                        data=img_data,
+                        mime_type="image/webp"
+                    )
+                )
+            except Exception as e:
+                print(f"Error processing screenshot: {e}")
+
         if audio_b64:
             audio_data = base64.b64decode(audio_b64)
             # Detect mime type based on magic bytes
@@ -129,26 +144,23 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             )
 
         system_instruction = (
-            "You are a structural RPA assistant. You are provided with a list of UI elements currently on the screen. "
-            "Each element has an ID, xpath, and a description/name. Based on the user's command (which may be provided as audio or text), identify the correct target "
-            "elements and return ONLY a JSON array of sequential action objects. "
+            "You are a structural RPA assistant implementing a ReAct Loop. You are provided with a visual screenshot showing Set-of-Mark (SoM) labels, "
+            "along with a simplified list of UI elements on the screen. Each element in the list has an ID corresponding to the visual label, xpath, and a description.\n\n"
+            "Based on the user's command and current state, identify the correct target element and return strictly ONE action to execute next.\n\n"
             "Supported actions:\n"
             "- {\"action\": \"CLICK\", \"target_id\": \"<the_number>\", \"xpath\": \"<optional_xpath_fallback>\"}\n"
             "- {\"action\": \"TYPE\", \"target_id\": \"<the_number>\", \"xpath\": \"<optional_xpath_fallback>\", \"text\": \"<text to type>\"}\n"
-            "- {\"action\": \"SCROLL\", \"direction\": \"down\"} (or \"up\". Use this if the user asks for something likely out of view or if requested explicitly)\n"
-            "- {\"action\": \"NAVIGATE\", \"url\": \"<url>\"} (Change the current tab's URL. Prioritize NAVIGATE or OPEN_TAB if the user asks to interact with a specific website but the current extracted DOM doesn't belong to that website)\n"
-            "- {\"action\": \"OPEN_TAB\", \"url\": \"<url>\"} (Create a completely new tab with a target URL)\n"
-            "- {\"action\": \"PRESS_KEY\", \"key\": \"<key>\"} (Simulate keyboard events, e.g., 'Enter', 'Escape' on document.activeElement)\n"
-            "- {\"action\": \"HOVER\", \"target_id\": \"<the_number>\", \"xpath\": \"<optional_xpath_fallback>\"} (Simulate a mouseenter event to reveal hidden dropdowns/menus)\n"
-            "- {\"action\": \"WAIT_FOR\", \"selector\": \"<css_selector>\", \"max_wait_seconds\": 5} (Dynamic wait pausing the execution loop up to max_wait_seconds for a specific DOM element to appear)\n"
-            "- {\"action\": \"REPLY\", \"text\": \"<the answer>\"} (Use this to answer questions, extract prices, or summarize data from the UI elements, instead of just clicking)\n"
+            "- {\"action\": \"SCROLL\", \"direction\": \"down\"} (or \"up\")\n"
+            "- {\"action\": \"NAVIGATE\", \"url\": \"<url>\"}\n"
+            "- {\"action\": \"OPEN_TAB\", \"url\": \"<url>\"}\n"
+            "- {\"action\": \"PRESS_KEY\", \"key\": \"<key>\"}\n"
+            "- {\"action\": \"HOVER\", \"target_id\": \"<the_number>\", \"xpath\": \"<optional_xpath_fallback>\"}\n"
+            "- {\"action\": \"WAIT_FOR\", \"selector\": \"<css_selector>\", \"max_wait_seconds\": 5}\n"
+            "- {\"action\": \"REPLY\", \"text\": \"<the answer>\"}\n"
             "- {\"action\": \"DONE\"} (when the task is fully completed)\n"
-            "If the audio is completely silent or indiscernible, return exactly: [{\"action\": \"ASK_HUMAN\", \"reason\": \"EMPTY_AUDIO\"}]\n"
-            "If you encounter an unexpected popup, captcha, or cannot find the target, DO NOT guess or fail. "
-            "Instead, return an array with a single JSON action: [{\"action\": \"ASK_HUMAN\", \"reason\": \"<your specific question>\"}].\n"
-            "Audio Dictation Rule: Format dictated text appropriately for UI inputs. For example, if the user dictates an email address and speaks symbols phonetically (e.g., 'at sign' or Slovak 'zavináč' -> '@', 'dot' or Slovak 'bodka' -> '.'), replace the spoken words with the actual mathematical/email symbols.\n"
-            "Provide the 'xpath' field for CLICK, TYPE, and HOVER actions as a fallback to 'target_id', copying the exact 'xpath' value from the provided UI element.\n"
-            "Return ONLY a valid JSON array, for example: [{\"action\": \"CLICK\", \"target_id\": \"1\", \"xpath\": \"//div\"}, {\"action\": \"TYPE\", \"target_id\": \"2\", \"text\": \"hello\"}]\n"
+            "If you cannot determine the next step or encounter an unexpected state, return: [{\"action\": \"ASK_HUMAN\", \"reason\": \"<your specific question>\"}].\n\n"
+            "CRUCIAL INSTRUCTION: Return ONLY a valid JSON array containing exactly ONE action object. Do not return multiple actions. Do not return text outside the array.\n"
+            "Example: [{\"action\": \"CLICK\", \"target_id\": \"1\", \"xpath\": \"//button\", \"thought\": \"Clicking the login button.\"}]\n"
         )
         if global_prompt:
             system_instruction += f"Global Instructions:\n{global_prompt}\n\n"
