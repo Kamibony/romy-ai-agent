@@ -211,8 +211,8 @@ function handleInjectSom(sendResponse) {
             if (!target) return;
 
             const rect = target.getBoundingClientRect();
-            // Ensure element is actually visible in the viewport before drawing
-            if (rect.width === 0 || rect.height === 0 || rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth) {
+            // Ensure element is actually visible in the viewport before drawing (allowing partial visibility)
+            if (rect.width === 0 || rect.height === 0 || rect.bottom <= 0 || rect.top >= window.innerHeight || rect.right <= 0 || rect.left >= window.innerWidth) {
                 return;
             }
 
