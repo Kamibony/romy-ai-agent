@@ -285,7 +285,12 @@ async function processCommandInternally(payload) {
                 domMapResponse = await requestDomMap();
             } catch (injectError) {
                 sendTelemetryLog(`Failed to inject content scripts: ${injectError.message}`);
-                throw new Error(`Failed to inject content scripts: ${injectError.message}`);
+                try {
+                    await chrome.tabs.remove(tab.id);
+                } catch (closeError) {
+                    sendTelemetryLog(`Failed to close broken tab: ${closeError.message}`);
+                }
+                return { success: false, error: `Failed to inject content scripts: ${injectError.message}` };
             }
         }
 
