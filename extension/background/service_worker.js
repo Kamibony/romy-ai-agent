@@ -163,6 +163,91 @@ async function processCommandInternally(payload) {
 
     sendTelemetryLog(`Target tab identified: ${tab.title || tab.id}`);
 
+    // Extract target URL from command text if available
+    let targetUrl = null;
+    if (commandText) {
+        const urlRegex = /(?:https?:\/\/)?(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{2,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)/i;
+        const urlMatch = commandText.match(urlRegex);
+        if (urlMatch) {
+            targetUrl = urlMatch[0];
+            if (!targetUrl.startsWith('http')) {
+                targetUrl = 'https://' + targetUrl;
+            }
+        }
+    }
+
+    const isEmptyOrNewTab = (url) => {
+        return !url || url === 'about:blank' || url.startsWith('chrome://newtab') || url.startsWith('edge://newtab');
+    };
+
+    const isRestrictedUrl = (url) => {
+        if (!url) return true;
+        return (url.startsWith('chrome://') && !url.startsWith('chrome://newtab')) ||
+               (url.startsWith('edge://') && !url.startsWith('edge://newtab')) ||
+               (url.startsWith('about:') && url !== 'about:blank') ||
+               url.startsWith('chrome-extension://');
+    };
+
+    if (targetUrl && isEmptyOrNewTab(tab.url)) {
+        sendTelemetryLog(`Navigating empty/new tab to extracted URL: ${targetUrl}`);
+        tab = await new Promise((resolve, reject) => {
+            chrome.tabs.update(tab.id, { url: targetUrl }, (updatedTab) => {
+                if (chrome.runtime.lastError) {
+                    return reject(new Error(chrome.runtime.lastError.message));
+                }
+                const listener = (tabId, info) => {
+                    if (tabId === updatedTab.id && info.status === 'complete') {
+                        chrome.tabs.onUpdated.removeListener(listener);
+                        chrome.tabs.onRemoved.removeListener(removedListener);
+                        resolve(updatedTab);
+                    }
+                };
+                const removedListener = (tabId) => {
+                    if (tabId === updatedTab.id) {
+                        chrome.tabs.onUpdated.removeListener(listener);
+                        chrome.tabs.onRemoved.removeListener(removedListener);
+                        reject(new Error("Tab closed before loading completed"));
+                    }
+                };
+                chrome.tabs.onUpdated.addListener(listener);
+                chrome.tabs.onRemoved.addListener(removedListener);
+            });
+        }).catch(err => {
+            sendTelemetryLog(`Navigation error: ${err.message}`);
+            throw err;
+        });
+    } else if (isRestrictedUrl(tab.url)) {
+        sendTelemetryLog(`Restricted tab detected: ${tab.url}. Handling dynamic navigation.`);
+        const urlToOpen = targetUrl || 'https://www.google.com';
+        sendTelemetryLog(`Opening new tab: ${urlToOpen}`);
+        tab = await new Promise((resolve, reject) => {
+            chrome.tabs.create({ url: urlToOpen }, (newTab) => {
+                if (chrome.runtime.lastError) {
+                    return reject(new Error(chrome.runtime.lastError.message));
+                }
+                const listener = (tabId, info) => {
+                    if (tabId === newTab.id && info.status === 'complete') {
+                        chrome.tabs.onUpdated.removeListener(listener);
+                        chrome.tabs.onRemoved.removeListener(removedListener);
+                        resolve(newTab);
+                    }
+                };
+                const removedListener = (tabId) => {
+                    if (tabId === newTab.id) {
+                        chrome.tabs.onUpdated.removeListener(listener);
+                        chrome.tabs.onRemoved.removeListener(removedListener);
+                        reject(new Error("Tab closed before loading completed"));
+                    }
+                };
+                chrome.tabs.onUpdated.addListener(listener);
+                chrome.tabs.onRemoved.addListener(removedListener);
+            });
+        }).catch(err => {
+            sendTelemetryLog(`Navigation error: ${err.message}`);
+            throw err;
+        });
+    }
+
     let iteration = 0;
     let totalActionsExecuted = 0;
     const threadHistory = [];
@@ -172,12 +257,37 @@ async function processCommandInternally(payload) {
 
         // 2. Request DOM Map from Content Script (This also waits for DOM stability via MutationObserver)
         sendTelemetryLog(`Extracting DOM from tab...`);
-        const domMapResponse = await new Promise((resolve, reject) => {
-            chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.REQUEST_DOM_MAP }, (response) => {
-                if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
-                else resolve(response);
+
+        const requestDomMap = () => {
+            return new Promise((resolve) => {
+                chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.REQUEST_DOM_MAP }, (response) => {
+                    if (chrome.runtime.lastError) {
+                        resolve({ error: chrome.runtime.lastError.message });
+                    } else {
+                        resolve(response || { error: 'No response from content script' });
+                    }
+                });
             });
-        });
+        };
+
+        let domMapResponse = await requestDomMap();
+
+        if (domMapResponse.error && (domMapResponse.error.includes("Receiving end does not exist") || domMapResponse.error.includes("No response"))) {
+            sendTelemetryLog(`Content script not found. Injecting dynamically...`);
+            try {
+                await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    files: ['content/message_types_content.js', 'content/dom_mapper.js', 'content/content_script.js']
+                });
+                // Wait briefly for the script to initialize
+                await new Promise(r => setTimeout(r, 500));
+                sendTelemetryLog(`Retrying DOM extraction...`);
+                domMapResponse = await requestDomMap();
+            } catch (injectError) {
+                sendTelemetryLog(`Failed to inject content scripts: ${injectError.message}`);
+                throw new Error(`Failed to inject content scripts: ${injectError.message}`);
+            }
+        }
 
         if (domMapResponse.error) {
             sendTelemetryLog(`Error extracting DOM: ${domMapResponse.error}`);
