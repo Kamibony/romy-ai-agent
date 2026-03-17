@@ -70,16 +70,34 @@ function waitForDomStability(debounceMs = 1000, timeoutMs = 5000) {
 
 function handleExecuteAction(action, sendResponse) {
     console.log("Executing Action:", action);
+
+    function getElementByXPath(xpath) {
+        try {
+            return document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function findElement(target_id, xpath) {
+        let el = document.querySelector(`[data-romy-id="${target_id}"]`);
+        if (!el && xpath) {
+            console.log(`Target ID ${target_id} not found, falling back to XPath: ${xpath}`);
+            el = getElementByXPath(xpath);
+        }
+        return el;
+    }
+
     try {
         switch (action.action) {
             case "CLICK":
-                const clickTarget = document.querySelector(`[data-romy-id="${action.target_id}"]`);
-                if (!clickTarget) throw new Error(`Target ID ${action.target_id} not found.`);
+                const clickTarget = findElement(action.target_id, action.xpath);
+                if (!clickTarget) throw new Error(`Target ID ${action.target_id} (and XPath ${action.xpath || 'N/A'}) not found.`);
                 clickTarget.click();
                 break;
             case "TYPE":
-                const typeTarget = document.querySelector(`[data-romy-id="${action.target_id}"]`);
-                if (!typeTarget) throw new Error(`Target ID ${action.target_id} not found.`);
+                const typeTarget = findElement(action.target_id, action.xpath);
+                if (!typeTarget) throw new Error(`Target ID ${action.target_id} (and XPath ${action.xpath || 'N/A'}) not found.`);
 
                 typeTarget.focus();
 
@@ -116,8 +134,8 @@ function handleExecuteAction(action, sendResponse) {
                 targetElem.dispatchEvent(new KeyboardEvent('keyup', { key: action.key, bubbles: true }));
                 break;
             case "HOVER":
-                const hoverTarget = document.querySelector(`[data-romy-id="${action.target_id}"]`);
-                if (!hoverTarget) throw new Error(`Target ID ${action.target_id} not found.`);
+                const hoverTarget = findElement(action.target_id, action.xpath);
+                if (!hoverTarget) throw new Error(`Target ID ${action.target_id} (and XPath ${action.xpath || 'N/A'}) not found.`);
                 hoverTarget.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
                 hoverTarget.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
                 break;
