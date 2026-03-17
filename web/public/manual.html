@@ -31,6 +31,19 @@
         <div class="bg-white rounded-lg shadow-md p-8 border border-gray-200">
             <h1 class="text-3xl font-extrabold text-gray-900 mb-8 border-b pb-4">Uživatelský Manuál</h1>
 
+            <!-- Technická stabilita a nedávné aktualizace (Technical Stability & Recent Updates) -->
+            <section class="mb-10">
+                <div class="bg-amber-50 border-l-4 border-amber-500 p-5 rounded-md shadow-sm">
+                    <h3 class="text-lg font-bold text-amber-800 mb-2">Technická stabilita a nedávné aktualizace</h3>
+                    <p class="text-sm text-amber-900 mb-2">
+                        Dnes proběhly <strong>masivní aktualizace infrastruktury</strong>. Výrazně jsme vylepšili komunikační "handshake" mezi Chrome rozšířením a Python agentem, čímž předcházíme tzv. "tichým zásekům" (silent deadlocks).
+                    </p>
+                    <p class="text-sm text-amber-900 font-semibold">
+                        Upozornění (Disclaimer): Kvůli těmto hlubokým architektonickým změnám může být dnes stabilita systému dočasně kolísavá. Dolaďujeme zbývající okrajové případy a plná stabilita je zaručena do zítřka. Děkujeme za trpělivost!
+                    </p>
+                </div>
+            </section>
+
             <!-- Úvod (Welcome) -->
             <section class="mb-10">
                 <h2 class="text-2xl font-semibold text-gray-800 mb-4">Úvod (Welcome)</h2>
@@ -39,6 +52,52 @@
                     lokálního <strong>Windows OS Agenta</strong> a webového modulu ve formě <strong>Chrome Rozšíření</strong>.
                     Tento přístup umožňuje agentovi provádět jak komplexní webovou automatizaci přímo v prohlížeči, tak spouštět úkony na úrovni operačního systému Windows. Obě části spolu úzce komunikují a zajišťují hladký průběh zadaných úkolů.
                 </p>
+            </section>
+
+            <!-- Přehled systémových komponent (System Component Overview) -->
+            <section class="mb-10">
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4">Přehled systémových komponent (System Component Overview)</h2>
+                <p class="text-gray-600 mb-6">
+                    Seznamte se s hlavními stránkami v našem webovém ekosystému:
+                </p>
+                <div class="space-y-4">
+                    <div class="bg-gray-50 p-5 rounded-lg border border-gray-100">
+                        <h3 class="text-lg font-bold text-indigo-900"><a href="mobile.html" class="hover:underline text-indigo-700">Mobilní spouštěč (Mobile Trigger - mobile.html)</a></h3>
+                        <p class="text-sm text-gray-700 mt-1">
+                            Hlavní rozhraní pro odesílání textových nebo hlasových příkazů. Obsahuje analýzu zvuku v reálném čase.
+                        </p>
+                    </div>
+                    <div class="bg-gray-50 p-5 rounded-lg border border-gray-100">
+                        <h3 class="text-lg font-bold text-indigo-900"><a href="dashboard.html" class="hover:underline text-indigo-700">Kontrolní panel pro testery (Tester Control Panel - dashboard.html)</a></h3>
+                        <p class="text-sm text-gray-700 mt-1">
+                            Centrum pro monitorování v reálném čase. Slouží ke sledování stavu agenta a poskytuje "Live Activity" logy.
+                        </p>
+                    </div>
+                    <div class="bg-gray-50 p-5 rounded-lg border border-gray-100">
+                        <h3 class="text-lg font-bold text-indigo-900"><a href="index.html" class="hover:underline text-indigo-700">Hlavní stránka (index.html)</a></h3>
+                        <p class="text-sm text-gray-700 mt-1">
+                            Zde naleznete odkazy pro stažení obou částí našeho agenta.
+                        </p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Autentizace a aktivační proces (Authentication & Activation Flow) -->
+            <section class="mb-10">
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4">Autentizace a aktivační proces (Authentication & Activation Flow)</h2>
+                <div class="bg-white p-6 rounded-lg border border-gray-200 shadow-sm">
+                    <h3 class="text-lg font-bold text-indigo-900 mb-3">Přihlašovací proces (Login Process)</h3>
+                    <p class="text-sm text-gray-700 mb-4">
+                        Pro přístup do systému použijte následující testovací přihlašovací údaje (Tester credentials):
+                    </p>
+                    <div class="bg-gray-100 p-4 rounded-md mb-4 inline-block">
+                        <p class="text-sm text-gray-800 font-mono"><strong>Login:</strong> anet@romy.cz</p>
+                        <p class="text-sm text-gray-800 font-mono"><strong>Heslo:</strong> 123456</p>
+                    </div>
+                    <p class="text-sm text-gray-700">
+                        <strong>Aktualizace stavu (OS Agent Status):</strong> Díky nedávné opravě v souboru <code>client/main.py</code> se nyní indikátor stavu OS Agenta na Dashboardu zbarví zeleně <strong>okamžitě</strong> po úspěšném přihlášení, aniž by bylo nutné čekat na obnovení na pozadí (background polling loop).
+                    </p>
+                </div>
             </section>
 
             <!-- Instalace (Installation) -->
