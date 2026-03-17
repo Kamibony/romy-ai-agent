@@ -5,6 +5,8 @@ const CONTENT_MESSAGE_TYPES = {
     // Background -> Content Script
     REQUEST_DOM_MAP: 'REQUEST_DOM_MAP',
     EXECUTE_ACTION: 'EXECUTE_ACTION',
+    INJECT_SOM: 'INJECT_SOM',
+    REMOVE_SOM: 'REMOVE_SOM',
 
     // Auth related
     UPDATE_TOKEN: 'UPDATE_TOKEN',

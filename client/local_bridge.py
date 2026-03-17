@@ -1,139 +1,141 @@
-import http.server
+import asyncio
 import json
 import logging
 import threading
-from urllib.parse import urlparse, parse_qs
-import queue
 import time
-
-class LocalBridgeHandler(http.server.BaseHTTPRequestHandler):
-    protocol_version = 'HTTP/1.1'
-
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        self.end_headers()
-
-    def do_GET(self):
-        if self.path == '/command':
-            self.handle_get_command()
-        else:
-            self.send_error(404, 'Not Found')
-
-    def do_POST(self):
-        if self.path == '/result':
-            self.handle_post_result()
-        else:
-            self.send_error(404, 'Not Found')
-
-    def handle_get_command(self):
-        try:
-            cmd = getattr(self.server, 'bridge_manager').get_pending_command()
-            response = json.dumps(cmd if cmd else {})
-            response_bytes = response.encode('utf-8')
-
-            self.send_response(200)
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Content-Length', str(len(response_bytes)))
-            self.end_headers()
-
-            self.wfile.write(response_bytes)
-        except Exception as e:
-            logging.error(f"Error handling GET /command: {e}")
-            self.send_error(500, 'Internal Server Error')
-
-    def handle_post_result(self):
-        try:
-            content_length = int(self.headers.get('Content-Length', 0))
-            post_data = self.rfile.read(content_length)
-            result = json.loads(post_data.decode('utf-8'))
-            getattr(self.server, 'bridge_manager').receive_result(result)
-
-            response_bytes = b'{"status": "ok"}'
-
-            self.send_response(200)
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Content-Length', str(len(response_bytes)))
-            self.end_headers()
-
-            self.wfile.write(response_bytes)
-        except Exception as e:
-            logging.error(f"Error handling POST /result: {e}")
-            self.send_error(500, 'Internal Server Error')
-
-    def log_message(self, format, *args):
-        pass
+import websockets
 
 class LocalBridgeManager:
     def __init__(self, port=8765):
         self.port = port
+        self.active_websocket = None
         self.pending_command = None
         self.result = None
-        self.server = None
         self.server_thread = None
+        self.loop = None
+        self.server = None
+
+        # Synchronization
         self.lock = threading.Lock()
         self.condition = threading.Condition(self.lock)
+        self.result_event = threading.Event()
+
+    async def _handle_client(self, websocket):
+        logging.info(f"WebSocket client connected from {websocket.remote_address}")
+        with self.lock:
+            # We only support one active Chrome Extension connection at a time
+            # If a new one connects, it overwrites the old one
+            if self.active_websocket:
+                logging.warning("Overwriting existing active WebSocket connection.")
+            self.active_websocket = websocket
+
+        try:
+            async for message in websocket:
+                try:
+                    data = json.loads(message)
+                    if 'type' in data and data['type'] == 'result':
+                        self.receive_result(data.get('payload', {}))
+                    elif 'type' in data and data['type'] == 'telemetry':
+                        logging.info(f"Extension Telemetry: {data.get('payload')}")
+                    else:
+                        logging.warning(f"Unknown WebSocket message received: {data}")
+                except json.JSONDecodeError:
+                    logging.error(f"Failed to decode WebSocket message: {message}")
+        except websockets.exceptions.ConnectionClosed:
+            logging.info(f"WebSocket client disconnected: {websocket.remote_address}")
+        except Exception as e:
+            logging.error(f"WebSocket handling error: {e}")
+        finally:
+            with self.lock:
+                if self.active_websocket == websocket:
+                    self.active_websocket = None
+
+    async def _run_server(self):
+        self.loop = asyncio.get_running_loop()
+        self.server = await websockets.serve(self._handle_client, '127.0.0.1', self.port)
+        self.stop_event = asyncio.Event()
+        logging.info(f"WebSocket local bridge server started on ws://127.0.0.1:{self.port}")
+
+        try:
+            await self.stop_event.wait()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self.server.close()
+            await self.server.wait_closed()
+            logging.info("WebSocket local bridge server stopped.")
+
+    def _start_loop(self):
+        try:
+            asyncio.run(self._run_server())
+        except Exception as e:
+            logging.error(f"WebSocket server thread exception: {e}")
 
     def start(self):
-        if self.server is not None:
+        if self.server_thread is not None and self.server_thread.is_alive():
             return
 
-        self.server = http.server.HTTPServer(('127.0.0.1', self.port), LocalBridgeHandler)
-        self.server.bridge_manager = self
-        self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.server_thread = threading.Thread(target=self._start_loop, daemon=True)
         self.server_thread.start()
-        logging.info(f"Local bridge server started on port {self.port}")
 
     def stop(self):
-        if self.server:
-            self.server.shutdown()
-            self.server.server_close()
-            self.server = None
+        if self.loop and self.loop.is_running():
+            self.loop.call_soon_threadsafe(self.stop_event.set)
+
+        if self.server_thread:
+            self.server_thread.join(timeout=2)
 
     def delegate_command(self, payload: dict, timeout=300):
         # Import inside the method to avoid circular imports if any
         import agent
 
-        with self.condition:
-            self.pending_command = payload
-            self.result = None
-            logging.info(f"Delegating command to Chrome Extension: {payload.get('commandText', '')[:50]}")
-
-            # Wait for result
-            start_time = time.time()
-            while self.result is None:
-                # Check for emergency abort
-                if agent.ABORT_AGENT:
-                    logging.warning("Emergency abort triggered while waiting for Chrome Extension result.")
-                    self.pending_command = None
-                    return {"success": False, "error": "User aborted execution"}
-
-                remaining = timeout - (time.time() - start_time)
-                if remaining <= 0:
-                    self.pending_command = None
-                    return {"success": False, "error": "Timeout waiting for extension result"}
-
-                # Wait for a short duration to allow checking the abort flag frequently
-                self.condition.wait(timeout=min(1.0, remaining))
-
-            res = self.result
-            self.result = None
-            return res
-
-    def get_pending_command(self):
         with self.lock:
-            cmd = self.pending_command
-            self.pending_command = None # Clear after fetching to prevent double execution
-            return cmd
+            if not self.active_websocket:
+                logging.error("No active WebSocket connection from Chrome Extension.")
+                return {"success": False, "error": "Chrome Extension is not connected to the local bridge."}
+
+        # Clear previous result
+        self.result_event.clear()
+        self.result = None
+
+        logging.info(f"Delegating command to Chrome Extension: {payload.get('commandText', '')[:50]}")
+
+        # We need to send the message from the asyncio loop thread
+        async def send_cmd():
+            with self.lock:
+                ws = self.active_websocket
+            if ws:
+                msg = json.dumps({"type": "command", "payload": payload})
+                await ws.send(msg)
+
+        if self.loop and self.loop.is_running():
+            asyncio.run_coroutine_threadsafe(send_cmd(), self.loop)
+        else:
+            return {"success": False, "error": "WebSocket loop is not running."}
+
+        # Wait for result
+        start_time = time.time()
+        while not self.result_event.is_set():
+            # Check for emergency abort
+            if agent.ABORT_AGENT:
+                logging.warning("Emergency abort triggered while waiting for Chrome Extension result.")
+                return {"success": False, "error": "User aborted execution"}
+
+            remaining = timeout - (time.time() - start_time)
+            if remaining <= 0:
+                return {"success": False, "error": "Timeout waiting for extension result"}
+
+            # Wait for a short duration to allow checking the abort flag frequently
+            self.result_event.wait(timeout=min(1.0, remaining))
+
+        res = self.result
+        self.result = None
+        self.result_event.clear()
+        return res
 
     def receive_result(self, result: dict):
-        with self.condition:
-            self.result = result
-            self.condition.notify_all()
+        self.result = result
+        self.result_event.set()
 
 # Global instance for use in agent.py
 bridge = LocalBridgeManager()

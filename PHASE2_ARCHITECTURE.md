@@ -1,6 +1,6 @@
 # ROMY AI Agent - Phase 2 Architecture (The Global Solution)
 
-This document defines the architectural pillars for Phase 2 of the ROMY AI Agent. 
+This document defines the architectural pillars for Phase 2 of the ROMY AI Agent.
 The goal of Phase 2 is to transition from an "Open-Loop MVP" (fragile DOM scraping and batch execution) to a "Closed-Loop, Vision-First, Event-Driven" autonomous agent.
 
 ## 1. Core Execution: The ReAct Closed-Loop
@@ -12,7 +12,7 @@ We are abandoning batch-action execution (blindly firing sequential commands).
 
 ## 2. Perception: Hybrid Modality (Vision + A11y)
 Pure DOM scraping is dead (due to React, Shadow DOMs, and dynamic classes). Pure Vision hallucinates text. We use a hybrid approach.
-* **Set-of-Mark (SoM) Injection:** A lightweight local script injects an SVG overlay with numbered bounding boxes over interactable elements in the active viewport. 
+* **Set-of-Mark (SoM) Injection:** A lightweight local script injects an SVG overlay with numbered bounding boxes over interactable elements in the active viewport.
 * **Accessibility (A11y) Tree:** Alongside the SoM screenshot, we extract a simplified semantic tree (Role, Name, State, Bounding Box) to provide exact text and context without clutter.
 * **Viewport Awareness:** The LLM prompt always includes viewport metadata (e.g., "Viewing Y: 0 to 1080 of 4000px"). Explicit `SCROLL` actions are first-class citizens.
 * **Clutter Mitigation:** Bounding boxes are strictly applied ONLY to visible, un-obscured elements (respecting `z-index`, `opacity`, and `display` rules).
