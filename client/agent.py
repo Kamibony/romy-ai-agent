@@ -5,6 +5,8 @@ import time
 import os
 import re
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import queue
 import json
 from datetime import datetime
@@ -113,6 +115,21 @@ def set_firebase_token(token: str) -> None:
     global CURRENT_TOKEN
     CURRENT_TOKEN = token
 
+def get_resilient_session() -> requests.Session:
+    """Returns a requests.Session configured with exponential backoff and retries."""
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=5,
+        backoff_factor=1,  # 1s, 2s, 4s, 8s, 16s
+        status_forcelist=[500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PATCH", "PUT", "DELETE"]
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
 def firestore_update_document(collection: str, doc_id: str, updates: Dict[str, Any], delete_fields: list = None) -> None:
     """Updates a Firestore document using the REST API with retries for network resilience."""
     if not CURRENT_TOKEN:
@@ -161,9 +178,8 @@ def firestore_update_document(collection: str, doc_id: str, updates: Dict[str, A
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # Using Session object specifically inside the loop can help reset the connection pool
-            # to mitigate stubborn [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol
-            with requests.Session() as session:
+            # Using resilient session for robust retries
+            with get_resilient_session() as session:
                 response = session.patch(url, json=payload, headers=headers, timeout=10)
                 logging.info(f"Status update response for {doc_id}: {response.status_code}")
                 response.raise_for_status()
@@ -192,7 +208,8 @@ def firestore_get_document(collection: str, doc_id: str) -> Dict[str, Any]:
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}"}
 
     try:
-        response = requests.get(url, headers=headers)
+        with get_resilient_session() as session:
+            response = session.get(url, headers=headers, timeout=10)
         if response.status_code == 404:
             return {}
         response.raise_for_status()
@@ -267,7 +284,7 @@ def start_remote_listener() -> None:
         # Keep track of loops to periodically update online status
         loop_counter = 0
         error_count = 0
-        session = requests.Session()
+        session = get_resilient_session()
 
         while True:
             if not CURRENT_TOKEN:
@@ -344,8 +361,8 @@ def start_remote_listener() -> None:
                 # Re-initialize session on network errors to clear potentially bad sockets
                 if error_count >= 3:
                     session.close()
-                    session = requests.Session()
-                    logging.warning("Re-initializing requests session due to repeated errors.")
+                    session = get_resilient_session()
+                    logging.warning("Re-initializing resilient requests session due to repeated errors.")
 
             except Exception as e:
                 logging.error(f"Error in remote listener poll: {e}")
@@ -480,7 +497,8 @@ def classify_intent(command_text: str, audio_b64: str) -> Tuple[str, str]:
     }
 
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=20)
+        with get_resilient_session() as session:
+            response = session.post(url, json=payload, headers=headers, timeout=20)
         response.raise_for_status()
         data = response.json()
 
@@ -581,7 +599,8 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
 
                 logging.info("Sending WEB state payload to backend...")
                 try:
-                    response = requests.post(BACKEND_URL, json=payload, headers=headers, timeout=30)
+                    with get_resilient_session() as session:
+                        response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
                     response.raise_for_status()
                     backend_data = response.json()
 
@@ -794,7 +813,8 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
 
             logging.info(f"Sending remote payload to backend (iteration {iteration})...")
             try:
-                response = requests.post(BACKEND_URL, json=payload, headers=headers, timeout=30)
+                with get_resilient_session() as session:
+                    response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
                 response.raise_for_status()
                 backend_data = response.json()
 
@@ -1174,7 +1194,8 @@ def execute_voice_agent_loop() -> None:
 
                 logging.info("Sending WEB state payload to backend...")
                 try:
-                    response = requests.post(BACKEND_URL, json=payload, headers=headers, timeout=30)
+                    with get_resilient_session() as session:
+                        response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
                     response.raise_for_status()
                     backend_data = response.json()
 
@@ -1396,7 +1417,8 @@ def execute_voice_agent_loop() -> None:
 
             logging.info(f"Sending payload to backend (iteration {iteration})...")
             try:
-                response = requests.post(BACKEND_URL, json=payload, headers=headers, timeout=30)
+                with get_resilient_session() as session:
+                    response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
                 response.raise_for_status()
                 backend_data = response.json()
 
