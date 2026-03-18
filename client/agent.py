@@ -670,6 +670,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
 
                 ui_elements = state_result.get("ui_elements", [])
                 screenshot_base64 = state_result.get("screenshot_base64", "")
+                current_url = state_result.get("url", "")
 
                 # 2. Send state to backend to receive ONE action
                 payload = {
@@ -677,7 +678,8 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                     "session_id": doc_id,
                     "command_text": command_text,
                     "current_sub_task": current_sub_task,
-                    "screenshot_base64": screenshot_base64
+                    "screenshot_base64": screenshot_base64,
+                    "current_url": current_url
                 }
                 if sub_task_iteration == 0 and sub_task_idx == 0 and audio_b64:
                     payload["audio_base64"] = audio_b64
@@ -1334,6 +1336,7 @@ def execute_voice_agent_loop() -> None:
 
                 ui_elements = state_result.get("ui_elements", [])
                 screenshot_base64 = state_result.get("screenshot_base64", "")
+                current_url = state_result.get("url", "")
 
                 # 2. Send state to backend to receive ONE action
                 payload = {
@@ -1341,7 +1344,8 @@ def execute_voice_agent_loop() -> None:
                     "session_id": doc_id,
                     "command_text": command_text,
                     "current_sub_task": current_sub_task,
-                    "screenshot_base64": screenshot_base64
+                    "screenshot_base64": screenshot_base64,
+                    "current_url": current_url
                 }
                 if sub_task_iteration == 0 and sub_task_idx == 0 and audio_b64:
                     payload["audio_base64"] = audio_b64
