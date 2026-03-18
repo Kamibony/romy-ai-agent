@@ -264,6 +264,8 @@ async function handleGetState(payload) {
     // 2. Extract DOM Natively via CDP
     sendTelemetryLog(`Extracting DOM from tab natively via CDP...`);
     const uiElements = [];
+    let screenshotBase64 = null;
+
     try {
         await new Promise((resolve, reject) => {
             chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
@@ -357,53 +359,43 @@ async function handleGetState(payload) {
                 }
             }
         }
+
+        // Store bounds for native execution
+        latestDomBounds = {};
+        uiElements.forEach(el => {
+            if (el.bounds) {
+                latestDomBounds[el.id] = el.bounds;
+            }
+        });
+
+        // 3. Capture SoM Screenshot using CDP
+        sendTelemetryLog(`Capturing Set-of-Mark (SoM) screenshot via CDP...`);
+
+        try {
+            await new Promise((resolve) => {
+                chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.INJECT_SOM, elements: uiElements }, resolve);
+            });
+            await new Promise(r => setTimeout(r, 100));
+
+            const captureResult = await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: tab.id }, "Page.captureScreenshot", { format: "webp", quality: 80 }, (result) => {
+                    if (chrome.runtime.lastError) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                    } else {
+                        resolve(result);
+                    }
+                });
+            });
+
+            if (captureResult && captureResult.data) {
+                screenshotBase64 = captureResult.data;
+            }
+        } catch (cdpError) {
+            sendTelemetryLog(`CDP Screenshot Error: ${cdpError.message}`);
+        }
     } catch (e) {
-        sendTelemetryLog(`Native DOM extraction failed: ${e.message}`);
+        sendTelemetryLog(`Native DOM extraction or CDP Error: ${e.message}`);
         throw e;
-    }
-
-    // Store bounds for native execution
-    latestDomBounds = {};
-    uiElements.forEach(el => {
-        if (el.bounds) {
-            latestDomBounds[el.id] = el.bounds;
-        }
-    });
-
-    // 3. Capture SoM Screenshot using CDP
-    sendTelemetryLog(`Capturing Set-of-Mark (SoM) screenshot via CDP...`);
-    let screenshotBase64 = null;
-    try {
-        await new Promise((resolve, reject) => {
-            chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
-                if (chrome.runtime.lastError && !chrome.runtime.lastError.message.includes("Cannot attach to this target")) {
-                    reject(new Error(chrome.runtime.lastError.message));
-                } else {
-                    resolve();
-                }
-            });
-        });
-
-        await new Promise((resolve) => {
-            chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.INJECT_SOM, elements: uiElements }, resolve);
-        });
-        await new Promise(r => setTimeout(r, 100));
-
-        const captureResult = await new Promise((resolve, reject) => {
-            chrome.debugger.sendCommand({ tabId: tab.id }, "Page.captureScreenshot", { format: "webp", quality: 80 }, (result) => {
-                if (chrome.runtime.lastError) {
-                    reject(new Error(chrome.runtime.lastError.message));
-                } else {
-                    resolve(result);
-                }
-            });
-        });
-
-        if (captureResult && captureResult.data) {
-            screenshotBase64 = captureResult.data;
-        }
-    } catch (cdpError) {
-        sendTelemetryLog(`CDP Screenshot Error: ${cdpError.message}`);
     } finally {
         await new Promise((resolve) => {
             chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.REMOVE_SOM }, resolve);
@@ -635,6 +627,7 @@ async function processCommandInternally(payload) {
         // 2. Extract DOM Natively via CDP
         sendTelemetryLog(`Extracting DOM from tab natively via CDP...`);
         const uiElements = [];
+        let screenshotBase64 = null;
         try {
             await new Promise((resolve, reject) => {
                 chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
@@ -728,55 +721,46 @@ async function processCommandInternally(payload) {
                     }
                 }
             }
+
+            sendTelemetryLog(`Extracted ${uiElements.length} elements from DOM.`);
+
+            // 3. Capture SoM Screenshot using CDP
+            sendTelemetryLog(`Capturing Set-of-Mark (SoM) screenshot via CDP...`);
+
+            try {
+                // Inject SoM overlay
+                await new Promise((resolve) => {
+                    chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.INJECT_SOM, elements: uiElements }, resolve);
+                });
+
+                // Give the browser a moment to render the SVG overlay
+                await new Promise(r => setTimeout(r, 100));
+
+                // Capture Screenshot
+                const captureResult = await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: tab.id }, "Page.captureScreenshot", { format: "webp", quality: 80 }, (result) => {
+                        if (chrome.runtime.lastError) {
+                            reject(new Error(chrome.runtime.lastError.message));
+                        } else {
+                            resolve(result);
+                        }
+                    });
+                });
+
+                if (captureResult && captureResult.data) {
+                    screenshotBase64 = captureResult.data;
+                    sendTelemetryLog(`Successfully captured SoM screenshot.`);
+                } else {
+                    sendTelemetryLog(`Failed to capture screenshot data.`);
+                }
+
+            } catch (cdpError) {
+                sendTelemetryLog(`CDP Screenshot Error: ${cdpError.message}`);
+            }
+
         } catch (e) {
             sendTelemetryLog(`Native DOM extraction failed: ${e.message}`);
             throw e;
-        }
-        sendTelemetryLog(`Extracted ${uiElements.length} elements from DOM.`);
-
-        // 3. Capture SoM Screenshot using CDP
-        sendTelemetryLog(`Capturing Set-of-Mark (SoM) screenshot via CDP...`);
-        let screenshotBase64 = null;
-        try {
-            // Ensure debugger is attached
-            await new Promise((resolve, reject) => {
-                chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
-                    if (chrome.runtime.lastError && !chrome.runtime.lastError.message.includes("Cannot attach to this target")) {
-                        reject(new Error(chrome.runtime.lastError.message));
-                    } else {
-                        resolve();
-                    }
-                });
-            });
-
-            // Inject SoM overlay
-            await new Promise((resolve) => {
-                chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.INJECT_SOM, elements: uiElements }, resolve);
-            });
-
-            // Give the browser a moment to render the SVG overlay
-            await new Promise(r => setTimeout(r, 100));
-
-            // Capture Screenshot
-            const captureResult = await new Promise((resolve, reject) => {
-                chrome.debugger.sendCommand({ tabId: tab.id }, "Page.captureScreenshot", { format: "webp", quality: 80 }, (result) => {
-                    if (chrome.runtime.lastError) {
-                        reject(new Error(chrome.runtime.lastError.message));
-                    } else {
-                        resolve(result);
-                    }
-                });
-            });
-
-            if (captureResult && captureResult.data) {
-                screenshotBase64 = captureResult.data;
-                sendTelemetryLog(`Successfully captured SoM screenshot.`);
-            } else {
-                sendTelemetryLog(`Failed to capture screenshot data.`);
-            }
-
-        } catch (cdpError) {
-            sendTelemetryLog(`CDP Screenshot Error: ${cdpError.message}`);
         } finally {
             // Always remove the SoM overlay immediately
             await new Promise((resolve) => {
