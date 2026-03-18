@@ -261,41 +261,106 @@ async function handleGetState(payload) {
         await new Promise(r => setTimeout(r, 1000));
     }
 
-    // 2. Request DOM Map
-    sendTelemetryLog(`Extracting DOM from tab...`);
-    const requestDomMap = () => {
-        return new Promise((resolve) => {
-            chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.REQUEST_DOM_MAP }, (response) => {
-                if (chrome.runtime.lastError) {
-                    resolve({ error: chrome.runtime.lastError.message });
+    // 2. Extract DOM Natively via CDP
+    sendTelemetryLog(`Extracting DOM from tab natively via CDP...`);
+    const uiElements = [];
+    try {
+        await new Promise((resolve, reject) => {
+            chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
+                if (chrome.runtime.lastError && !chrome.runtime.lastError.message.includes("Cannot attach to this target")) {
+                    reject(new Error(chrome.runtime.lastError.message));
                 } else {
-                    resolve(response || { error: 'No response from content script' });
+                    resolve();
                 }
             });
         });
-    };
 
-    let domMapResponse = await requestDomMap();
-
-    if (domMapResponse.error && (domMapResponse.error.includes("Receiving end does not exist") || domMapResponse.error.includes("No response"))) {
-        sendTelemetryLog(`Content script not found. Injecting dynamically...`);
-        try {
-            await chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                files: ['content/message_types_content.js', 'content/dom_mapper.js', 'content/content_script.js']
+        await new Promise(r => chrome.debugger.sendCommand({ tabId: tab.id }, "DOMSnapshot.enable", {}, r));
+        const axTree = await new Promise((resolve, reject) => {
+            chrome.debugger.sendCommand({ tabId: tab.id }, "Accessibility.getFullAXTree", {}, (res) => {
+                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                else resolve(res);
             });
-            await new Promise(r => setTimeout(r, 500));
-            domMapResponse = await requestDomMap();
-        } catch (injectError) {
-            throw new Error(`Failed to inject content scripts: ${injectError.message}`);
+        });
+        const snap = await new Promise((resolve, reject) => {
+            chrome.debugger.sendCommand({ tabId: tab.id }, "DOMSnapshot.captureSnapshot", {
+                computedStyles: [],
+                includePaintOrder: true,
+                includeDOMRects: true
+            }, (res) => {
+                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                else resolve(res);
+            });
+        });
+
+        const layoutMetrics = await new Promise((resolve, reject) => {
+            chrome.debugger.sendCommand({ tabId: tab.id }, "Page.getLayoutMetrics", {}, (res) => {
+                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                else resolve(res);
+            });
+        });
+
+        const viewport = layoutMetrics.layoutViewport || { pageX: 0, pageY: 0, clientWidth: 1920, clientHeight: 1080 };
+        const boundsMap = {};
+
+        if (snap && snap.documents && snap.documents.length > 0) {
+            const doc = snap.documents[0];
+            const nodes = doc.nodes;
+            const layout = doc.layout;
+
+            for (let i = 0; i < layout.nodeIndex.length; i++) {
+                const nodeIdx = layout.nodeIndex[i];
+                const backendNodeId = nodes.backendNodeId[nodeIdx];
+                const bounds = layout.bounds[i]; // [x, y, width, height]
+                boundsMap[backendNodeId] = { x: bounds[0], y: bounds[1], width: bounds[2], height: bounds[3] };
+            }
         }
-    }
 
-    if (domMapResponse.error) {
-        throw new Error(domMapResponse.error);
-    }
+        const interactiveRoles = ['button', 'link', 'textbox', 'searchbox', 'combobox', 'menuitem', 'tab', 'checkbox', 'radio', 'switch', 'slider'];
+        let idCounter = 0;
 
-    const uiElements = domMapResponse.elements;
+        if (axTree && axTree.nodes) {
+            for (const node of axTree.nodes) {
+                if (!node.role) continue;
+                const role = node.role.value;
+
+                let isInteractive = interactiveRoles.includes(role);
+                // Expand interactivity check
+                if (!isInteractive && node.properties) {
+                    const focusableProp = node.properties.find(p => p.name === 'focusable');
+                    if (focusableProp && focusableProp.value && focusableProp.value.value === true) {
+                        isInteractive = true;
+                    }
+                }
+
+                if (isInteractive && node.backendDOMNodeId && boundsMap[node.backendDOMNodeId]) {
+                    const bounds = boundsMap[node.backendDOMNodeId];
+
+                    const isVisible = (
+                        bounds.width > 0 && bounds.height > 0 &&
+                        bounds.y + bounds.height > viewport.pageY &&
+                        bounds.y < viewport.pageY + viewport.clientHeight &&
+                        bounds.x + bounds.width > viewport.pageX &&
+                        bounds.x < viewport.pageX + viewport.clientWidth
+                    );
+
+                    if (isVisible) {
+                        let text = node.name ? node.name.value : '';
+                        uiElements.push({
+                            id: String(idCounter++),
+                            type: role,
+                            text: text,
+                            bounds: bounds,
+                            backendNodeId: node.backendDOMNodeId
+                        });
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        sendTelemetryLog(`Native DOM extraction failed: ${e.message}`);
+        throw e;
+    }
 
     // Store bounds for native execution
     latestDomBounds = {};
@@ -320,7 +385,7 @@ async function handleGetState(payload) {
         });
 
         await new Promise((resolve) => {
-            chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.INJECT_SOM }, resolve);
+            chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.INJECT_SOM, elements: uiElements }, resolve);
         });
         await new Promise(r => setTimeout(r, 100));
 
@@ -567,50 +632,106 @@ async function processCommandInternally(payload) {
     while (true) {
         sendTelemetryLog(`Iteration ${iteration + 1}...`);
 
-        // 2. Request DOM Map from Content Script (This also waits for DOM stability via MutationObserver)
-        sendTelemetryLog(`Extracting DOM from tab...`);
-
-        const requestDomMap = () => {
-            return new Promise((resolve) => {
-                chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.REQUEST_DOM_MAP }, (response) => {
-                    if (chrome.runtime.lastError) {
-                        resolve({ error: chrome.runtime.lastError.message });
+        // 2. Extract DOM Natively via CDP
+        sendTelemetryLog(`Extracting DOM from tab natively via CDP...`);
+        const uiElements = [];
+        try {
+            await new Promise((resolve, reject) => {
+                chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
+                    if (chrome.runtime.lastError && !chrome.runtime.lastError.message.includes("Cannot attach to this target")) {
+                        reject(new Error(chrome.runtime.lastError.message));
                     } else {
-                        resolve(response || { error: 'No response from content script' });
+                        resolve();
                     }
                 });
             });
-        };
 
-        let domMapResponse = await requestDomMap();
-
-        if (domMapResponse.error && (domMapResponse.error.includes("Receiving end does not exist") || domMapResponse.error.includes("No response"))) {
-            sendTelemetryLog(`Content script not found. Injecting dynamically...`);
-            try {
-                await chrome.scripting.executeScript({
-                    target: { tabId: tab.id },
-                    files: ['content/message_types_content.js', 'content/dom_mapper.js', 'content/content_script.js']
+            await new Promise(r => chrome.debugger.sendCommand({ tabId: tab.id }, "DOMSnapshot.enable", {}, r));
+            const axTree = await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: tab.id }, "Accessibility.getFullAXTree", {}, (res) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(res);
                 });
-                // Wait briefly for the script to initialize
-                await new Promise(r => setTimeout(r, 500));
-                sendTelemetryLog(`Retrying DOM extraction...`);
-                domMapResponse = await requestDomMap();
-            } catch (injectError) {
-                sendTelemetryLog(`Failed to inject content scripts: ${injectError.message}`);
-                try {
-                    await chrome.tabs.remove(tab.id);
-                } catch (closeError) {
-                    sendTelemetryLog(`Failed to close broken tab: ${closeError.message}`);
-                }
-                return { success: false, error: `Failed to inject content scripts: ${injectError.message}` };
-            }
-        }
+            });
+            const snap = await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: tab.id }, "DOMSnapshot.captureSnapshot", {
+                    computedStyles: [],
+                    includePaintOrder: true,
+                    includeDOMRects: true
+                }, (res) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(res);
+                });
+            });
 
-        if (domMapResponse.error) {
-            sendTelemetryLog(`Error extracting DOM: ${domMapResponse.error}`);
-            throw new Error(domMapResponse.error);
+            const layoutMetrics = await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: tab.id }, "Page.getLayoutMetrics", {}, (res) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(res);
+                });
+            });
+
+            const viewport = layoutMetrics.layoutViewport || { pageX: 0, pageY: 0, clientWidth: 1920, clientHeight: 1080 };
+            const boundsMap = {};
+
+            if (snap && snap.documents && snap.documents.length > 0) {
+                const doc = snap.documents[0];
+                const nodes = doc.nodes;
+                const layout = doc.layout;
+
+                for (let i = 0; i < layout.nodeIndex.length; i++) {
+                    const nodeIdx = layout.nodeIndex[i];
+                    const backendNodeId = nodes.backendNodeId[nodeIdx];
+                    const bounds = layout.bounds[i]; // [x, y, width, height]
+                    boundsMap[backendNodeId] = { x: bounds[0], y: bounds[1], width: bounds[2], height: bounds[3] };
+                }
+            }
+
+            const interactiveRoles = ['button', 'link', 'textbox', 'searchbox', 'combobox', 'menuitem', 'tab', 'checkbox', 'radio', 'switch', 'slider'];
+            let idCounter = 0;
+
+            if (axTree && axTree.nodes) {
+                for (const node of axTree.nodes) {
+                    if (!node.role) continue;
+                    const role = node.role.value;
+
+                    let isInteractive = interactiveRoles.includes(role);
+                    // Expand interactivity check
+                    if (!isInteractive && node.properties) {
+                        const focusableProp = node.properties.find(p => p.name === 'focusable');
+                        if (focusableProp && focusableProp.value && focusableProp.value.value === true) {
+                            isInteractive = true;
+                        }
+                    }
+
+                    if (isInteractive && node.backendDOMNodeId && boundsMap[node.backendDOMNodeId]) {
+                        const bounds = boundsMap[node.backendDOMNodeId];
+
+                        const isVisible = (
+                            bounds.width > 0 && bounds.height > 0 &&
+                            bounds.y + bounds.height > viewport.pageY &&
+                            bounds.y < viewport.pageY + viewport.clientHeight &&
+                            bounds.x + bounds.width > viewport.pageX &&
+                            bounds.x < viewport.pageX + viewport.clientWidth
+                        );
+
+                        if (isVisible) {
+                            let text = node.name ? node.name.value : '';
+                            uiElements.push({
+                                id: String(idCounter++),
+                                type: role,
+                                text: text,
+                                bounds: bounds,
+                                backendNodeId: node.backendDOMNodeId
+                            });
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            sendTelemetryLog(`Native DOM extraction failed: ${e.message}`);
+            throw e;
         }
-        const uiElements = domMapResponse.elements;
         sendTelemetryLog(`Extracted ${uiElements.length} elements from DOM.`);
 
         // 3. Capture SoM Screenshot using CDP
@@ -630,7 +751,7 @@ async function processCommandInternally(payload) {
 
             // Inject SoM overlay
             await new Promise((resolve) => {
-                chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.INJECT_SOM }, resolve);
+                chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.INJECT_SOM, elements: uiElements }, resolve);
             });
 
             // Give the browser a moment to render the SVG overlay
