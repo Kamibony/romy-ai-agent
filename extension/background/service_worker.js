@@ -314,11 +314,27 @@ async function handleGetState(payload) {
 
         const viewport = layoutMetrics.layoutViewport || { pageX: 0, pageY: 0, clientWidth: 1920, clientHeight: 1080 };
         const boundsMap = {};
+        const valueMap = {}; // Map to store node values
 
         if (snap && snap.documents && snap.documents.length > 0) {
             const doc = snap.documents[0];
             const nodes = doc.nodes;
             const layout = doc.layout;
+            const strings = snap.strings; // Get strings array
+
+            // Process inputValue if it exists
+            const inputValues = nodes.inputValue;
+            if (inputValues && inputValues.index && inputValues.value) {
+                for (let i = 0; i < inputValues.index.length; i++) {
+                    const nodeIdx = inputValues.index[i];
+                    const stringIdx = inputValues.value[i];
+                    const val = strings[stringIdx];
+                    if (val !== undefined) {
+                        const backendNodeId = nodes.backendNodeId[nodeIdx];
+                        valueMap[backendNodeId] = val;
+                    }
+                }
+            }
 
             for (let i = 0; i < layout.nodeIndex.length; i++) {
                 const nodeIdx = layout.nodeIndex[i];
@@ -326,6 +342,54 @@ async function handleGetState(payload) {
                 const bounds = layout.bounds[i]; // [x, y, width, height]
                 boundsMap[backendNodeId] = { x: bounds[0], y: bounds[1], width: bounds[2], height: bounds[3] };
             }
+        }
+
+        // 2b. Runtime evaluate fallback for inputs that might be missed by snap
+        try {
+            const runtimeValues = await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: tab.id }, "Runtime.evaluate", {
+                    expression: `
+                        (function() {
+                            const inputs = document.querySelectorAll('input, textarea');
+                            const results = [];
+                            for (const el of inputs) {
+                                if (el.value !== undefined && el.value !== null && el.value !== '') {
+                                    const rect = el.getBoundingClientRect();
+                                    results.push({
+                                        x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+                                        value: el.value
+                                    });
+                                }
+                            }
+                            return JSON.stringify(results);
+                        })();
+                    `,
+                    returnByValue: true
+                }, (res) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(res);
+                });
+            });
+
+            if (runtimeValues && runtimeValues.result && runtimeValues.result.value) {
+                const rtVals = JSON.parse(runtimeValues.result.value);
+                // Try to match runtime values to boundsMap
+                for (const backendId in boundsMap) {
+                    const b = boundsMap[backendId];
+                    if (!valueMap[backendId]) {
+                        for (const rt of rtVals) {
+                            // Give a small margin of error for matching bounds
+                            if (Math.abs(b.x - rt.x) < 2 && Math.abs(b.y - rt.y) < 2 &&
+                                Math.abs(b.width - rt.width) < 2 && Math.abs(b.height - rt.height) < 2) {
+                                valueMap[backendId] = rt.value;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (rtErr) {
+            sendTelemetryLog(`Runtime evaluation for input values failed: ${rtErr.message}`);
         }
 
         const interactiveRoles = ['button', 'link', 'textbox', 'searchbox', 'combobox', 'menuitem', 'tab', 'checkbox', 'radio', 'switch', 'slider'];
@@ -358,10 +422,29 @@ async function handleGetState(payload) {
 
                     if (isVisible) {
                         let text = node.name ? node.name.value : '';
+
+                        // Extract value with redundancy
+                        let nodeValue = '';
+
+                        // 1. Try valueMap (DOMSnapshot or Runtime)
+                        if (valueMap[node.backendDOMNodeId]) {
+                            nodeValue = valueMap[node.backendDOMNodeId];
+                        }
+                        // 2. Try AXTree native value
+                        else if (node.value && node.value.value) {
+                            nodeValue = String(node.value.value);
+                        }
+
+                        // Combine into text for LLM visibility
+                        if (nodeValue) {
+                            text = text ? `${text} (Value: ${nodeValue})` : `Value: ${nodeValue}`;
+                        }
+
                         uiElements.push({
                             id: String(idCounter++),
                             type: role,
                             text: text,
+                            value: nodeValue,
                             bounds: bounds,
                             backendNodeId: node.backendDOMNodeId
                         });
@@ -788,11 +871,27 @@ async function processCommandInternally(payload) {
 
             const viewport = layoutMetrics.layoutViewport || { pageX: 0, pageY: 0, clientWidth: 1920, clientHeight: 1080 };
             const boundsMap = {};
+            const valueMap = {}; // Map to store node values
 
             if (snap && snap.documents && snap.documents.length > 0) {
                 const doc = snap.documents[0];
                 const nodes = doc.nodes;
                 const layout = doc.layout;
+                const strings = snap.strings; // Get strings array
+
+                // Process inputValue if it exists
+                const inputValues = nodes.inputValue;
+                if (inputValues && inputValues.index && inputValues.value) {
+                    for (let i = 0; i < inputValues.index.length; i++) {
+                        const nodeIdx = inputValues.index[i];
+                        const stringIdx = inputValues.value[i];
+                        const val = strings[stringIdx];
+                        if (val !== undefined) {
+                            const backendNodeId = nodes.backendNodeId[nodeIdx];
+                            valueMap[backendNodeId] = val;
+                        }
+                    }
+                }
 
                 for (let i = 0; i < layout.nodeIndex.length; i++) {
                     const nodeIdx = layout.nodeIndex[i];
@@ -800,6 +899,54 @@ async function processCommandInternally(payload) {
                     const bounds = layout.bounds[i]; // [x, y, width, height]
                     boundsMap[backendNodeId] = { x: bounds[0], y: bounds[1], width: bounds[2], height: bounds[3] };
                 }
+            }
+
+            // 2b. Runtime evaluate fallback for inputs that might be missed by snap
+            try {
+                const runtimeValues = await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: tab.id }, "Runtime.evaluate", {
+                        expression: `
+                            (function() {
+                                const inputs = document.querySelectorAll('input, textarea');
+                                const results = [];
+                                for (const el of inputs) {
+                                    if (el.value !== undefined && el.value !== null && el.value !== '') {
+                                        const rect = el.getBoundingClientRect();
+                                        results.push({
+                                            x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+                                            value: el.value
+                                        });
+                                    }
+                                }
+                                return JSON.stringify(results);
+                            })();
+                        `,
+                        returnByValue: true
+                    }, (res) => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve(res);
+                    });
+                });
+
+                if (runtimeValues && runtimeValues.result && runtimeValues.result.value) {
+                    const rtVals = JSON.parse(runtimeValues.result.value);
+                    // Try to match runtime values to boundsMap
+                    for (const backendId in boundsMap) {
+                        const b = boundsMap[backendId];
+                        if (!valueMap[backendId]) {
+                            for (const rt of rtVals) {
+                                // Give a small margin of error for matching bounds
+                                if (Math.abs(b.x - rt.x) < 2 && Math.abs(b.y - rt.y) < 2 &&
+                                    Math.abs(b.width - rt.width) < 2 && Math.abs(b.height - rt.height) < 2) {
+                                    valueMap[backendId] = rt.value;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (rtErr) {
+                sendTelemetryLog(`Runtime evaluation for input values failed: ${rtErr.message}`);
             }
 
             const interactiveRoles = ['button', 'link', 'textbox', 'searchbox', 'combobox', 'menuitem', 'tab', 'checkbox', 'radio', 'switch', 'slider'];
@@ -832,10 +979,29 @@ async function processCommandInternally(payload) {
 
                         if (isVisible) {
                             let text = node.name ? node.name.value : '';
+
+                            // Extract value with redundancy
+                            let nodeValue = '';
+
+                            // 1. Try valueMap (DOMSnapshot or Runtime)
+                            if (valueMap[node.backendDOMNodeId]) {
+                                nodeValue = valueMap[node.backendDOMNodeId];
+                            }
+                            // 2. Try AXTree native value
+                            else if (node.value && node.value.value) {
+                                nodeValue = String(node.value.value);
+                            }
+
+                            // Combine into text for LLM visibility
+                            if (nodeValue) {
+                                text = text ? `${text} (Value: ${nodeValue})` : `Value: ${nodeValue}`;
+                            }
+
                             uiElements.push({
                                 id: String(idCounter++),
                                 type: role,
                                 text: text,
+                                value: nodeValue,
                                 bounds: bounds,
                                 backendNodeId: node.backendDOMNodeId
                             });
