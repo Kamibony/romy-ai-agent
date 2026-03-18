@@ -156,6 +156,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "- {\"action\": \"PRESS_KEY\", \"key\": \"<key>\"}\n"
             "- {\"action\": \"HOVER\", \"target_id\": \"<the_number>\", \"xpath\": \"<optional_xpath_fallback>\"}\n"
             "- {\"action\": \"WAIT_FOR\", \"selector\": \"<css_selector>\", \"max_wait_seconds\": 5}\n"
+            "- {\"action\": \"RESET_VIEW\"} (use this to click outside or press Escape to close active overlays, dropdowns, date pickers, or modals and let the UI settle before verifying the state)\n"
             "- {\"action\": \"REPLY\", \"text\": \"<the answer>\"}\n"
             "- {\"action\": \"DONE\"} (when the task is fully completed)\n"
             "If you cannot determine the next step or encounter an unexpected state, return: [{\"action\": \"ASK_HUMAN\", \"reason\": \"<your specific question>\"}].\n\n"
@@ -287,6 +288,11 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                                 "reason": str(action_data["reason"]),
                                 "thought": thought
                             })
+                        elif action_data.get("action") == "RESET_VIEW":
+                            parsed_actions.append({
+                                "action": "RESET_VIEW",
+                                "thought": thought
+                            })
                         elif action_data.get("action") == "DONE":
                             parsed_actions.append({"action": "DONE", "thought": thought})
                         else:
@@ -373,6 +379,11 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                     return [{
                         "action": "ASK_HUMAN",
                         "reason": str(action_data["reason"]),
+                        "thought": thought
+                    }]
+                elif action_data.get("action") == "RESET_VIEW":
+                    return [{
+                        "action": "RESET_VIEW",
                         "thought": thought
                     }]
                 elif action_data.get("action") == "DONE":

@@ -530,6 +530,59 @@ async function handleExecuteNativeAction(payload) {
             });
         });
         return { success: true };
+    } else if (action.action === "RESET_VIEW") {
+        try {
+            await new Promise((resolve, reject) => {
+                chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
+                    if (chrome.runtime.lastError && !chrome.runtime.lastError.message.includes("Cannot attach to this target")) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                    } else {
+                        resolve();
+                    }
+                });
+            });
+            // Try pressing Escape first
+            await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                    type: 'keyDown', key: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27, macCharCode: 27
+                }, (result) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(result);
+                });
+            });
+            await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                    type: 'keyUp', key: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27, macCharCode: 27
+                }, (result) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(result);
+                });
+            });
+            await new Promise(r => setTimeout(r, 100));
+            // Also dispatch a click outside at (1,1)
+            await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
+                    type: 'mousePressed', x: 1, y: 1, button: 'left', clickCount: 1
+                }, (result) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(result);
+                });
+            });
+            await new Promise(r => setTimeout(r, 50));
+            await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
+                    type: 'mouseReleased', x: 1, y: 1, button: 'left', clickCount: 1
+                }, (result) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(result);
+                });
+            });
+        } finally {
+            chrome.debugger.detach({ tabId: tab.id }, () => {
+                const err = chrome.runtime.lastError;
+            });
+        }
+        return { success: true };
     } else if (action.action === "CLICK" || action.action === "TYPE" || action.action === "PASTE") {
         const domData = latestDomBounds[action.target_id];
         if (!domData || !domData.bounds) {
@@ -1175,6 +1228,58 @@ async function processCommandInternally(payload) {
                             }
                         });
                     });
+                    totalActionsExecuted++;
+                    await new Promise(r => setTimeout(r, 1000));
+                } else if (action.action === "RESET_VIEW") {
+                    try {
+                        await new Promise((resolve, reject) => {
+                            chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
+                                if (chrome.runtime.lastError && !chrome.runtime.lastError.message.includes("Cannot attach to this target")) {
+                                    reject(new Error(chrome.runtime.lastError.message));
+                                } else {
+                                    resolve();
+                                }
+                            });
+                        });
+                        await new Promise((resolve, reject) => {
+                            chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                                type: 'keyDown', key: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27, macCharCode: 27
+                            }, (result) => {
+                                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                else resolve(result);
+                            });
+                        });
+                        await new Promise((resolve, reject) => {
+                            chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                                type: 'keyUp', key: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27, macCharCode: 27
+                            }, (result) => {
+                                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                else resolve(result);
+                            });
+                        });
+                        await new Promise(r => setTimeout(r, 100));
+                        await new Promise((resolve, reject) => {
+                            chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
+                                type: 'mousePressed', x: 1, y: 1, button: 'left', clickCount: 1
+                            }, (result) => {
+                                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                else resolve(result);
+                            });
+                        });
+                        await new Promise(r => setTimeout(r, 50));
+                        await new Promise((resolve, reject) => {
+                            chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
+                                type: 'mouseReleased', x: 1, y: 1, button: 'left', clickCount: 1
+                            }, (result) => {
+                                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                else resolve(result);
+                            });
+                        });
+                    } finally {
+                        chrome.debugger.detach({ tabId: tab.id }, () => {
+                            const err = chrome.runtime.lastError;
+                        });
+                    }
                     totalActionsExecuted++;
                     await new Promise(r => setTimeout(r, 1000));
                 } else {
