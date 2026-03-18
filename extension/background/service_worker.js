@@ -501,7 +501,7 @@ async function handleGetState(payload) {
         });
     }
 
-    return { success: true, ui_elements: uiElements, screenshot_base64: screenshotBase64, tabId: tab.id };
+    return { success: true, ui_elements: uiElements, screenshot_base64: screenshotBase64, tabId: tab.id, url: tab.url };
 }
 
 async function handleExecuteNativeAction(payload) {
