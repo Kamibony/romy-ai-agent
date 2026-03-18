@@ -160,6 +160,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "- {\"action\": \"REPLY\", \"text\": \"<the answer>\"}\n"
             "- {\"action\": \"DONE\"} (when the task is fully completed)\n"
             "If you cannot determine the next step or encounter an unexpected state, return: [{\"action\": \"ASK_HUMAN\", \"reason\": \"<your specific question>\"}].\n\n"
+            "CRITICAL RULE for Autocomplete/Search Fields: When interacting with inputs that feature autocomplete or dropdown suggestions (e.g., city/airport selectors), typing the text is NOT enough. After issuing a TYPE action, you MUST expect a dropdown menu to appear in the next GET_STATE. Your immediate next step MUST be to use the CLICK action to select the correct suggestion from that dropdown. Never proceed to fill out other fields until you have explicitly clicked and confirmed the suggestion from the current field's dropdown.\n\n"
             "CRUCIAL INSTRUCTION: Return ONLY a valid JSON array containing exactly ONE action object. Do not return multiple actions. Do not return text outside the array.\n"
             "Example: [{\"action\": \"CLICK\", \"target_id\": \"1\", \"xpath\": \"//button\", \"thought\": \"Clicking the login button.\"}]\n"
         )
