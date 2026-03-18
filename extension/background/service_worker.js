@@ -21,18 +21,26 @@ async function setupOffscreenDocument(path) {
 // Local bridge WebSocket to receive commands from the Desktop Agent Orchestrator
 let localBridgeWs = null;
 let reconnectTimeout = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 5;
 
 function connectLocalBridge() {
     if (localBridgeWs) {
         return;
     }
 
-    console.log("Connecting to local bridge via WebSocket...");
+    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        console.error("Max WebSocket reconnect attempts reached. Giving up.");
+        return;
+    }
+
+    console.log(`Connecting to local bridge via WebSocket... (Attempt ${reconnectAttempts + 1}/${MAX_RECONNECT_ATTEMPTS})`);
     try {
         localBridgeWs = new WebSocket('ws://127.0.0.1:8765');
 
         localBridgeWs.onopen = () => {
             console.log("WebSocket connected to local bridge.");
+            reconnectAttempts = 0; // Reset counter on successful connection
             if (reconnectTimeout) {
                 clearTimeout(reconnectTimeout);
                 reconnectTimeout = null;
@@ -75,6 +83,7 @@ function connectLocalBridge() {
         localBridgeWs.onclose = () => {
             console.log("WebSocket connection closed. Reconnecting in 2s...");
             localBridgeWs = null;
+            reconnectAttempts++;
             reconnectTimeout = setTimeout(connectLocalBridge, 2000);
         };
 
@@ -87,6 +96,7 @@ function connectLocalBridge() {
         };
     } catch (e) {
         console.error("Error setting up WebSocket:", e);
+        reconnectAttempts++;
         reconnectTimeout = setTimeout(connectLocalBridge, 2000);
     }
 }
@@ -360,11 +370,14 @@ async function handleGetState(payload) {
             }
         }
 
-        // Store bounds for native execution
+        // Store bounds and backendNodeId for native execution
         latestDomBounds = {};
         uiElements.forEach(el => {
             if (el.bounds) {
-                latestDomBounds[el.id] = el.bounds;
+                latestDomBounds[el.id] = {
+                    bounds: el.bounds,
+                    backendNodeId: el.backendNodeId
+                };
             }
         });
 
@@ -435,8 +448,8 @@ async function handleExecuteNativeAction(payload) {
         });
         return { success: true };
     } else if (action.action === "CLICK" || action.action === "TYPE") {
-        const bounds = latestDomBounds[action.target_id];
-        if (!bounds) {
+        const domData = latestDomBounds[action.target_id];
+        if (!domData || !domData.bounds) {
             // Fallback to content script if bounds not found
             sendTelemetryLog(`Bounds not found for ID ${action.target_id}, falling back to content script execution.`);
             return await new Promise((resolve, reject) => {
@@ -447,6 +460,9 @@ async function handleExecuteNativeAction(payload) {
                 });
             });
         }
+
+        const bounds = domData.bounds;
+        const backendNodeId = domData.backendNodeId;
 
         // Calculate center point for CDP click
         const x = Math.round(bounds.x + bounds.width / 2);
@@ -462,6 +478,32 @@ async function handleExecuteNativeAction(payload) {
                     }
                 });
             });
+
+            // Enable DOM agent for resolveNode
+            await new Promise((resolve) => chrome.debugger.sendCommand({ tabId: tab.id }, 'DOM.enable', {}, resolve));
+
+            // Try to resolve backendNodeId to objectId and focus it
+            if (backendNodeId) {
+                try {
+                    const resolveResult = await new Promise((resolve, reject) => {
+                        chrome.debugger.sendCommand({ tabId: tab.id }, 'DOM.resolveNode', { backendNodeId: backendNodeId }, (res) => {
+                            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                            else resolve(res);
+                        });
+                    });
+
+                    if (resolveResult && resolveResult.object && resolveResult.object.objectId) {
+                        await new Promise((resolve, reject) => {
+                            chrome.debugger.sendCommand({ tabId: tab.id }, 'DOM.focus', { objectId: resolveResult.object.objectId }, (res) => {
+                                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                else resolve(res);
+                            });
+                        });
+                    }
+                } catch (focusErr) {
+                    sendTelemetryLog(`Failed to focus element via CDP: ${focusErr.message}`);
+                }
+            }
 
             // Native Click
             await new Promise((resolve, reject) => {
@@ -721,6 +763,17 @@ async function processCommandInternally(payload) {
                     }
                 }
             }
+
+            // Store bounds and backendNodeId for native execution
+            latestDomBounds = {};
+            uiElements.forEach(el => {
+                if (el.bounds) {
+                    latestDomBounds[el.id] = {
+                        bounds: el.bounds,
+                        backendNodeId: el.backendNodeId
+                    };
+                }
+            });
 
             sendTelemetryLog(`Extracted ${uiElements.length} elements from DOM.`);
 

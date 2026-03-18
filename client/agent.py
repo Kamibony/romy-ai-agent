@@ -613,19 +613,16 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                     logging.info(f"Backend returned action: {action_upper}")
 
                     # Stuck Detector Logic
-                    history.append((act, payload.get("ui_elements", [])))
+                    history.append(payload.get("ui_elements", []))
                     if len(history) > 3:
                         history.pop(0)
 
                     if len(history) == 3:
-                        (a1, u1), (a2, u2), (a3, u3) = history
-                        # Compare action dicts excluding dynamic fields like raw_response
-                        def _normalize_action(a):
-                            return {k: v for k, v in a.items() if k not in ["raw_response", "reason"]}
-
-                        if _normalize_action(a1) == _normalize_action(a2) == _normalize_action(a3) and u1 == u2 == u3:
-                            logging.warning("Stuck Detector triggered! Executed identical action 3 times in a row without state change.")
-                            reason = "I seem to be stuck repeating the same action. I need human assistance."
+                        u1, u2, u3 = history
+                        # Check if visual state (ui_elements) remains identical for 3 consecutive iterations
+                        if u1 == u2 == u3:
+                            logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
+                            reason = "I seem to be stuck repeating the same action without state change. I need human assistance."
                             try:
                                 firestore_update_document("remote_commands", doc_id, {
                                     "status": "AWAITING_HUMAN_INPUT",
@@ -793,18 +790,15 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                     action_upper = str(action_type).upper()
 
                     # Stuck Detector Logic
-                    history.append((act, payload.get("ui_elements", [])))
+                    history.append(payload.get("ui_elements", []))
                     if len(history) > 3:
                         history.pop(0)
 
                     if len(history) == 3:
-                        (a1, u1), (a2, u2), (a3, u3) = history
-                        def _normalize_action(a):
-                            return {k: v for k, v in a.items() if k not in ["raw_response", "reason"]}
-
-                        if _normalize_action(a1) == _normalize_action(a2) == _normalize_action(a3) and u1 == u2 == u3:
-                            logging.warning("Stuck Detector triggered! Executed identical action 3 times in a row without state change.")
-                            reason = "I seem to be stuck repeating the same OS action. I need human assistance."
+                        u1, u2, u3 = history
+                        if u1 == u2 == u3:
+                            logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
+                            reason = "I seem to be stuck repeating the same OS action without state change. I need human assistance."
                             try:
                                 firestore_update_document("remote_commands", doc_id, {
                                     "status": "AWAITING_HUMAN_INPUT",
@@ -1165,18 +1159,15 @@ def execute_voice_agent_loop() -> None:
                     logging.info(f"Backend returned action: {action_upper}")
 
                     # Stuck Detector Logic
-                    history.append((act, payload.get("ui_elements", [])))
+                    history.append(payload.get("ui_elements", []))
                     if len(history) > 3:
                         history.pop(0)
 
                     if len(history) == 3:
-                        (a1, u1), (a2, u2), (a3, u3) = history
-                        def _normalize_action(a):
-                            return {k: v for k, v in a.items() if k not in ["raw_response", "reason"]}
-
-                        if _normalize_action(a1) == _normalize_action(a2) == _normalize_action(a3) and u1 == u2 == u3:
-                            logging.warning("Stuck Detector triggered! Executed identical action 3 times in a row without state change.")
-                            reason = "I seem to be stuck repeating the same web action. I need human assistance."
+                        u1, u2, u3 = history
+                        if u1 == u2 == u3:
+                            logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
+                            reason = "I seem to be stuck repeating the same web action without state change. I need human assistance."
                             try:
                                 firestore_update_document("remote_commands", doc_id, {
                                     "status": "AWAITING_HUMAN_INPUT",
@@ -1356,18 +1347,15 @@ def execute_voice_agent_loop() -> None:
                     action_upper = str(action_type).upper()
 
                     # Stuck Detector Logic
-                    history.append((act, payload.get("ui_elements", [])))
+                    history.append(payload.get("ui_elements", []))
                     if len(history) > 3:
                         history.pop(0)
 
                     if len(history) == 3:
-                        (a1, u1), (a2, u2), (a3, u3) = history
-                        def _normalize_action(a):
-                            return {k: v for k, v in a.items() if k not in ["raw_response", "reason"]}
-
-                        if _normalize_action(a1) == _normalize_action(a2) == _normalize_action(a3) and u1 == u2 == u3:
-                            logging.warning("Stuck Detector triggered! Executed identical action 3 times in a row without state change.")
-                            reason = "I seem to be stuck repeating the same OS action. I need human assistance."
+                        u1, u2, u3 = history
+                        if u1 == u2 == u3:
+                            logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
+                            reason = "I seem to be stuck repeating the same OS action without state change. I need human assistance."
                             try:
                                 firestore_update_document("remote_commands", doc_id, {
                                     "status": "AWAITING_HUMAN_INPUT",
