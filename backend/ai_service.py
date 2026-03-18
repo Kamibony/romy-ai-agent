@@ -11,6 +11,8 @@ try:
 except ImportError:
     genai = None
 
+from memory import save_playbook_rule, get_playbook_rules
+
 # Initialize clients globally if possible
 gemini_client = None
 
@@ -251,7 +253,43 @@ def classify_intent_with_gemini(command_text: str) -> str:
         print(f"Error classifying intent: {e}")
         return "OS"
 
-def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[str] = None, command_text: Optional[str] = None, thread_history: str = "", screenshot_base64: Optional[str] = None, current_sub_task: Optional[str] = None) -> list[Dict[str, Any]]:
+def synthesize_playbook_rule_with_gemini(domain: str, execution_telemetry: str) -> Optional[str]:
+    """
+    Synthesizer Agent (Sleep Cycle): Reviews execution telemetry for a domain and extracts a universal rule.
+    Saves the rule to ChromaDB if found.
+    """
+    if not execution_telemetry or gemini_client is None:
+        return None
+
+    try:
+        system_instruction = (
+            "You are a Synthesizer Agent for an AI web assistant. Your job is to review the execution telemetry "
+            "(the history of actions, successes, and especially failures/retries) for a specific website. "
+            "Extract a single, concise, universal rule or 'playbook' for successfully interacting with this site. "
+            "For example, 'On pelikan.cz, after typing the city, you must wait for the dropdown and explicitly click the suggestion.' "
+            "If the telemetry is straightforward and no special rule is needed, return an empty string. "
+            "Return ONLY the extracted rule string, or nothing."
+        )
+
+        response = gemini_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[f"Domain: {domain}\nTelemetry:\n{execution_telemetry}"],
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.2,
+            )
+        )
+
+        rule = response.text.strip()
+        if rule:
+            save_playbook_rule(domain, rule)
+            return rule
+        return None
+    except Exception as e:
+        print(f"Error synthesizing playbook rule: {e}")
+        return None
+
+def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[str] = None, command_text: Optional[str] = None, thread_history: str = "", screenshot_base64: Optional[str] = None, current_sub_task: Optional[str] = None, current_url: Optional[str] = None) -> list[Dict[str, Any]]:
     """
     Uses Gemini 2.5 Flash to process audio/text commands, a visual screenshot, and UI elements, returning exactly ONE action in a list.
     """
@@ -322,6 +360,20 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
         )
         if global_prompt:
             system_instruction += f"Global Instructions:\n{global_prompt}\n\n"
+
+        if current_url:
+            from urllib.parse import urlparse
+            try:
+                domain = urlparse(current_url).netloc
+                if domain:
+                    domain = domain.replace("www.", "")
+                    playbook_rules = get_playbook_rules(domain)
+                    if playbook_rules:
+                        system_instruction += f"\n\n[SITE_SPECIFIC_RULE] for {domain}:\n"
+                        for rule in playbook_rules:
+                            system_instruction += f"- {rule}\n"
+            except Exception as e:
+                print(f"Error fetching playbook rules for {current_url}: {e}")
 
         ui_elements_str = json.dumps(ui_elements, indent=2)
         prompt = f"UI Elements:\n{ui_elements_str}\n\nDetermine the correct target element and output the JSON array of actions."
