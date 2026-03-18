@@ -3,9 +3,15 @@ import os
 import json
 import time
 from unittest.mock import MagicMock
+from dotenv import load_dotenv
+
+# Construct absolute path to backend/.env and load it
+backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+dotenv_path = os.path.join(backend_dir, '.env')
+load_dotenv(dotenv_path)
 
 # Ensure we can import backend modules
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, backend_dir)
 
 # Mock firebase_admin and firestore.client() to bypass database dependency errors
 # using dummy credentials and MagicMock as required by isolated testing.
@@ -28,6 +34,8 @@ def run_diagnostics():
 
     if not os.environ.get("GEMINI_API_KEY"):
         print("Warning: GEMINI_API_KEY environment variable is not set!")
+    else:
+        print("Success: GEMINI_API_KEY loaded successfully.")
 
     cmd = "Book a flight to Tokyo for next Friday."
 
