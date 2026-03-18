@@ -467,6 +467,68 @@ def scan_ui_elements() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]
 
     return ui_elements, memory_map
 
+def pre_flight_check(command_text: str) -> dict:
+    if not CURRENT_TOKEN:
+        return {"status": "ok"}
+    base_url = BACKEND_URL.split("/api/v1")[0] if "/api/v1" in BACKEND_URL else BACKEND_URL.rsplit('/', 1)[0]
+    if not base_url.endswith("/"):
+        base_url += "/"
+    url = f"{base_url.rstrip('/')}/api/pre_flight"
+
+    payload = {"command_text": command_text}
+    headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
+    try:
+        with get_resilient_session() as session:
+            response = session.post(url, json=payload, headers=headers, timeout=20)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logging.error(f"Error in pre-flight check: {e}")
+        return {"status": "ok"}
+
+def supervisor_plan(command_text: str) -> list:
+    if not CURRENT_TOKEN:
+        return []
+    base_url = BACKEND_URL.split("/api/v1")[0] if "/api/v1" in BACKEND_URL else BACKEND_URL.rsplit('/', 1)[0]
+    if not base_url.endswith("/"):
+        base_url += "/"
+    url = f"{base_url.rstrip('/')}/api/supervisor_plan"
+
+    payload = {"command_text": command_text}
+    headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
+    try:
+        with get_resilient_session() as session:
+            response = session.post(url, json=payload, headers=headers, timeout=30)
+        response.raise_for_status()
+        return response.json().get("sub_tasks", [])
+    except Exception as e:
+        logging.error(f"Error getting supervisor plan: {e}")
+        return []
+
+def critic_verify(sub_task: str, action_taken: dict, before_state: dict, after_state: dict) -> dict:
+    if not CURRENT_TOKEN:
+        return {"success": True, "reason": "No token"}
+    base_url = BACKEND_URL.split("/api/v1")[0] if "/api/v1" in BACKEND_URL else BACKEND_URL.rsplit('/', 1)[0]
+    if not base_url.endswith("/"):
+        base_url += "/"
+    url = f"{base_url.rstrip('/')}/api/critic_verify"
+
+    payload = {
+        "sub_task": sub_task,
+        "action_taken": action_taken,
+        "before_state": before_state,
+        "after_state": after_state
+    }
+    headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
+    try:
+        with get_resilient_session() as session:
+            response = session.post(url, json=payload, headers=headers, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logging.error(f"Error in critic verify: {e}")
+        return {"success": True, "reason": f"Verification error: {e}"}
+
 def classify_intent(command_text: str, audio_b64: str) -> Tuple[str, str]:
     """
     Calls the backend API to dynamically classify if a command is meant for WEB or OS.
@@ -537,14 +599,43 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
             iteration = 0
             final_status = "completed"
 
+            # Pre-flight Check
+            logging.info("Running Pre-Flight check...")
+            pre_flight = pre_flight_check(command_text)
+            if pre_flight.get("status") == "ASK_HUMAN":
+                reason = pre_flight.get("reason", "Missing required information.")
+                logging.info(f"Pre-flight failed: {reason}")
+                try:
+                    firestore_update_document("remote_commands", doc_id, {
+                        "status": "AWAITING_HUMAN_INPUT",
+                        "help_reason": reason
+                    })
+                except Exception as img_e:
+                    logging.error(f"Error saving pre-flight help request: {img_e}")
+                return
+
+            # Supervisor Plan
+            logging.info("Requesting Supervisor Plan...")
+            sub_tasks = supervisor_plan(command_text)
+            if not sub_tasks:
+                sub_tasks = [command_text]  # fallback
+
+            logging.info(f"Supervisor plan generated: {sub_tasks}")
+
             # Stuck detector state
             history = []
 
-            while True:
-                if ABORT_AGENT:
-                    logging.info("Emergency abort triggered. Stopping remote agent loop.")
-                    final_status = "failed"
-                    break
+            for sub_task_idx, current_sub_task in enumerate(sub_tasks):
+                logging.info(f"--- Executing Sub-Task {sub_task_idx + 1}/{len(sub_tasks)}: {current_sub_task} ---")
+
+                sub_task_iteration = 0
+                max_sub_task_iterations = 5
+
+                while sub_task_iteration < max_sub_task_iterations:
+                    if ABORT_AGENT:
+                        logging.info("Emergency abort triggered. Stopping remote agent loop.")
+                        final_status = "failed"
+                        break
 
                 if PAUSE_AGENT:
                     time.sleep(1)
@@ -585,9 +676,10 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                     "ui_elements": ui_elements,
                     "session_id": doc_id,
                     "command_text": command_text,
+                    "current_sub_task": current_sub_task,
                     "screenshot_base64": screenshot_base64
                 }
-                if iteration == 0 and audio_b64:
+                if sub_task_iteration == 0 and sub_task_idx == 0 and audio_b64:
                     payload["audio_base64"] = audio_b64
                 else:
                     payload["audio_base64"] = ""
@@ -693,64 +785,68 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
 
                     # --- VERIFICATION LAYER ---
                     # After delegating the action, wait briefly and verify the state change
-                    time.sleep(1)
+                    time.sleep(2)
 
-                    if action_upper in ["TYPE", "CLICK", "NAVIGATE"]:
-                        logging.info(f"Verifying action '{action_upper}' execution...")
-                        verify_payload = {
-                            "action_type": "GET_STATE",
-                            "commandText": command_text,
-                            "audioBase64": ""
-                        }
-                        verify_result = bridge.delegate_command(verify_payload)
+                    logging.info(f"Getting new state for Critic Verification...")
+                    verify_payload = {
+                        "action_type": "GET_STATE",
+                        "commandText": command_text,
+                        "audioBase64": ""
+                    }
+                    verify_result = bridge.delegate_command(verify_payload)
 
-                        if verify_result.get("success"):
-                            new_ui_elements = verify_result.get("ui_elements", [])
+                    if not verify_result.get("success"):
+                        logging.error("Failed to get state for Critic.")
+                        # Proceed with empty state to let critic decide or fail
+                        verify_state_ui_elements = []
+                        verify_screenshot = ""
+                    else:
+                        verify_state_ui_elements = verify_result.get("ui_elements", [])
+                        verify_screenshot = verify_result.get("screenshot_base64", "")
 
-                            if action_upper == "TYPE":
-                                typed_text = act.get("text", "")
-                                text_matched = False
-
-                                for el in new_ui_elements:
-                                    # Check if the text appeared anywhere in the UI elements.
-                                    el_text = str(el.get("text", "")).lower()
-                                    el_value = str(el.get("value", "")).lower() # If DOM mapper ever extracts value
-
-                                    if typed_text and (typed_text.lower() in el_text or typed_text.lower() in el_value):
-                                        text_matched = True
-                                        break
-
-                                if not text_matched:
-                                    logging.warning(f"Verification warning: Expected text '{typed_text}' not found in DOM after TYPE action.")
-                                    command_text += f"\nSystem Note: The previous TYPE action for '{typed_text}' seemed to fail. Verify the text is actually present. If not, try a different approach or verify the target element."
-                                else:
-                                    logging.info("Verification success: Text found in DOM after TYPE action.")
-
-                            elif action_upper == "CLICK":
-                                # A simple click verification: did the DOM tree change?
-                                old_ui_elements = ui_elements
-                                if new_ui_elements != old_ui_elements:
-                                    logging.info("Verification success: DOM state changed after CLICK action.")
-                                else:
-                                    logging.warning("Verification warning: DOM state did not change after CLICK action.")
-                                    command_text += f"\nSystem Note: The previous CLICK action seemed to have no effect on the page state. Please verify if it was the correct element or if another action is needed."
-
-                            elif action_upper == "NAVIGATE":
-                                logging.info("Verification success: Navigate action completed.")
+                    # Call Critic Verify
+                    logging.info("Requesting Critic Verification...")
+                    verify_res = critic_verify(
+                        current_sub_task,
+                        act,
+                        {"ui_elements": ui_elements, "screenshot_base64": screenshot_base64},
+                        {"ui_elements": verify_state_ui_elements, "screenshot_base64": verify_screenshot}
+                    )
+                    if verify_res.get("success"):
+                        logging.info(f"Critic verified success for sub-task: {current_sub_task}")
+                        break_outer = True
+                        break # Break out of action loop
+                    else:
+                        logging.warning(f"Critic verified failure: {verify_res.get('reason')}. Retrying...")
 
                 except requests.exceptions.RequestException as req_e:
                     if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
                         handle_token_expiry()
                         final_status = "failed"
                         error_msg = "Token expired"
+                        break_outer = True
                         break
                     logging.info(f"Request failed: {req_e}")
                     final_status = "failed"
                     error_msg = f"Network request failed: {req_e}"
+                    break_outer = True
+                    break
+
+                if break_outer:
                     break
 
                 time.sleep(1)
                 iteration += 1
+                sub_task_iteration += 1
+
+            # Subtask retry limit reached
+            if sub_task_iteration >= max_sub_task_iterations:
+                logging.error(f"Max retries reached for sub-task: {current_sub_task}")
+                final_status = "failed"
+                break
+
+            if final_status != "completed":
+                break
 
             # Update final document status
             try:
@@ -968,6 +1064,33 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                     else:
                         logging.info(f"Received action: {action_type}. Continuing loop...")
 
+                    # Call Critic Verify
+                    logging.info("Requesting Critic Verification...")
+                    # OS Verification
+                    time.sleep(1)
+                    new_ui_elements, _ = scan_ui_elements()
+                    try:
+                        screenshot = pyautogui.screenshot()
+                        buffered = io.BytesIO()
+                        screenshot.save(buffered, format="PNG")
+                        verify_os_screenshot_b64 = base64.b64encode(buffered.getvalue()).decode()
+                    except Exception:
+                        verify_os_screenshot_b64 = ""
+
+                    verify_res = critic_verify(
+                        current_sub_task,
+                        act,
+                        {"ui_elements": ui_elements, "screenshot_base64": os_screenshot_b64},
+                        {"ui_elements": new_ui_elements, "screenshot_base64": verify_os_screenshot_b64}
+                    )
+                    if verify_res.get("success"):
+                        logging.info(f"Critic verified success for sub-task: {current_sub_task}")
+                        had_terminal_action = True
+                        break_outer = True
+                        break # Break out of action loop
+                    else:
+                        logging.warning(f"Critic verified failure: {verify_res.get('reason')}. Retrying...")
+
                     # Micro-sleep between sequential actions within the array
                     time.sleep(0.5)
 
@@ -1123,9 +1246,6 @@ def execute_voice_agent_loop() -> None:
             doc_id = "voice_session_1"
             final_status = "completed"
 
-            # Stuck detector state
-            history = []
-
             # Create or ensure the document exists
             try:
                 firestore_update_document("remote_commands", doc_id, {
@@ -1135,10 +1255,44 @@ def execute_voice_agent_loop() -> None:
             except Exception as e:
                 logging.error(f"Error setting up voice session document: {e}")
 
-            while True:
-                if ABORT_AGENT:
-                    logging.info("Emergency abort triggered. Stopping voice agent loop.")
-                    break
+            # Pre-flight Check
+            logging.info("Running Pre-Flight check...")
+            pre_flight = pre_flight_check(command_text)
+            if pre_flight.get("status") == "ASK_HUMAN":
+                reason = pre_flight.get("reason", "Missing required information.")
+                logging.info(f"Pre-flight failed: {reason}")
+                try:
+                    firestore_update_document("remote_commands", doc_id, {
+                        "status": "AWAITING_HUMAN_INPUT",
+                        "help_reason": reason
+                    })
+                except Exception as img_e:
+                    logging.error(f"Error saving pre-flight help request: {img_e}")
+                return
+
+            # Supervisor Plan
+            logging.info("Requesting Supervisor Plan...")
+            sub_tasks = supervisor_plan(command_text)
+            if not sub_tasks:
+                sub_tasks = [command_text]  # fallback
+
+            logging.info(f"Supervisor plan generated: {sub_tasks}")
+
+            # Continuous Voice Session requires outer loop if multi-command
+            # Stuck detector state
+            history = []
+
+            for sub_task_idx, current_sub_task in enumerate(sub_tasks):
+                logging.info(f"--- Executing Sub-Task {sub_task_idx + 1}/{len(sub_tasks)}: {current_sub_task} ---")
+
+                sub_task_iteration = 0
+                max_sub_task_iterations = 5
+
+                while sub_task_iteration < max_sub_task_iterations:
+                    if ABORT_AGENT:
+                        logging.info("Emergency abort triggered. Stopping voice agent loop.")
+                        final_status = "failed"
+                        break
 
                 if PAUSE_AGENT:
                     time.sleep(1)
@@ -1180,9 +1334,10 @@ def execute_voice_agent_loop() -> None:
                     "ui_elements": ui_elements,
                     "session_id": doc_id,
                     "command_text": command_text,
+                    "current_sub_task": current_sub_task,
                     "screenshot_base64": screenshot_base64
                 }
-                if iteration == 0 and audio_b64:
+                if sub_task_iteration == 0 and sub_task_idx == 0 and audio_b64:
                     payload["audio_base64"] = audio_b64
                 else:
                     payload["audio_base64"] = ""
@@ -1285,57 +1440,64 @@ def execute_voice_agent_loop() -> None:
 
                     # --- VERIFICATION LAYER ---
                     # After delegating the action, wait briefly and verify the state change
-                    time.sleep(1)
+                    time.sleep(2)
 
-                    if action_upper in ["TYPE", "CLICK", "NAVIGATE"]:
-                        logging.info(f"Verifying action '{action_upper}' execution...")
-                        verify_payload = {
-                            "action_type": "GET_STATE",
-                            "commandText": command_text,
-                            "audioBase64": ""
-                        }
-                        verify_result = bridge.delegate_command(verify_payload)
+                    logging.info(f"Getting new state for Critic Verification...")
+                    verify_payload = {
+                        "action_type": "GET_STATE",
+                        "commandText": command_text,
+                        "audioBase64": ""
+                    }
+                    verify_result = bridge.delegate_command(verify_payload)
 
-                        if verify_result.get("success"):
-                            new_ui_elements = verify_result.get("ui_elements", [])
+                    if not verify_result.get("success"):
+                        logging.error("Failed to get state for Critic.")
+                        # Proceed with empty state to let critic decide or fail
+                        verify_state_ui_elements = []
+                        verify_screenshot = ""
+                    else:
+                        verify_state_ui_elements = verify_result.get("ui_elements", [])
+                        verify_screenshot = verify_result.get("screenshot_base64", "")
 
-                            if action_upper == "TYPE":
-                                typed_text = act.get("text", "")
-                                text_matched = False
-
-                                for el in new_ui_elements:
-                                    el_text = str(el.get("text", "")).lower()
-                                    el_value = str(el.get("value", "")).lower()
-                                    if typed_text and (typed_text.lower() in el_text or typed_text.lower() in el_value):
-                                        text_matched = True
-                                        break
-
-                                if not text_matched:
-                                    logging.warning(f"Verification warning: Expected text '{typed_text}' not found in DOM after TYPE action.")
-                                    command_text += f"\nSystem Note: The previous TYPE action for '{typed_text}' seemed to fail. Verify the text is actually present. If not, try a different approach or verify the target element."
-                                else:
-                                    logging.info("Verification success: Text found in DOM after TYPE action.")
-
-                            elif action_upper == "CLICK":
-                                old_ui_elements = ui_elements
-                                if new_ui_elements != old_ui_elements:
-                                    logging.info("Verification success: DOM state changed after CLICK action.")
-                                else:
-                                    logging.warning("Verification warning: DOM state did not change after CLICK action.")
-                                    command_text += f"\nSystem Note: The previous CLICK action seemed to have no effect on the page state. Please verify if it was the correct element or if another action is needed."
-
-                            elif action_upper == "NAVIGATE":
-                                logging.info("Verification success: Navigate action completed.")
+                    # Call Critic Verify
+                    logging.info("Requesting Critic Verification...")
+                    verify_res = critic_verify(
+                        current_sub_task,
+                        act,
+                        {"ui_elements": ui_elements, "screenshot_base64": screenshot_base64},
+                        {"ui_elements": verify_state_ui_elements, "screenshot_base64": verify_screenshot}
+                    )
+                    if verify_res.get("success"):
+                        logging.info(f"Critic verified success for sub-task: {current_sub_task}")
+                        break_outer = True
+                        break # Break out of action loop
+                    else:
+                        logging.warning(f"Critic verified failure: {verify_res.get('reason')}. Retrying...")
 
                 except requests.exceptions.RequestException as req_e:
                     if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
                         handle_token_expiry()
+                        break_outer = True
                         break
                     logging.info(f"Request failed: {req_e}")
+                    break_outer = True
+                    break
+
+                if break_outer:
                     break
 
                 time.sleep(1)
                 iteration += 1
+                sub_task_iteration += 1
+
+            # Subtask retry limit reached
+            if sub_task_iteration >= max_sub_task_iterations:
+                logging.error(f"Max retries reached for sub-task: {current_sub_task}")
+                final_status = "failed"
+                break
+
+            if final_status != "completed":
+                break
 
             # Update final document status
             try:
@@ -1357,6 +1519,29 @@ def execute_voice_agent_loop() -> None:
         doc_id = "voice_session_1"
         final_status = "completed"
 
+        # Pre-flight Check
+        logging.info("Running Pre-Flight check...")
+        pre_flight = pre_flight_check(command_text)
+        if pre_flight.get("status") == "ASK_HUMAN":
+            reason = pre_flight.get("reason", "Missing required information.")
+            logging.info(f"Pre-flight failed: {reason}")
+            try:
+                firestore_update_document("remote_commands", doc_id, {
+                    "status": "AWAITING_HUMAN_INPUT",
+                    "help_reason": reason
+                })
+            except Exception as img_e:
+                logging.error(f"Error saving pre-flight help request: {img_e}")
+            return
+
+        # Supervisor Plan
+        logging.info("Requesting Supervisor Plan...")
+        sub_tasks = supervisor_plan(command_text)
+        if not sub_tasks:
+            sub_tasks = [command_text]  # fallback
+
+        logging.info(f"Supervisor plan generated: {sub_tasks}")
+
         # Stuck detector state
         history = []
 
@@ -1370,14 +1555,21 @@ def execute_voice_agent_loop() -> None:
         except Exception as e:
             logging.error(f"Error setting up voice session document: {e}")
 
-        while True:
-            if ABORT_AGENT:
-                logging.info("Emergency abort triggered. Stopping voice agent loop.")
-                break
+        for sub_task_idx, current_sub_task in enumerate(sub_tasks):
+            logging.info(f"--- Executing Sub-Task {sub_task_idx + 1}/{len(sub_tasks)}: {current_sub_task} ---")
 
-            if PAUSE_AGENT:
-                time.sleep(1)
-                continue
+            sub_task_iteration = 0
+            max_sub_task_iterations = 5
+
+            while sub_task_iteration < max_sub_task_iterations:
+                if ABORT_AGENT:
+                    logging.info("Emergency abort triggered. Stopping voice agent loop.")
+                    final_status = "failed"
+                    break
+
+                if PAUSE_AGENT:
+                    time.sleep(1)
+                    continue
 
             # Check for human response
             try:
@@ -1399,15 +1591,15 @@ def execute_voice_agent_loop() -> None:
 
             # 4. Construct JSON payload
             payload = {
-                "ui_elements": ui_elements
+                "ui_elements": ui_elements,
+                "session_id": doc_id,
+                "command_text": command_text,
+                "current_sub_task": current_sub_task
             }
-            if iteration == 0:
+            if sub_task_iteration == 0 and sub_task_idx == 0 and audio_b64:
                 payload["audio_base64"] = audio_b64
             else:
                 payload["audio_base64"] = ""
-
-            payload["command_text"] = command_text
-            payload["session_id"] = doc_id
 
             # 5. Send POST to backend
             headers = {
@@ -1571,6 +1763,33 @@ def execute_voice_agent_loop() -> None:
                         break
                     else:
                         logging.info(f"Received action: {action_type}. Continuing loop...")
+
+                    # Call Critic Verify
+                    logging.info("Requesting Critic Verification...")
+                    # OS Verification
+                    time.sleep(1)
+                    new_ui_elements, _ = scan_ui_elements()
+                    try:
+                        screenshot = pyautogui.screenshot()
+                        buffered = io.BytesIO()
+                        screenshot.save(buffered, format="PNG")
+                        verify_os_screenshot_b64 = base64.b64encode(buffered.getvalue()).decode()
+                    except Exception:
+                        verify_os_screenshot_b64 = ""
+
+                    verify_res = critic_verify(
+                        current_sub_task,
+                        act,
+                        {"ui_elements": ui_elements, "screenshot_base64": os_screenshot_b64},
+                        {"ui_elements": new_ui_elements, "screenshot_base64": verify_os_screenshot_b64}
+                    )
+                    if verify_res.get("success"):
+                        logging.info(f"Critic verified success for sub-task: {current_sub_task}")
+                        had_terminal_action = True
+                        break_outer = True
+                        break # Break out of action loop
+                    else:
+                        logging.warning(f"Critic verified failure: {verify_res.get('reason')}. Retrying...")
 
                     # Micro-sleep between sequential actions within the array
                     time.sleep(0.5)
