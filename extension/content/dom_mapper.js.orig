@@ -10,7 +10,7 @@ window.RomyDomMapper = {
         // visibilityState to be 'hidden', which would result in an empty payload.
 
         // Broad locator string matching Playwright scanning
-        const locators = 'button, a, input, select, textarea, [role="button"], [role="link"], [role="menuitem"], [role="tab"], [role="checkbox"], [role="radio"], [role="switch"], [onclick]';
+        const locators = 'button, a, input, select, textarea, [role="button"], [role="link"], [onclick], .btn, .button, [class*="btn"]';
 
         function isInteractive(el) {
             if (el.matches(locators)) return true;
@@ -18,7 +18,7 @@ window.RomyDomMapper = {
             // Check ARIA attributes
             if (el.hasAttribute('aria-label') || el.hasAttribute('role')) {
                 const role = el.getAttribute('role');
-                if (['button', 'link', 'menuitem', 'tab', 'checkbox', 'radio', 'switch'].includes(role)) {
+                if (role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') {
                     return true;
                 }
                 // If it has aria-label and isn't just a generic container
@@ -30,9 +30,8 @@ window.RomyDomMapper = {
             // Check common structural action classes (handling SVG className objects)
             const className = typeof el.className === 'string' ? el.className : (el.className && el.className.baseVal ? el.className.baseVal : '');
             if (className) {
-                const classes = className.toLowerCase().split(/\s+/);
-                // Require exact matches or strict prefixes/suffixes to prevent vacuuming structural wrappers (e.g., 'action-bar', 'submit-container')
-                if (classes.some(c => c === 'btn' || c === 'button' || c.endsWith('-btn') || c.endsWith('-button') || c.startsWith('btn-') || c === 'submit')) {
+                const classes = className.toLowerCase().split(' ');
+                if (classes.some(c => c.includes('btn') || c.includes('button') || c.includes('action') || c.includes('submit'))) {
                     return true;
                 }
             }
@@ -41,11 +40,7 @@ window.RomyDomMapper = {
             try {
                 const style = window.getComputedStyle(el);
                 if (style.cursor === 'pointer' && el.tagName !== 'BODY' && el.tagName !== 'HTML') {
-                    // Filter out massive clickable structural backgrounds/wrappers
-                    const rect = el.getBoundingClientRect();
-                    if (rect.width * rect.height < 250000) { // arbitrary threshold ~500x500
-                        return true;
-                    }
+                    return true;
                 }
             } catch (e) {
                 // Ignore errors reading computed styles
@@ -106,20 +101,16 @@ window.RomyDomMapper = {
             const computedStyle = window.getComputedStyle(node);
 
             // Allow elements that are partially visible / slightly out of viewport bounds
-            // Add a buffer of 50px for elements that might be slightly scrolled out of view but still relevant
-            const BUFFER = 50;
-
             let isVisible = (
                 rect.width > 0 &&
                 rect.height > 0 &&
-                rect.bottom > -BUFFER && // Element's bottom edge is below top of viewport
-                rect.top < (window.innerHeight || document.documentElement.clientHeight) + BUFFER && // Top edge is above bottom of viewport
-                rect.right > -BUFFER && // Right edge is past left side
-                rect.left < (window.innerWidth || document.documentElement.clientWidth) + BUFFER && // Left edge is before right side
+                rect.bottom > 0 && // Element's bottom edge is below top of viewport
+                rect.top < (window.innerHeight || document.documentElement.clientHeight) && // Top edge is above bottom of viewport
+                rect.right > 0 && // Right edge is past left side
+                rect.left < (window.innerWidth || document.documentElement.clientWidth) && // Left edge is before right side
                 computedStyle.visibility !== 'hidden' &&
                 computedStyle.display !== 'none' &&
-                computedStyle.opacity !== '0' &&
-                parseFloat(computedStyle.opacity) > 0.05 // Ignore elements that are basically invisible
+                computedStyle.opacity !== '0'
             );
 
             // Relax visibility checks for inputs and textareas which might be visually hidden behind custom UI
@@ -140,15 +131,6 @@ window.RomyDomMapper = {
                     textContent = textContent.trim();
                 } else {
                     textContent = String(textContent).trim();
-                }
-
-                // Try to avoid completely empty elements unless they are inputs
-                if (!textContent && !isInputLike && tagName !== 'button' && tagName !== 'a') {
-                     // Still allow but maybe we can prune purely empty non-semantic divs that slipped through?
-                     // If it's a div/span that has pointer cursor but no text/aria/etc and no children, might be clutter.
-                     if ((tagName === 'div' || tagName === 'span') && node.childElementCount === 0) {
-                         return; // prune
-                     }
                 }
 
                 elements.push({
