@@ -6,6 +6,8 @@ import os
 import re
 import requests
 import queue
+import json
+from datetime import datetime
 
 import uiautomation as auto
 import sounddevice as sd
@@ -27,6 +29,42 @@ CURRENT_TOKEN = None
 COMMAND_QUEUE = queue.Queue()
 ABORT_AGENT = False
 PAUSE_AGENT = False
+
+def save_flight_record(doc_id: str, iteration: int, payload: dict, response: dict, action_executed: dict, screenshot_b64: str) -> None:
+    """Saves a timestamped record of the ReAct cycle locally for debugging."""
+    try:
+        user_data_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "RomyAgentBrowserData", "flight_records", doc_id)
+        os.makedirs(user_data_dir, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        record_file = os.path.join(user_data_dir, f"record_{iteration}_{timestamp}.json")
+
+        # Don't save the full screenshot in the prompt payload or response to avoid huge json files if we also save the image itself,
+        # but let's just save everything as requested. We can save the screenshot as a separate file if it exists.
+        record_data = {
+            "timestamp": datetime.now().isoformat(),
+            "doc_id": doc_id,
+            "iteration": iteration,
+            "prompt_payload": payload,
+            "llm_response": response,
+            "action_executed": action_executed
+        }
+
+        with open(record_file, "w", encoding="utf-8") as f:
+            json.dump(record_data, f, indent=2, ensure_ascii=False)
+
+        if screenshot_b64:
+            img_file = os.path.join(user_data_dir, f"screenshot_{iteration}_{timestamp}.png")
+            try:
+                img_data = base64.b64decode(screenshot_b64)
+                with open(img_file, "wb") as f:
+                    f.write(img_data)
+            except Exception as e:
+                logging.error(f"Failed to save screenshot for flight record: {e}")
+
+        logging.info(f"Flight record saved for iteration {iteration} to {record_file}")
+    except Exception as e:
+        logging.error(f"Failed to save flight record: {e}")
 
 def toggle_pause() -> bool:
     """Toggles the pause state of the agent loops. Returns the new state."""
@@ -481,6 +519,9 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
             iteration = 0
             final_status = "completed"
 
+            # Stuck detector state
+            history = []
+
             while True:
                 if ABORT_AGENT:
                     logging.info("Emergency abort triggered. Stopping remote agent loop.")
@@ -494,7 +535,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                 # Check for human response
                 data = firestore_get_document("remote_commands", doc_id)
                 if data:
-                    if data.get("status") == "help_needed":
+                    if data.get("status") in ["help_needed", "AWAITING_HUMAN_INPUT"]:
                         logging.info("Agent paused, waiting for human input...")
                         time.sleep(2)
                         continue
@@ -560,6 +601,8 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
 
                     # We expect strictly ONE action per the ReAct loop
                     act = actions[0]
+
+                    save_flight_record(doc_id, iteration, payload, backend_data, act, screenshot_base64)
                     if not isinstance(act, dict):
                         logging.warning(f"Skipping invalid action type: {type(act)}")
                         continue
@@ -568,6 +611,31 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                     action_upper = str(action_type).upper()
 
                     logging.info(f"Backend returned action: {action_upper}")
+
+                    # Stuck Detector Logic
+                    history.append((act, payload.get("ui_elements", [])))
+                    if len(history) > 3:
+                        history.pop(0)
+
+                    if len(history) == 3:
+                        (a1, u1), (a2, u2), (a3, u3) = history
+                        # Compare action dicts excluding dynamic fields like raw_response
+                        def _normalize_action(a):
+                            return {k: v for k, v in a.items() if k not in ["raw_response", "reason"]}
+
+                        if _normalize_action(a1) == _normalize_action(a2) == _normalize_action(a3) and u1 == u2 == u3:
+                            logging.warning("Stuck Detector triggered! Executed identical action 3 times in a row without state change.")
+                            reason = "I seem to be stuck repeating the same action. I need human assistance."
+                            try:
+                                firestore_update_document("remote_commands", doc_id, {
+                                    "status": "AWAITING_HUMAN_INPUT",
+                                    "help_reason": reason,
+                                    "screenshot_b64": screenshot_base64
+                                })
+                            except Exception as img_e:
+                                logging.error(f"Error saving stuck detector help request: {img_e}")
+                            final_status = "AWAITING_HUMAN_INPUT"
+                            break
 
                     if action_upper == "DONE":
                         logging.info("Web task finished successfully.")
@@ -583,16 +651,15 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                         logging.info(f"Agent asking human for help: {reason}")
                         try:
                             firestore_update_document("remote_commands", doc_id, {
-                                "status": "help_needed",
+                                "status": "AWAITING_HUMAN_INPUT",
                                 "help_reason": reason,
                                 "screenshot_b64": screenshot_base64
                             })
                         except Exception as img_e:
                             logging.error(f"Error saving help request: {img_e}")
 
-                        # We don't mark as final_status here because we already updated with help_reason
-                        # But we break out of the loop since we need to wait
-                        return
+                        final_status = "AWAITING_HUMAN_INPUT"
+                        break
 
                     # 3. Delegate action to the extension
                     exec_payload = {
@@ -624,11 +691,12 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
 
             # Update final document status
             try:
-                update_payload = {"status": final_status}
-                if final_status == "failed" and "error_msg" in locals():
-                    update_payload["error"] = error_msg
-                firestore_update_document("remote_commands", doc_id, update_payload)
-                logging.info(f"Remote command {doc_id} marked as {final_status} from Web execution.")
+                if final_status != "AWAITING_HUMAN_INPUT":
+                    update_payload = {"status": final_status}
+                    if final_status == "failed" and "error_msg" in locals():
+                        update_payload["error"] = error_msg
+                    firestore_update_document("remote_commands", doc_id, update_payload)
+                    logging.info(f"Remote command {doc_id} marked as {final_status} from Web execution.")
             except Exception as e:
                 pass
             return
@@ -636,6 +704,9 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
         logging.info("Command routed to OS (Native).")
         iteration = 0
         final_status = "completed"
+
+        # Stuck detector state
+        history = []
 
         while True:
             if ABORT_AGENT:
@@ -648,15 +719,15 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                 continue
 
             # Check for human response
-            data = firestore_get_document("remote_commands", doc_id)
-            if data:
-                if data.get("status") == "help_needed":
+            fs_doc = firestore_get_document("remote_commands", doc_id)
+            if fs_doc:
+                if fs_doc.get("status") in ["help_needed", "AWAITING_HUMAN_INPUT"]:
                     logging.info("Agent paused, waiting for human input...")
                     time.sleep(2)
                     continue
 
-                if data.get("human_response"):
-                    command_text += "\nHuman instruction: " + data.get("human_response")
+                if fs_doc.get("human_response"):
+                    command_text += "\nHuman instruction: " + fs_doc.get("human_response")
                     firestore_update_document("remote_commands", doc_id, {}, delete_fields=["human_response"])
 
             ui_elements, memory_map = scan_ui_elements()
@@ -681,17 +752,17 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
             try:
                 response = requests.post(BACKEND_URL, json=payload, headers=headers, timeout=30)
                 response.raise_for_status()
-                data = response.json()
+                backend_data = response.json()
 
-                if isinstance(data, list):
-                    actions = data
-                elif isinstance(data, dict):
-                    actions = data.get("actions", [])
+                if isinstance(backend_data, list):
+                    actions = backend_data
+                elif isinstance(backend_data, dict):
+                    actions = backend_data.get("actions", [])
                     # If backend returned older single-action format, wrap it
-                    if not actions and "action" in data:
-                        actions = [data]
+                    if not actions and "action" in backend_data:
+                        actions = [backend_data]
                 else:
-                    logging.warning(f"Unexpected response type from backend: {type(data)}")
+                    logging.warning(f"Unexpected response type from backend: {type(backend_data)}")
                     actions = []
 
                 break_outer = False
@@ -701,6 +772,17 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                         logging.warning(f"Skipping invalid action type: {type(act)}")
                         continue
 
+                    # Capture OS screenshot for flight record
+                    try:
+                        screenshot = pyautogui.screenshot()
+                        buffered = io.BytesIO()
+                        screenshot.save(buffered, format="PNG")
+                        os_screenshot_b64 = base64.b64encode(buffered.getvalue()).decode()
+                    except Exception:
+                        os_screenshot_b64 = ""
+
+                    save_flight_record(doc_id, iteration, payload, backend_data, act, os_screenshot_b64)
+
                     if ABORT_AGENT:
                         logging.info("Emergency abort triggered during action sequence.")
                         final_status = "failed"
@@ -709,6 +791,32 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
 
                     action_type = act.get("action", "")
                     action_upper = str(action_type).upper()
+
+                    # Stuck Detector Logic
+                    history.append((act, payload.get("ui_elements", [])))
+                    if len(history) > 3:
+                        history.pop(0)
+
+                    if len(history) == 3:
+                        (a1, u1), (a2, u2), (a3, u3) = history
+                        def _normalize_action(a):
+                            return {k: v for k, v in a.items() if k not in ["raw_response", "reason"]}
+
+                        if _normalize_action(a1) == _normalize_action(a2) == _normalize_action(a3) and u1 == u2 == u3:
+                            logging.warning("Stuck Detector triggered! Executed identical action 3 times in a row without state change.")
+                            reason = "I seem to be stuck repeating the same OS action. I need human assistance."
+                            try:
+                                firestore_update_document("remote_commands", doc_id, {
+                                    "status": "AWAITING_HUMAN_INPUT",
+                                    "help_reason": reason,
+                                    "screenshot_b64": os_screenshot_b64
+                                })
+                            except Exception as img_e:
+                                logging.error(f"Error saving stuck detector help request: {img_e}")
+                            final_status = "AWAITING_HUMAN_INPUT"
+                            had_terminal_action = True
+                            break_outer = True
+                            break
 
                     if action_upper == "DONE":
                         logging.info("Remote task finished successfully.")
@@ -783,14 +891,14 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                             screenshot.save(buffered, format="PNG")
                             img_str = base64.b64encode(buffered.getvalue()).decode()
                             firestore_update_document("remote_commands", doc_id, {
-                                "status": "help_needed",
+                                "status": "AWAITING_HUMAN_INPUT",
                                 "help_reason": reason,
                                 "screenshot_b64": img_str
                             })
                         except Exception as img_e:
                             logging.error(f"Error capturing screenshot: {img_e}")
                             firestore_update_document("remote_commands", doc_id, {
-                                "status": "help_needed",
+                                "status": "AWAITING_HUMAN_INPUT",
                                 "help_reason": reason
                             })
                         had_terminal_action = True
@@ -952,6 +1060,10 @@ def execute_voice_agent_loop() -> None:
 
             iteration = 0
             doc_id = "voice_session_1"
+            final_status = "completed"
+
+            # Stuck detector state
+            history = []
 
             # Create or ensure the document exists
             try:
@@ -975,7 +1087,7 @@ def execute_voice_agent_loop() -> None:
                 try:
                     data = firestore_get_document("remote_commands", doc_id)
                     if data:
-                        if data.get("status") == "help_needed":
+                        if data.get("status") in ["help_needed", "AWAITING_HUMAN_INPUT"]:
                             logging.info("Agent paused, waiting for human input...")
                             time.sleep(2)
                             continue
@@ -1041,6 +1153,8 @@ def execute_voice_agent_loop() -> None:
 
                     # We expect strictly ONE action per the ReAct loop
                     act = actions[0]
+
+                    save_flight_record(doc_id, iteration, payload, backend_data, act, screenshot_base64)
                     if not isinstance(act, dict):
                         logging.warning(f"Skipping invalid action type: {type(act)}")
                         continue
@@ -1049,6 +1163,31 @@ def execute_voice_agent_loop() -> None:
                     action_upper = str(action_type).upper()
 
                     logging.info(f"Backend returned action: {action_upper}")
+
+                    # Stuck Detector Logic
+                    history.append((act, payload.get("ui_elements", [])))
+                    if len(history) > 3:
+                        history.pop(0)
+
+                    if len(history) == 3:
+                        (a1, u1), (a2, u2), (a3, u3) = history
+                        def _normalize_action(a):
+                            return {k: v for k, v in a.items() if k not in ["raw_response", "reason"]}
+
+                        if _normalize_action(a1) == _normalize_action(a2) == _normalize_action(a3) and u1 == u2 == u3:
+                            logging.warning("Stuck Detector triggered! Executed identical action 3 times in a row without state change.")
+                            reason = "I seem to be stuck repeating the same web action. I need human assistance."
+                            try:
+                                firestore_update_document("remote_commands", doc_id, {
+                                    "status": "AWAITING_HUMAN_INPUT",
+                                    "help_reason": reason,
+                                    "screenshot_b64": screenshot_base64
+                                })
+                            except Exception as img_e:
+                                logging.error(f"Error saving stuck detector help request: {img_e}")
+                            final_status = "AWAITING_HUMAN_INPUT"
+                            break
+
 
                     if action_upper == "DONE":
                         logging.info("Web task finished successfully.")
@@ -1063,12 +1202,14 @@ def execute_voice_agent_loop() -> None:
                         logging.info(f"Agent asking human for help: {reason}")
                         try:
                             firestore_update_document("remote_commands", doc_id, {
-                                "status": "help_needed",
+                                "status": "AWAITING_HUMAN_INPUT",
                                 "help_reason": reason,
                                 "screenshot_b64": screenshot_base64
                             })
                         except Exception as img_e:
                             logging.error(f"Error saving help request: {img_e}")
+
+                        final_status = "AWAITING_HUMAN_INPUT"
                         break
 
                     # 3. Delegate action to the extension
@@ -1093,6 +1234,17 @@ def execute_voice_agent_loop() -> None:
                 time.sleep(1)
                 iteration += 1
 
+            # Update final document status
+            try:
+                if final_status != "AWAITING_HUMAN_INPUT":
+                    update_payload = {"status": final_status}
+                    if final_status == "failed" and "error_msg" in locals():
+                        update_payload["error"] = error_msg
+                    firestore_update_document("remote_commands", doc_id, update_payload)
+                    logging.info(f"Remote command {doc_id} marked as {final_status} from Web execution.")
+            except Exception as e:
+                pass
+
             # Finish voice loop for Web
             return
 
@@ -1100,6 +1252,10 @@ def execute_voice_agent_loop() -> None:
         logging.info("Voice command routed to OS (Native).")
         iteration = 0
         doc_id = "voice_session_1"
+        final_status = "completed"
+
+        # Stuck detector state
+        history = []
 
         # Create or ensure the document exists
         try:
@@ -1122,15 +1278,15 @@ def execute_voice_agent_loop() -> None:
 
             # Check for human response
             try:
-                data = firestore_get_document("remote_commands", doc_id)
-                if data:
-                    if data.get("status") == "help_needed":
+                fs_doc = firestore_get_document("remote_commands", doc_id)
+                if fs_doc:
+                    if fs_doc.get("status") in ["help_needed", "AWAITING_HUMAN_INPUT"]:
                         logging.info("Agent paused, waiting for human input...")
                         time.sleep(2)
                         continue
 
-                    if data.get("human_response"):
-                        command_text += "\nHuman instruction: " + data.get("human_response")
+                    if fs_doc.get("human_response"):
+                        command_text += "\nHuman instruction: " + fs_doc.get("human_response")
                         firestore_update_document("remote_commands", doc_id, {}, delete_fields=["human_response"])
             except Exception as e:
                 logging.error(f"Error checking human response: {e}")
@@ -1160,17 +1316,17 @@ def execute_voice_agent_loop() -> None:
             try:
                 response = requests.post(BACKEND_URL, json=payload, headers=headers, timeout=30)
                 response.raise_for_status()
-                data = response.json()
+                backend_data = response.json()
 
                 # 6. Check response
-                if isinstance(data, list):
-                    actions = data
-                elif isinstance(data, dict):
-                    actions = data.get("actions", [])
-                    if not actions and "action" in data:
-                        actions = [data]
+                if isinstance(backend_data, list):
+                    actions = backend_data
+                elif isinstance(backend_data, dict):
+                    actions = backend_data.get("actions", [])
+                    if not actions and "action" in backend_data:
+                        actions = [backend_data]
                 else:
-                    logging.warning(f"Unexpected response type from backend: {type(data)}")
+                    logging.warning(f"Unexpected response type from backend: {type(backend_data)}")
                     actions = []
 
                 break_outer = False
@@ -1180,6 +1336,17 @@ def execute_voice_agent_loop() -> None:
                         logging.warning(f"Skipping invalid action type: {type(act)}")
                         continue
 
+                    # Capture OS screenshot for flight record
+                    try:
+                        screenshot = pyautogui.screenshot()
+                        buffered = io.BytesIO()
+                        screenshot.save(buffered, format="PNG")
+                        os_screenshot_b64 = base64.b64encode(buffered.getvalue()).decode()
+                    except Exception:
+                        os_screenshot_b64 = ""
+
+                    save_flight_record(doc_id, iteration, payload, backend_data, act, os_screenshot_b64)
+
                     if ABORT_AGENT:
                         logging.info("Emergency abort triggered during action sequence.")
                         break_outer = True
@@ -1187,6 +1354,32 @@ def execute_voice_agent_loop() -> None:
 
                     action_type = act.get("action", "")
                     action_upper = str(action_type).upper()
+
+                    # Stuck Detector Logic
+                    history.append((act, payload.get("ui_elements", [])))
+                    if len(history) > 3:
+                        history.pop(0)
+
+                    if len(history) == 3:
+                        (a1, u1), (a2, u2), (a3, u3) = history
+                        def _normalize_action(a):
+                            return {k: v for k, v in a.items() if k not in ["raw_response", "reason"]}
+
+                        if _normalize_action(a1) == _normalize_action(a2) == _normalize_action(a3) and u1 == u2 == u3:
+                            logging.warning("Stuck Detector triggered! Executed identical action 3 times in a row without state change.")
+                            reason = "I seem to be stuck repeating the same OS action. I need human assistance."
+                            try:
+                                firestore_update_document("remote_commands", doc_id, {
+                                    "status": "AWAITING_HUMAN_INPUT",
+                                    "help_reason": reason,
+                                    "screenshot_b64": os_screenshot_b64
+                                })
+                            except Exception as img_e:
+                                logging.error(f"Error saving stuck detector help request: {img_e}")
+                            final_status = "AWAITING_HUMAN_INPUT"
+                            had_terminal_action = True
+                            break_outer = True
+                            break
 
                     if action_upper == "DONE":
                         logging.info("Task finished.")
@@ -1262,14 +1455,14 @@ def execute_voice_agent_loop() -> None:
                             screenshot.save(buffered, format="PNG")
                             img_str = base64.b64encode(buffered.getvalue()).decode()
                             firestore_update_document("remote_commands", doc_id, {
-                                "status": "help_needed",
+                                "status": "AWAITING_HUMAN_INPUT",
                                 "help_reason": reason,
                                 "screenshot_b64": img_str
                             })
                         except Exception as img_e:
                             logging.error(f"Error capturing screenshot: {img_e}")
                             firestore_update_document("remote_commands", doc_id, {
-                                "status": "help_needed",
+                                "status": "AWAITING_HUMAN_INPUT",
                                 "help_reason": reason
                             })
                         had_terminal_action = True
