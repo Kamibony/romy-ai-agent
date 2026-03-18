@@ -464,10 +464,6 @@ async function handleExecuteNativeAction(payload) {
         const bounds = domData.bounds;
         const backendNodeId = domData.backendNodeId;
 
-        // Calculate center point for CDP click
-        const x = Math.round(bounds.x + bounds.width / 2);
-        const y = Math.round(bounds.y + bounds.height / 2);
-
         try {
             await new Promise((resolve, reject) => {
                 chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
@@ -479,33 +475,34 @@ async function handleExecuteNativeAction(payload) {
                 });
             });
 
-            // Enable DOM agent for resolveNode
+            // Enable DOM agent for getBoxModel
             await new Promise((resolve) => chrome.debugger.sendCommand({ tabId: tab.id }, 'DOM.enable', {}, resolve));
 
-            // Try to resolve backendNodeId to objectId and focus it
+            // Default to cached bounds calculation
+            let x = Math.round(bounds.x + bounds.width / 2);
+            let y = Math.round(bounds.y + bounds.height / 2);
+
+            // Fetch the element's BoxModel via CDP to get its physical center (X, Y)
             if (backendNodeId) {
                 try {
-                    const resolveResult = await new Promise((resolve, reject) => {
-                        chrome.debugger.sendCommand({ tabId: tab.id }, 'DOM.resolveNode', { backendNodeId: backendNodeId }, (res) => {
+                    const boxModelResult = await new Promise((resolve, reject) => {
+                        chrome.debugger.sendCommand({ tabId: tab.id }, 'DOM.getBoxModel', { backendNodeId: backendNodeId }, (res) => {
                             if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
                             else resolve(res);
                         });
                     });
 
-                    if (resolveResult && resolveResult.object && resolveResult.object.objectId) {
-                        await new Promise((resolve, reject) => {
-                            chrome.debugger.sendCommand({ tabId: tab.id }, 'DOM.focus', { objectId: resolveResult.object.objectId }, (res) => {
-                                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                                else resolve(res);
-                            });
-                        });
+                    if (boxModelResult && boxModelResult.model && boxModelResult.model.content) {
+                        const quad = boxModelResult.model.content;
+                        x = Math.round((quad[0] + quad[2] + quad[4] + quad[6]) / 4);
+                        y = Math.round((quad[1] + quad[3] + quad[5] + quad[7]) / 4);
                     }
-                } catch (focusErr) {
-                    sendTelemetryLog(`Failed to focus element via CDP: ${focusErr.message}`);
+                } catch (boxModelErr) {
+                    sendTelemetryLog(`Failed to get BoxModel via CDP, falling back to cached bounds: ${boxModelErr.message}`);
                 }
             }
 
-            // Native Click
+            // Native Click (Universally precede keystroke loop with a CDP Input.dispatchMouseEvent exactly on those coordinates)
             await new Promise((resolve, reject) => {
                 chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
                     type: 'mousePressed', x: x, y: y, button: 'left', clickCount: 1
