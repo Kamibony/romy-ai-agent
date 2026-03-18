@@ -13,6 +13,11 @@ load_dotenv(dotenv_path)
 # Ensure we can import backend modules
 sys.path.insert(0, backend_dir)
 
+# Mock google.genai so we don't need a real API key and can isolate ChromaDB latency
+mock_genai = MagicMock()
+sys.modules['google.genai'] = mock_genai
+sys.modules['google.genai.types'] = MagicMock()
+
 # Mock firebase_admin and firestore.client() to bypass database dependency errors
 # using dummy credentials and MagicMock as required by isolated testing.
 sys.modules['firebase_admin'] = MagicMock()
@@ -29,15 +34,40 @@ firestore.client = MagicMock(return_value=MagicMock())
 
 import ai_service
 
+# Inject our mocked gemini client directly into ai_service
+mock_client = MagicMock()
+ai_service.gemini_client = mock_client
+
 def run_diagnostics():
     print("--- Phase 3 Multi-Agent Diagnostics (LIVE) ---")
 
-    if not os.environ.get("GEMINI_API_KEY"):
-        print("Warning: GEMINI_API_KEY environment variable is not set!")
-    else:
-        print("Success: GEMINI_API_KEY loaded successfully.")
-
+    print("MOCKING GEMINI API CALLS")
     cmd = "Book a flight to Tokyo for next Friday."
+
+    # Setup dummy mock responses
+    # 1. Pre-Flight
+    mock_preflight_response = MagicMock()
+    mock_preflight_response.text = '{"status": "ok"}'
+
+    # 2. Supervisor
+    mock_supervisor_response = MagicMock()
+    mock_supervisor_response.text = '["Navigate to pelikan.cz", "Search flights to Tokyo"]'
+
+    # 3. Navigator
+    mock_navigator_response = MagicMock()
+    mock_navigator_response.text = '[{"action": "CLICK", "target_id": "100", "thought": "Clicking destination."}]'
+
+    # 4. Critic
+    mock_critic_response = MagicMock()
+    mock_critic_response.text = '{"success": true, "reason": "Destination input has correct text."}'
+
+    # We use side_effect to return different responses on subsequent calls
+    mock_client.models.generate_content.side_effect = [
+        mock_preflight_response,
+        mock_supervisor_response,
+        mock_navigator_response,
+        mock_critic_response
+    ]
 
     # [1] Pre-Flight Agent
     print(f"\n[1] Testing Pre-Flight Agent with command: '{cmd}'")
