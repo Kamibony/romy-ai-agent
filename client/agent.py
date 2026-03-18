@@ -672,6 +672,53 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                         error_msg = exec_result.get("error", "Action execution failed in Chrome.")
                         break
 
+                    # --- VERIFICATION LAYER ---
+                    # After delegating the action, wait briefly and verify the state change
+                    time.sleep(1)
+
+                    if action_upper in ["TYPE", "CLICK", "NAVIGATE"]:
+                        logging.info(f"Verifying action '{action_upper}' execution...")
+                        verify_payload = {
+                            "action_type": "GET_STATE",
+                            "commandText": command_text,
+                            "audioBase64": ""
+                        }
+                        verify_result = bridge.delegate_command(verify_payload)
+
+                        if verify_result.get("success"):
+                            new_ui_elements = verify_result.get("ui_elements", [])
+
+                            if action_upper == "TYPE":
+                                typed_text = act.get("text", "")
+                                text_matched = False
+
+                                for el in new_ui_elements:
+                                    # Check if the text appeared anywhere in the UI elements.
+                                    el_text = str(el.get("text", "")).lower()
+                                    el_value = str(el.get("value", "")).lower() # If DOM mapper ever extracts value
+
+                                    if typed_text and (typed_text.lower() in el_text or typed_text.lower() in el_value):
+                                        text_matched = True
+                                        break
+
+                                if not text_matched:
+                                    logging.warning(f"Verification warning: Expected text '{typed_text}' not found in DOM after TYPE action.")
+                                    command_text += f"\nSystem Note: The previous TYPE action for '{typed_text}' seemed to fail. Verify the text is actually present. If not, try a different approach or verify the target element."
+                                else:
+                                    logging.info("Verification success: Text found in DOM after TYPE action.")
+
+                            elif action_upper == "CLICK":
+                                # A simple click verification: did the DOM tree change?
+                                old_ui_elements = ui_elements
+                                if new_ui_elements != old_ui_elements:
+                                    logging.info("Verification success: DOM state changed after CLICK action.")
+                                else:
+                                    logging.warning("Verification warning: DOM state did not change after CLICK action.")
+                                    command_text += f"\nSystem Note: The previous CLICK action seemed to have no effect on the page state. Please verify if it was the correct element or if another action is needed."
+
+                            elif action_upper == "NAVIGATE":
+                                logging.info("Verification success: Navigate action completed.")
+
                 except requests.exceptions.RequestException as req_e:
                     if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
                         handle_token_expiry()
@@ -1214,6 +1261,50 @@ def execute_voice_agent_loop() -> None:
                     if not exec_result.get("success"):
                         logging.error(f"Failed to execute action in extension: {exec_result.get('error')}")
                         break
+
+                    # --- VERIFICATION LAYER ---
+                    # After delegating the action, wait briefly and verify the state change
+                    time.sleep(1)
+
+                    if action_upper in ["TYPE", "CLICK", "NAVIGATE"]:
+                        logging.info(f"Verifying action '{action_upper}' execution...")
+                        verify_payload = {
+                            "action_type": "GET_STATE",
+                            "commandText": command_text,
+                            "audioBase64": ""
+                        }
+                        verify_result = bridge.delegate_command(verify_payload)
+
+                        if verify_result.get("success"):
+                            new_ui_elements = verify_result.get("ui_elements", [])
+
+                            if action_upper == "TYPE":
+                                typed_text = act.get("text", "")
+                                text_matched = False
+
+                                for el in new_ui_elements:
+                                    el_text = str(el.get("text", "")).lower()
+                                    el_value = str(el.get("value", "")).lower()
+                                    if typed_text and (typed_text.lower() in el_text or typed_text.lower() in el_value):
+                                        text_matched = True
+                                        break
+
+                                if not text_matched:
+                                    logging.warning(f"Verification warning: Expected text '{typed_text}' not found in DOM after TYPE action.")
+                                    command_text += f"\nSystem Note: The previous TYPE action for '{typed_text}' seemed to fail. Verify the text is actually present. If not, try a different approach or verify the target element."
+                                else:
+                                    logging.info("Verification success: Text found in DOM after TYPE action.")
+
+                            elif action_upper == "CLICK":
+                                old_ui_elements = ui_elements
+                                if new_ui_elements != old_ui_elements:
+                                    logging.info("Verification success: DOM state changed after CLICK action.")
+                                else:
+                                    logging.warning("Verification warning: DOM state did not change after CLICK action.")
+                                    command_text += f"\nSystem Note: The previous CLICK action seemed to have no effect on the page state. Please verify if it was the correct element or if another action is needed."
+
+                            elif action_upper == "NAVIGATE":
+                                logging.info("Verification success: Navigate action completed.")
 
                 except requests.exceptions.RequestException as req_e:
                     if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:

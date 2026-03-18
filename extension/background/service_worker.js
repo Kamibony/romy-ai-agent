@@ -527,17 +527,43 @@ async function handleExecuteNativeAction(payload) {
             if (action.action === "TYPE") {
                 await new Promise(r => setTimeout(r, 100));
 
-                // Natively insert text
-                await new Promise((resolve, reject) => {
-                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.insertText', {
-                        text: action.text
-                    }, (result) => {
-                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                        else resolve(result);
+                // Dispatch individual key events to properly trigger React/Vue synthetic events
+                for (let i = 0; i < action.text.length; i++) {
+                    const char = action.text[i];
+                    await new Promise((resolve, reject) => {
+                        chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                            type: 'keyDown',
+                            text: char,
+                            unmodifiedText: char,
+                            key: char
+                        }, (result) => {
+                            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                            else resolve(result);
+                        });
                     });
-                });
 
-                // Optionally press enter or trigger events
+                    await new Promise((resolve, reject) => {
+                        chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                            type: 'char',
+                            text: char,
+                            unmodifiedText: char,
+                            key: char
+                        }, (result) => {
+                            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                            else resolve(result);
+                        });
+                    });
+
+                    await new Promise((resolve, reject) => {
+                        chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                            type: 'keyUp',
+                            key: char
+                        }, (result) => {
+                            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                            else resolve(result);
+                        });
+                    });
+                }
             }
 
         } finally {
