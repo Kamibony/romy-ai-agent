@@ -637,105 +637,128 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                         final_status = "failed"
                         break
 
-                if PAUSE_AGENT:
-                    time.sleep(1)
-                    continue
-
-                # Check for human response
-                data = firestore_get_document("remote_commands", doc_id)
-                if data:
-                    if data.get("status") in ["help_needed", "AWAITING_HUMAN_INPUT"]:
-                        logging.info("Agent paused, waiting for human input...")
-                        time.sleep(2)
+                    if PAUSE_AGENT:
+                        time.sleep(1)
                         continue
 
-                    if data.get("human_response"):
-                        command_text += "\nHuman instruction: " + data.get("human_response")
-                        firestore_update_document("remote_commands", doc_id, {}, delete_fields=["human_response"])
+                    # Check for human response
+                    data = firestore_get_document("remote_commands", doc_id)
+                    if data:
+                        if data.get("status") in ["help_needed", "AWAITING_HUMAN_INPUT"]:
+                            logging.info("Agent paused, waiting for human input...")
+                            time.sleep(2)
+                            continue
 
-                # 1. Ask extension for the current state
-                state_payload = {
-                    "action_type": "GET_STATE",
-                    "commandText": command_text,
-                    "audioBase64": audio_b64 if iteration == 0 else ""
-                }
-                logging.info(f"Requesting WEB state from extension (iteration {iteration})...")
-                state_result = bridge.delegate_command(state_payload)
+                        if data.get("human_response"):
+                            command_text += "\nHuman instruction: " + data.get("human_response")
+                            firestore_update_document("remote_commands", doc_id, {}, delete_fields=["human_response"])
 
-                if not state_result.get("success"):
-                    logging.error(f"Failed to get state from extension: {state_result.get('error')}")
-                    final_status = "failed"
-                    error_msg = state_result.get("error", "Failed to get web state.")
-                    break
+                    # 1. Ask extension for the current state
+                    state_payload = {
+                        "action_type": "GET_STATE",
+                        "commandText": command_text,
+                        "audioBase64": audio_b64 if iteration == 0 else ""
+                    }
+                    logging.info(f"Requesting WEB state from extension (iteration {iteration})...")
+                    state_result = bridge.delegate_command(state_payload)
 
-                ui_elements = state_result.get("ui_elements", [])
-                screenshot_base64 = state_result.get("screenshot_base64", "")
-                current_url = state_result.get("url", "")
-
-                # 2. Send state to backend to receive ONE action
-                payload = {
-                    "ui_elements": ui_elements,
-                    "session_id": doc_id,
-                    "command_text": command_text,
-                    "current_sub_task": current_sub_task,
-                    "screenshot_base64": screenshot_base64,
-                    "current_url": current_url
-                }
-                if sub_task_iteration == 0 and sub_task_idx == 0 and audio_b64:
-                    payload["audio_base64"] = audio_b64
-                else:
-                    payload["audio_base64"] = ""
-
-                headers = {
-                    "Authorization": f"Bearer {CURRENT_TOKEN}",
-                    "Content-Type": "application/json"
-                }
-
-                logging.info("Sending WEB state payload to backend...")
-                try:
-                    with get_resilient_session() as session:
-                        response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
-                    response.raise_for_status()
-                    backend_data = response.json()
-
-                    if isinstance(backend_data, list):
-                        actions = backend_data
-                    elif isinstance(backend_data, dict):
-                        actions = backend_data.get("actions", [])
-                        if not actions and "action" in backend_data:
-                            actions = [backend_data]
-                    else:
-                        logging.warning(f"Unexpected response type from backend: {type(backend_data)}")
-                        actions = []
-
-                    if not actions:
-                        logging.info("No actions returned from backend. Considering task completed.")
+                    if not state_result.get("success"):
+                        logging.error(f"Failed to get state from extension: {state_result.get('error')}")
+                        final_status = "failed"
+                        error_msg = state_result.get("error", "Failed to get web state.")
                         break
 
-                    # We expect strictly ONE action per the ReAct loop
-                    act = actions[0]
+                    ui_elements = state_result.get("ui_elements", [])
+                    screenshot_base64 = state_result.get("screenshot_base64", "")
+                    current_url = state_result.get("url", "")
 
-                    save_flight_record(doc_id, iteration, payload, backend_data, act, screenshot_base64)
-                    if not isinstance(act, dict):
-                        logging.warning(f"Skipping invalid action type: {type(act)}")
-                        continue
+                    # 2. Send state to backend to receive ONE action
+                    payload = {
+                        "ui_elements": ui_elements,
+                        "session_id": doc_id,
+                        "command_text": command_text,
+                        "current_sub_task": current_sub_task,
+                        "screenshot_base64": screenshot_base64,
+                        "current_url": current_url
+                    }
+                    if sub_task_iteration == 0 and sub_task_idx == 0 and audio_b64:
+                        payload["audio_base64"] = audio_b64
+                    else:
+                        payload["audio_base64"] = ""
 
-                    action_type = act.get("action", "")
-                    action_upper = str(action_type).upper()
+                    headers = {
+                        "Authorization": f"Bearer {CURRENT_TOKEN}",
+                        "Content-Type": "application/json"
+                    }
 
-                    logging.info(f"Backend returned action: {action_upper}")
+                    logging.info("Sending WEB state payload to backend...")
+                    try:
+                        with get_resilient_session() as session:
+                            response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
+                        response.raise_for_status()
+                        backend_data = response.json()
 
-                    # Stuck Detector Logic
-                    history.append(payload.get("ui_elements", []))
-                    if len(history) > 3:
-                        history.pop(0)
+                        if isinstance(backend_data, list):
+                            actions = backend_data
+                        elif isinstance(backend_data, dict):
+                            actions = backend_data.get("actions", [])
+                            if not actions and "action" in backend_data:
+                                actions = [backend_data]
+                        else:
+                            logging.warning(f"Unexpected response type from backend: {type(backend_data)}")
+                            actions = []
 
-                    if len(history) == 3:
-                        u1, u2, u3 = history
-                        # Check if visual state (ui_elements) remains identical for 3 consecutive iterations
-                        if u1 == u2 == u3:
-                            logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
-                            reason = "I seem to be stuck repeating the same action without state change. I need human assistance."
+                        if not actions:
+                            logging.info("No actions returned from backend. Considering task completed.")
+                            break
+
+                        # We expect strictly ONE action per the ReAct loop
+                        act = actions[0]
+
+                        save_flight_record(doc_id, iteration, payload, backend_data, act, screenshot_base64)
+                        if not isinstance(act, dict):
+                            logging.warning(f"Skipping invalid action type: {type(act)}")
+                            continue
+
+                        action_type = act.get("action", "")
+                        action_upper = str(action_type).upper()
+
+                        logging.info(f"Backend returned action: {action_upper}")
+
+                        # Stuck Detector Logic
+                        history.append(payload.get("ui_elements", []))
+                        if len(history) > 3:
+                            history.pop(0)
+
+                        if len(history) == 3:
+                            u1, u2, u3 = history
+                            # Check if visual state (ui_elements) remains identical for 3 consecutive iterations
+                            if u1 == u2 == u3:
+                                logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
+                                reason = "I seem to be stuck repeating the same action without state change. I need human assistance."
+                                try:
+                                    firestore_update_document("remote_commands", doc_id, {
+                                        "status": "AWAITING_HUMAN_INPUT",
+                                        "help_reason": reason,
+                                        "screenshot_b64": screenshot_base64
+                                    })
+                                except Exception as img_e:
+                                    logging.error(f"Error saving stuck detector help request: {img_e}")
+                                final_status = "AWAITING_HUMAN_INPUT"
+                                break
+
+                        if action_upper == "DONE":
+                            logging.info("Web task finished successfully.")
+                            break
+                        elif "ERROR" in action_upper:
+                            raw_response = act.get("raw_response", "No raw response provided")
+                            error_msg = act.get("error", "No error message provided")
+                            logging.error(f"Web agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
+                            final_status = "failed"
+                            break
+                        elif action_upper == "ASK_HUMAN":
+                            reason = act.get("reason", "No reason provided")
+                            logging.info(f"Agent asking human for help: {reason}")
                             try:
                                 firestore_update_document("remote_commands", doc_id, {
                                     "status": "AWAITING_HUMAN_INPUT",
@@ -743,118 +766,95 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                                     "screenshot_b64": screenshot_base64
                                 })
                             except Exception as img_e:
-                                logging.error(f"Error saving stuck detector help request: {img_e}")
+                                logging.error(f"Error saving help request: {img_e}")
+
                             final_status = "AWAITING_HUMAN_INPUT"
                             break
 
-                    if action_upper == "DONE":
-                        logging.info("Web task finished successfully.")
-                        break
-                    elif "ERROR" in action_upper:
-                        raw_response = act.get("raw_response", "No raw response provided")
-                        error_msg = act.get("error", "No error message provided")
-                        logging.error(f"Web agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
+                        # 3. Delegate action to the extension
+                        exec_payload = {
+                            "action_type": "EXECUTE_ACTION",
+                            "action": act
+                        }
+                        logging.info("Delegating action to extension...")
+                        exec_result = bridge.delegate_command(exec_payload)
+
+                        if not exec_result.get("success"):
+                            logging.error(f"Failed to execute action in extension: {exec_result.get('error')}")
+                            final_status = "failed"
+                            error_msg = exec_result.get("error", "Action execution failed in Chrome.")
+                            break
+
+                        if action_upper == "EXECUTE_JS":
+                            # Feed the result back to the LLM via command text or as a system note
+                            js_result = exec_result.get("result")
+                            logging.info(f"JS Execution Result: {js_result}")
+                            command_text += f"\n[System Note: Last EXECUTE_JS returned: {js_result}]"
+
+                        # --- VERIFICATION LAYER ---
+                        # After delegating the action, wait briefly and verify the state change
+                        time.sleep(2)
+
+                        logging.info(f"Getting new state for Critic Verification...")
+                        verify_payload = {
+                            "action_type": "GET_STATE",
+                            "commandText": command_text,
+                            "audioBase64": ""
+                        }
+                        verify_result = bridge.delegate_command(verify_payload)
+
+                        if not verify_result.get("success"):
+                            logging.error("Failed to get state for Critic.")
+                            # Proceed with empty state to let critic decide or fail
+                            verify_state_ui_elements = []
+                            verify_screenshot = ""
+                        else:
+                            verify_state_ui_elements = verify_result.get("ui_elements", [])
+                            verify_screenshot = verify_result.get("screenshot_base64", "")
+
+                        # Call Critic Verify
+                        logging.info("Requesting Critic Verification...")
+                        verify_res = critic_verify(
+                            current_sub_task,
+                            act,
+                            {"ui_elements": ui_elements, "screenshot_base64": screenshot_base64},
+                            {"ui_elements": verify_state_ui_elements, "screenshot_base64": verify_screenshot}
+                        )
+                        if verify_res.get("success"):
+                            logging.info(f"Critic verified success for sub-task: {current_sub_task}")
+                            break_outer = True
+                            break # Break out of action loop
+                        else:
+                            logging.warning(f"Critic verified failure: {verify_res.get('reason')}. Retrying...")
+
+                    except requests.exceptions.RequestException as req_e:
+                        if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
+                            handle_token_expiry()
+                            final_status = "failed"
+                            error_msg = "Token expired"
+                            break_outer = True
+                            break
+                        logging.info(f"Request failed: {req_e}")
                         final_status = "failed"
-                        break
-                    elif action_upper == "ASK_HUMAN":
-                        reason = act.get("reason", "No reason provided")
-                        logging.info(f"Agent asking human for help: {reason}")
-                        try:
-                            firestore_update_document("remote_commands", doc_id, {
-                                "status": "AWAITING_HUMAN_INPUT",
-                                "help_reason": reason,
-                                "screenshot_b64": screenshot_base64
-                            })
-                        except Exception as img_e:
-                            logging.error(f"Error saving help request: {img_e}")
-
-                        final_status = "AWAITING_HUMAN_INPUT"
-                        break
-
-                    # 3. Delegate action to the extension
-                    exec_payload = {
-                        "action_type": "EXECUTE_ACTION",
-                        "action": act
-                    }
-                    logging.info("Delegating action to extension...")
-                    exec_result = bridge.delegate_command(exec_payload)
-
-                    if not exec_result.get("success"):
-                        logging.error(f"Failed to execute action in extension: {exec_result.get('error')}")
-                        final_status = "failed"
-                        error_msg = exec_result.get("error", "Action execution failed in Chrome.")
-                        break
-
-                    if action_upper == "EXECUTE_JS":
-                        # Feed the result back to the LLM via command text or as a system note
-                        js_result = exec_result.get("result")
-                        logging.info(f"JS Execution Result: {js_result}")
-                        command_text += f"\n[System Note: Last EXECUTE_JS returned: {js_result}]"
-
-                    # --- VERIFICATION LAYER ---
-                    # After delegating the action, wait briefly and verify the state change
-                    time.sleep(2)
-
-                    logging.info(f"Getting new state for Critic Verification...")
-                    verify_payload = {
-                        "action_type": "GET_STATE",
-                        "commandText": command_text,
-                        "audioBase64": ""
-                    }
-                    verify_result = bridge.delegate_command(verify_payload)
-
-                    if not verify_result.get("success"):
-                        logging.error("Failed to get state for Critic.")
-                        # Proceed with empty state to let critic decide or fail
-                        verify_state_ui_elements = []
-                        verify_screenshot = ""
-                    else:
-                        verify_state_ui_elements = verify_result.get("ui_elements", [])
-                        verify_screenshot = verify_result.get("screenshot_base64", "")
-
-                    # Call Critic Verify
-                    logging.info("Requesting Critic Verification...")
-                    verify_res = critic_verify(
-                        current_sub_task,
-                        act,
-                        {"ui_elements": ui_elements, "screenshot_base64": screenshot_base64},
-                        {"ui_elements": verify_state_ui_elements, "screenshot_base64": verify_screenshot}
-                    )
-                    if verify_res.get("success"):
-                        logging.info(f"Critic verified success for sub-task: {current_sub_task}")
-                        break_outer = True
-                        break # Break out of action loop
-                    else:
-                        logging.warning(f"Critic verified failure: {verify_res.get('reason')}. Retrying...")
-
-                except requests.exceptions.RequestException as req_e:
-                    if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
-                        handle_token_expiry()
-                        final_status = "failed"
-                        error_msg = "Token expired"
+                        error_msg = f"Network request failed: {req_e}"
                         break_outer = True
                         break
-                    logging.info(f"Request failed: {req_e}")
+
+                    if break_outer:
+                        break
+
+                    time.sleep(1)
+                    iteration += 1
+                    sub_task_iteration += 1
+
+                # Subtask retry limit reached
+                if sub_task_iteration >= max_sub_task_iterations:
+                    logging.error(f"Max retries reached for sub-task: {current_sub_task}")
                     final_status = "failed"
-                    error_msg = f"Network request failed: {req_e}"
-                    break_outer = True
                     break
 
-                if break_outer:
+                if final_status != "completed":
                     break
-
-                time.sleep(1)
-                iteration += 1
-                sub_task_iteration += 1
-
-            # Subtask retry limit reached
-            if sub_task_iteration >= max_sub_task_iterations:
-                logging.error(f"Max retries reached for sub-task: {current_sub_task}")
-                final_status = "failed"
-                break
-
-            if final_status != "completed":
-                break
 
             # Update final document status
             try:
@@ -1302,105 +1302,128 @@ def execute_voice_agent_loop() -> None:
                         final_status = "failed"
                         break
 
-                if PAUSE_AGENT:
-                    time.sleep(1)
-                    continue
-
-                # Check for human response
-                try:
-                    data = firestore_get_document("remote_commands", doc_id)
-                    if data:
-                        if data.get("status") in ["help_needed", "AWAITING_HUMAN_INPUT"]:
-                            logging.info("Agent paused, waiting for human input...")
-                            time.sleep(2)
-                            continue
-
-                        if data.get("human_response"):
-                            command_text += "\nHuman instruction: " + data.get("human_response")
-                            firestore_update_document("remote_commands", doc_id, {}, delete_fields=["human_response"])
-                except Exception as e:
-                    logging.error(f"Error checking human response: {e}")
-
-                # 1. Ask extension for the current state
-                state_payload = {
-                    "action_type": "GET_STATE",
-                    "commandText": command_text,
-                    "audioBase64": audio_b64 if iteration == 0 else ""
-                }
-                logging.info(f"Requesting WEB state from extension (iteration {iteration})...")
-                state_result = bridge.delegate_command(state_payload)
-
-                if not state_result.get("success"):
-                    logging.error(f"Failed to get state from extension: {state_result.get('error')}")
-                    break
-
-                ui_elements = state_result.get("ui_elements", [])
-                screenshot_base64 = state_result.get("screenshot_base64", "")
-                current_url = state_result.get("url", "")
-
-                # 2. Send state to backend to receive ONE action
-                payload = {
-                    "ui_elements": ui_elements,
-                    "session_id": doc_id,
-                    "command_text": command_text,
-                    "current_sub_task": current_sub_task,
-                    "screenshot_base64": screenshot_base64,
-                    "current_url": current_url
-                }
-                if sub_task_iteration == 0 and sub_task_idx == 0 and audio_b64:
-                    payload["audio_base64"] = audio_b64
-                else:
-                    payload["audio_base64"] = ""
-
-                headers = {
-                    "Authorization": f"Bearer {CURRENT_TOKEN}",
-                    "Content-Type": "application/json"
-                }
-
-                logging.info("Sending WEB state payload to backend...")
-                try:
-                    with get_resilient_session() as session:
-                        response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
-                    response.raise_for_status()
-                    backend_data = response.json()
-
-                    if isinstance(backend_data, list):
-                        actions = backend_data
-                    elif isinstance(backend_data, dict):
-                        actions = backend_data.get("actions", [])
-                        if not actions and "action" in backend_data:
-                            actions = [backend_data]
-                    else:
-                        logging.warning(f"Unexpected response type from backend: {type(backend_data)}")
-                        actions = []
-
-                    if not actions:
-                        logging.info("No actions returned from backend. Considering task completed.")
-                        break
-
-                    # We expect strictly ONE action per the ReAct loop
-                    act = actions[0]
-
-                    save_flight_record(doc_id, iteration, payload, backend_data, act, screenshot_base64)
-                    if not isinstance(act, dict):
-                        logging.warning(f"Skipping invalid action type: {type(act)}")
+                    if PAUSE_AGENT:
+                        time.sleep(1)
                         continue
 
-                    action_type = act.get("action", "")
-                    action_upper = str(action_type).upper()
+                    # Check for human response
+                    try:
+                        data = firestore_get_document("remote_commands", doc_id)
+                        if data:
+                            if data.get("status") in ["help_needed", "AWAITING_HUMAN_INPUT"]:
+                                logging.info("Agent paused, waiting for human input...")
+                                time.sleep(2)
+                                continue
 
-                    logging.info(f"Backend returned action: {action_upper}")
+                            if data.get("human_response"):
+                                command_text += "\nHuman instruction: " + data.get("human_response")
+                                firestore_update_document("remote_commands", doc_id, {}, delete_fields=["human_response"])
+                    except Exception as e:
+                        logging.error(f"Error checking human response: {e}")
 
-                    # Stuck Detector Logic
-                    history.append(payload.get("ui_elements", []))
-                    if len(history) > 3:
-                        history.pop(0)
+                    # 1. Ask extension for the current state
+                    state_payload = {
+                        "action_type": "GET_STATE",
+                        "commandText": command_text,
+                        "audioBase64": audio_b64 if iteration == 0 else ""
+                    }
+                    logging.info(f"Requesting WEB state from extension (iteration {iteration})...")
+                    state_result = bridge.delegate_command(state_payload)
 
-                    if len(history) == 3:
-                        u1, u2, u3 = history
-                        if u1 == u2 == u3:
-                            logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
-                            reason = "I seem to be stuck repeating the same web action without state change. I need human assistance."
+                    if not state_result.get("success"):
+                        logging.error(f"Failed to get state from extension: {state_result.get('error')}")
+                        break
+
+                    ui_elements = state_result.get("ui_elements", [])
+                    screenshot_base64 = state_result.get("screenshot_base64", "")
+                    current_url = state_result.get("url", "")
+
+                    # 2. Send state to backend to receive ONE action
+                    payload = {
+                        "ui_elements": ui_elements,
+                        "session_id": doc_id,
+                        "command_text": command_text,
+                        "current_sub_task": current_sub_task,
+                        "screenshot_base64": screenshot_base64,
+                        "current_url": current_url
+                    }
+                    if sub_task_iteration == 0 and sub_task_idx == 0 and audio_b64:
+                        payload["audio_base64"] = audio_b64
+                    else:
+                        payload["audio_base64"] = ""
+
+                    headers = {
+                        "Authorization": f"Bearer {CURRENT_TOKEN}",
+                        "Content-Type": "application/json"
+                    }
+
+                    logging.info("Sending WEB state payload to backend...")
+                    try:
+                        with get_resilient_session() as session:
+                            response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
+                        response.raise_for_status()
+                        backend_data = response.json()
+
+                        if isinstance(backend_data, list):
+                            actions = backend_data
+                        elif isinstance(backend_data, dict):
+                            actions = backend_data.get("actions", [])
+                            if not actions and "action" in backend_data:
+                                actions = [backend_data]
+                        else:
+                            logging.warning(f"Unexpected response type from backend: {type(backend_data)}")
+                            actions = []
+
+                        if not actions:
+                            logging.info("No actions returned from backend. Considering task completed.")
+                            break
+
+                        # We expect strictly ONE action per the ReAct loop
+                        act = actions[0]
+
+                        save_flight_record(doc_id, iteration, payload, backend_data, act, screenshot_base64)
+                        if not isinstance(act, dict):
+                            logging.warning(f"Skipping invalid action type: {type(act)}")
+                            continue
+
+                        action_type = act.get("action", "")
+                        action_upper = str(action_type).upper()
+
+                        logging.info(f"Backend returned action: {action_upper}")
+
+                        # Stuck Detector Logic
+                        history.append(payload.get("ui_elements", []))
+                        if len(history) > 3:
+                            history.pop(0)
+
+                        if len(history) == 3:
+                            u1, u2, u3 = history
+                            if u1 == u2 == u3:
+                                logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
+                                reason = "I seem to be stuck repeating the same web action without state change. I need human assistance."
+                                try:
+                                    firestore_update_document("remote_commands", doc_id, {
+                                        "status": "AWAITING_HUMAN_INPUT",
+                                        "help_reason": reason,
+                                        "screenshot_b64": screenshot_base64
+                                    })
+                                except Exception as img_e:
+                                    logging.error(f"Error saving stuck detector help request: {img_e}")
+                                final_status = "AWAITING_HUMAN_INPUT"
+                                break
+
+
+                        if action_upper == "DONE":
+                            logging.info("Web task finished successfully.")
+                            break
+                        elif "ERROR" in action_upper:
+                            raw_response = act.get("raw_response", "No raw response provided")
+                            error_msg = act.get("error", "No error message provided")
+                            logging.error(f"Web agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
+                            break
+                        elif action_upper == "ASK_HUMAN":
+                            reason = act.get("reason", "No reason provided")
+                            logging.info(f"Agent asking human for help: {reason}")
                             try:
                                 firestore_update_document("remote_commands", doc_id, {
                                     "status": "AWAITING_HUMAN_INPUT",
@@ -1408,111 +1431,88 @@ def execute_voice_agent_loop() -> None:
                                     "screenshot_b64": screenshot_base64
                                 })
                             except Exception as img_e:
-                                logging.error(f"Error saving stuck detector help request: {img_e}")
+                                logging.error(f"Error saving help request: {img_e}")
+
                             final_status = "AWAITING_HUMAN_INPUT"
                             break
 
+                        # 3. Delegate action to the extension
+                        exec_payload = {
+                            "action_type": "EXECUTE_ACTION",
+                            "action": act
+                        }
+                        logging.info("Delegating action to extension...")
+                        exec_result = bridge.delegate_command(exec_payload)
 
-                    if action_upper == "DONE":
-                        logging.info("Web task finished successfully.")
-                        break
-                    elif "ERROR" in action_upper:
-                        raw_response = act.get("raw_response", "No raw response provided")
-                        error_msg = act.get("error", "No error message provided")
-                        logging.error(f"Web agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
-                        break
-                    elif action_upper == "ASK_HUMAN":
-                        reason = act.get("reason", "No reason provided")
-                        logging.info(f"Agent asking human for help: {reason}")
-                        try:
-                            firestore_update_document("remote_commands", doc_id, {
-                                "status": "AWAITING_HUMAN_INPUT",
-                                "help_reason": reason,
-                                "screenshot_b64": screenshot_base64
-                            })
-                        except Exception as img_e:
-                            logging.error(f"Error saving help request: {img_e}")
+                        if not exec_result.get("success"):
+                            logging.error(f"Failed to execute action in extension: {exec_result.get('error')}")
+                            break
 
-                        final_status = "AWAITING_HUMAN_INPUT"
-                        break
+                        if action_upper == "EXECUTE_JS":
+                            js_result = exec_result.get("result")
+                            logging.info(f"JS Execution Result: {js_result}")
+                            command_text += f"\n[System Note: Last EXECUTE_JS returned: {js_result}]"
 
-                    # 3. Delegate action to the extension
-                    exec_payload = {
-                        "action_type": "EXECUTE_ACTION",
-                        "action": act
-                    }
-                    logging.info("Delegating action to extension...")
-                    exec_result = bridge.delegate_command(exec_payload)
+                        # --- VERIFICATION LAYER ---
+                        # After delegating the action, wait briefly and verify the state change
+                        time.sleep(2)
 
-                    if not exec_result.get("success"):
-                        logging.error(f"Failed to execute action in extension: {exec_result.get('error')}")
-                        break
+                        logging.info(f"Getting new state for Critic Verification...")
+                        verify_payload = {
+                            "action_type": "GET_STATE",
+                            "commandText": command_text,
+                            "audioBase64": ""
+                        }
+                        verify_result = bridge.delegate_command(verify_payload)
 
-                    if action_upper == "EXECUTE_JS":
-                        js_result = exec_result.get("result")
-                        logging.info(f"JS Execution Result: {js_result}")
-                        command_text += f"\n[System Note: Last EXECUTE_JS returned: {js_result}]"
+                        if not verify_result.get("success"):
+                            logging.error("Failed to get state for Critic.")
+                            # Proceed with empty state to let critic decide or fail
+                            verify_state_ui_elements = []
+                            verify_screenshot = ""
+                        else:
+                            verify_state_ui_elements = verify_result.get("ui_elements", [])
+                            verify_screenshot = verify_result.get("screenshot_base64", "")
 
-                    # --- VERIFICATION LAYER ---
-                    # After delegating the action, wait briefly and verify the state change
-                    time.sleep(2)
+                        # Call Critic Verify
+                        logging.info("Requesting Critic Verification...")
+                        verify_res = critic_verify(
+                            current_sub_task,
+                            act,
+                            {"ui_elements": ui_elements, "screenshot_base64": screenshot_base64},
+                            {"ui_elements": verify_state_ui_elements, "screenshot_base64": verify_screenshot}
+                        )
+                        if verify_res.get("success"):
+                            logging.info(f"Critic verified success for sub-task: {current_sub_task}")
+                            break_outer = True
+                            break # Break out of action loop
+                        else:
+                            logging.warning(f"Critic verified failure: {verify_res.get('reason')}. Retrying...")
 
-                    logging.info(f"Getting new state for Critic Verification...")
-                    verify_payload = {
-                        "action_type": "GET_STATE",
-                        "commandText": command_text,
-                        "audioBase64": ""
-                    }
-                    verify_result = bridge.delegate_command(verify_payload)
-
-                    if not verify_result.get("success"):
-                        logging.error("Failed to get state for Critic.")
-                        # Proceed with empty state to let critic decide or fail
-                        verify_state_ui_elements = []
-                        verify_screenshot = ""
-                    else:
-                        verify_state_ui_elements = verify_result.get("ui_elements", [])
-                        verify_screenshot = verify_result.get("screenshot_base64", "")
-
-                    # Call Critic Verify
-                    logging.info("Requesting Critic Verification...")
-                    verify_res = critic_verify(
-                        current_sub_task,
-                        act,
-                        {"ui_elements": ui_elements, "screenshot_base64": screenshot_base64},
-                        {"ui_elements": verify_state_ui_elements, "screenshot_base64": verify_screenshot}
-                    )
-                    if verify_res.get("success"):
-                        logging.info(f"Critic verified success for sub-task: {current_sub_task}")
-                        break_outer = True
-                        break # Break out of action loop
-                    else:
-                        logging.warning(f"Critic verified failure: {verify_res.get('reason')}. Retrying...")
-
-                except requests.exceptions.RequestException as req_e:
-                    if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
-                        handle_token_expiry()
+                    except requests.exceptions.RequestException as req_e:
+                        if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
+                            handle_token_expiry()
+                            break_outer = True
+                            break
+                        logging.info(f"Request failed: {req_e}")
                         break_outer = True
                         break
-                    logging.info(f"Request failed: {req_e}")
-                    break_outer = True
+
+                    if break_outer:
+                        break
+
+                    time.sleep(1)
+                    iteration += 1
+                    sub_task_iteration += 1
+
+                # Subtask retry limit reached
+                if sub_task_iteration >= max_sub_task_iterations:
+                    logging.error(f"Max retries reached for sub-task: {current_sub_task}")
+                    final_status = "failed"
                     break
 
-                if break_outer:
+                if final_status != "completed":
                     break
-
-                time.sleep(1)
-                iteration += 1
-                sub_task_iteration += 1
-
-            # Subtask retry limit reached
-            if sub_task_iteration >= max_sub_task_iterations:
-                logging.error(f"Max retries reached for sub-task: {current_sub_task}")
-                final_status = "failed"
-                break
-
-            if final_status != "completed":
-                break
 
             # Update final document status
             try:
@@ -1824,7 +1824,7 @@ def execute_voice_agent_loop() -> None:
                 # Break the loop on network failure to avoid infinite errors
                 break
 
-            # 7. Sleep for 2 seconds before next iteration
+                # 7. Sleep for 2 seconds before next iteration
             time.sleep(2)
             iteration += 1
 
