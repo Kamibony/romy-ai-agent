@@ -783,6 +783,12 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                         error_msg = exec_result.get("error", "Action execution failed in Chrome.")
                         break
 
+                    if action_upper == "EXECUTE_JS":
+                        # Feed the result back to the LLM via command text or as a system note
+                        js_result = exec_result.get("result")
+                        logging.info(f"JS Execution Result: {js_result}")
+                        command_text += f"\n[System Note: Last EXECUTE_JS returned: {js_result}]"
+
                     # --- VERIFICATION LAYER ---
                     # After delegating the action, wait briefly and verify the state change
                     time.sleep(2)
@@ -1437,6 +1443,11 @@ def execute_voice_agent_loop() -> None:
                     if not exec_result.get("success"):
                         logging.error(f"Failed to execute action in extension: {exec_result.get('error')}")
                         break
+
+                    if action_upper == "EXECUTE_JS":
+                        js_result = exec_result.get("result")
+                        logging.info(f"JS Execution Result: {js_result}")
+                        command_text += f"\n[System Note: Last EXECUTE_JS returned: {js_result}]"
 
                     # --- VERIFICATION LAYER ---
                     # After delegating the action, wait briefly and verify the state change
