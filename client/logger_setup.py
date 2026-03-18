@@ -17,13 +17,24 @@ def setup_logger():
         logger.handlers.clear()
 
     # File handler
-    fh = logging.FileHandler(log_file)
+    fh = logging.FileHandler(log_file, encoding='utf-8')
     fh.setLevel(logging.INFO)
     fh.setFormatter(formatter)
     logger.addHandler(fh)
 
     # Console handler
-    ch = logging.StreamHandler(sys.stdout)
+    import codecs
+    # Make sure stdout uses utf-8 encoding safely without breaking other stdout uses
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding='utf-8')
+            stream = sys.stdout
+        except Exception:
+            stream = codecs.getwriter('utf-8')(sys.stdout.buffer, 'replace')
+    else:
+        stream = codecs.getwriter('utf-8')(sys.stdout.buffer, 'replace')
+
+    ch = logging.StreamHandler(stream)
     ch.setLevel(logging.INFO)
     ch.setFormatter(formatter)
     logger.addHandler(ch)

@@ -185,12 +185,13 @@ function handleExecuteAction(action, sendResponse) {
     }
 }
 // --- Set-of-Mark (SoM) Logic ---
-function handleInjectSom(sendResponse) {
+function handleInjectSom(sendResponse, payload) {
     try {
         // Remove existing overlay if present
         handleRemoveSom(() => {});
 
-        const elements = window.RomyDomMapper.extractUIElements();
+        // Use native elements passed from background worker, or fallback to JS mapper
+        const elements = payload && payload.elements ? payload.elements : window.RomyDomMapper.extractUIElements();
 
         const overlayContainer = document.createElement('div');
         overlayContainer.id = 'romy-som-overlay-container';
@@ -207,26 +208,37 @@ function handleInjectSom(sendResponse) {
         });
 
         elements.forEach(el => {
-            const target = document.querySelector(`[data-romy-id="${el.id}"]`);
-            if (!target) return;
+            let rect;
+            if (el.bounds) {
+                rect = {
+                    left: el.bounds.x,
+                    top: el.bounds.y,
+                    width: el.bounds.width,
+                    height: el.bounds.height,
+                    right: el.bounds.x + el.bounds.width,
+                    bottom: el.bounds.y + el.bounds.height
+                };
+            } else {
+                const target = document.querySelector(`[data-romy-id="${el.id}"]`);
+                if (!target) return;
 
-            const rect = target.getBoundingClientRect();
-            // Ensure element is actually visible in the viewport before drawing (allowing partial visibility)
-            if (rect.width === 0 || rect.height === 0 || rect.bottom <= 0 || rect.top >= window.innerHeight || rect.right <= 0 || rect.left >= window.innerWidth) {
-                return;
-            }
+                rect = target.getBoundingClientRect();
+                if (rect.width === 0 || rect.height === 0 || rect.bottom <= 0 || rect.top >= window.innerHeight || rect.right <= 0 || rect.left >= window.innerWidth) {
+                    return;
+                }
 
-            const computedStyle = window.getComputedStyle(target);
-            if (computedStyle.visibility === 'hidden' || computedStyle.display === 'none' || computedStyle.opacity === '0') {
-                return;
+                const computedStyle = window.getComputedStyle(target);
+                if (computedStyle.visibility === 'hidden' || computedStyle.display === 'none' || computedStyle.opacity === '0') {
+                    return;
+                }
             }
 
             const tag = document.createElement('div');
             tag.textContent = el.id;
             Object.assign(tag.style, {
                 position: 'absolute',
-                top: `${window.scrollY + rect.top}px`,
-                left: `${window.scrollX + rect.left}px`,
+                top: `${(el.bounds ? 0 : window.scrollY) + rect.top}px`,
+                left: `${(el.bounds ? 0 : window.scrollX) + rect.left}px`,
                 backgroundColor: 'red',
                 color: 'white',
                 padding: '1px 3px',
@@ -245,8 +257,8 @@ function handleInjectSom(sendResponse) {
             const box = document.createElement('div');
             Object.assign(box.style, {
                 position: 'absolute',
-                top: `${window.scrollY + rect.top}px`,
-                left: `${window.scrollX + rect.left}px`,
+                top: `${(el.bounds ? 0 : window.scrollY) + rect.top}px`,
+                left: `${(el.bounds ? 0 : window.scrollX) + rect.left}px`,
                 width: `${rect.width}px`,
                 height: `${rect.height}px`,
                 border: '1px dashed red',
