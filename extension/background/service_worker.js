@@ -447,7 +447,7 @@ async function handleExecuteNativeAction(payload) {
             });
         });
         return { success: true };
-    } else if (action.action === "CLICK" || action.action === "TYPE") {
+    } else if (action.action === "CLICK" || action.action === "TYPE" || action.action === "PASTE") {
         const domData = latestDomBounds[action.target_id];
         if (!domData || !domData.bounds) {
             // Fallback to content script if bounds not found
@@ -541,18 +541,6 @@ async function handleExecuteNativeAction(payload) {
 
                     await new Promise((resolve, reject) => {
                         chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
-                            type: 'char',
-                            text: char,
-                            unmodifiedText: char,
-                            key: char
-                        }, (result) => {
-                            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                            else resolve(result);
-                        });
-                    });
-
-                    await new Promise((resolve, reject) => {
-                        chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
                             type: 'keyUp',
                             key: char
                         }, (result) => {
@@ -561,6 +549,75 @@ async function handleExecuteNativeAction(payload) {
                         });
                     });
                 }
+            } else if (action.action === "PASTE") {
+                await new Promise(r => setTimeout(r, 100));
+
+                // Select all via Ctrl+A / Cmd+A
+                await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                        type: 'keyDown',
+                        modifiers: 2, // Ctrl (or Cmd on Mac)
+                        key: 'a'
+                    }, (result) => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve(result);
+                    });
+                });
+                await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                        type: 'keyUp',
+                        modifiers: 2,
+                        key: 'a'
+                    }, (result) => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve(result);
+                    });
+                });
+
+                // Delete selection
+                await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                        type: 'keyDown',
+                        key: 'Backspace'
+                    }, (result) => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve(result);
+                    });
+                });
+                await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                        type: 'keyUp',
+                        key: 'Backspace'
+                    }, (result) => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve(result);
+                    });
+                });
+
+                // Direct value override and dispatch input event
+                await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Runtime.evaluate', {
+                        expression: `
+                            (function() {
+                                let el = document.activeElement;
+                                if (!el) return;
+                                let desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value") ||
+                                           Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value");
+                                if (desc && desc.set) {
+                                    desc.set.call(el, ${JSON.stringify(action.text)});
+                                } else {
+                                    el.value = ${JSON.stringify(action.text)};
+                                }
+                                el.dispatchEvent(new Event('input', { bubbles: true }));
+                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                            })();
+                        `,
+                        returnByValue: true
+                    }, (result) => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve(result);
+                    });
+                });
             }
 
         } finally {
