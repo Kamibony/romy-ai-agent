@@ -29,17 +29,17 @@ Phase 2 established a robust execution layer using a monolithic ReAct loop where
 *   **Output:** `{"success": true/false, "reason": "..."}`.
 *   **Benefit:** Deterministic verification that loops the Navigator for retries upon failure before moving to the next task in the Supervisor's plan.
 
-## The Learning System (Future Scope)
+## The Learning System (Implemented)
 
 ### Autonomous Memory (RAG Vector DB)
-To evolve beyond approaching every website identically, a Vector DB (e.g., Qdrant or Pinecone) will store specific site playbooks.
-*   **Mechanism:** When the Navigator hits a specific URL, it embeds the URL and a hash of the DOM layout to retrieve site-specific rules (e.g., "Wait for autocomplete dropdown on pelikan.cz").
-*   **Application:** Injects retrieved rules directly into the Navigator's prompt as `[SITE_SPECIFIC_RULE]`.
+To evolve beyond approaching every website identically, a local **ChromaDB** Vector DB stores domain-specific site playbooks.
+*   **Mechanism:** When the Navigator operates on a specific URL (provided via `current_url`), the backend parses the domain and queries ChromaDB to retrieve site-specific rules.
+*   **Application:** Injects retrieved rules directly into the Navigator's prompt as `[SITE_SPECIFIC_RULE]`, allowing the agent to anticipate dynamic site behaviors (e.g., "Wait for autocomplete dropdown on pelikan.cz") before failing.
 
 ### The Sleep Cycle (Synthesizer Agent)
-*   **Mechanism:** An asynchronous background process runs upon task completion or failure.
-*   **Role:** Analyzes the telemetry of executed actions, especially sequences where the Critic repeatedly failed the Navigator.
-*   **Output:** Generates new "Playbook Rules" and persists them in the Vector DB for future use, creating an auto-curriculum of successful workarounds.
+*   **Mechanism:** An explicit endpoint (`/api/synthesize_playbook`) enables an asynchronous review process of completed tasks.
+*   **Role:** The Synthesizer Agent uses Gemini 2.5 Flash to analyze the telemetry of executed actions for a given domain, focusing on retries and eventual successes.
+*   **Output:** Generates concise, universal "Playbook Rules" and persists them in ChromaDB. This creates an auto-curriculum of successful workarounds that the Navigator naturally queries on subsequent runs.
 
 ## Action Primitives
 

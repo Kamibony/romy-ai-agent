@@ -5,7 +5,7 @@ from typing import Optional, List, Dict, Any
 
 from auth import verify_firebase_token
 from db import check_user_license, get_task_session, update_task_session, create_task_session
-from ai_service import process_with_gemini, transcribe_audio_with_gemini, classify_intent_with_gemini, pre_flight_check_with_gemini, supervisor_plan_with_gemini, critic_verify_with_gemini
+from ai_service import process_with_gemini, transcribe_audio_with_gemini, classify_intent_with_gemini, pre_flight_check_with_gemini, supervisor_plan_with_gemini, critic_verify_with_gemini, synthesize_playbook_rule_with_gemini
 from firebase_admin import firestore
 
 app = FastAPI(title="ROMY AI Agent Backend")
@@ -19,6 +19,7 @@ class AgentCommandRequest(BaseModel):
     session_id: Optional[str] = None
     current_sub_task: Optional[str] = None
     screenshot_base64: Optional[str] = None
+    current_url: Optional[str] = None
 
 class ClassifyIntentRequest(BaseModel):
     command_text: Optional[str] = None
@@ -35,6 +36,10 @@ class CriticVerifyRequest(BaseModel):
     action_taken: Dict[str, Any]
     before_state: Dict[str, Any]
     after_state: Dict[str, Any]
+
+class SynthesizePlaybookRequest(BaseModel):
+    domain: str
+    execution_telemetry: str
 
 # Allow all origins, methods, and headers for CORS (adjust as needed in production)
 app.add_middleware(
@@ -97,7 +102,22 @@ def supervisor_plan(request: SupervisorPlanRequest, uid: str = Depends(verify_fi
     sub_tasks = supervisor_plan_with_gemini(request.command_text)
     return {"sub_tasks": sub_tasks}
 
+@app.post("/api/synthesize_playbook")
+def synthesize_playbook(request: SynthesizePlaybookRequest, uid: str = Depends(verify_firebase_token)):
+    """
+    Endpoint to manually trigger the synthesis of a playbook rule for a domain based on execution telemetry.
+    """
+    if not check_user_license(uid):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User license is not active.",
+        )
+
+    rule = synthesize_playbook_rule_with_gemini(request.domain, request.execution_telemetry)
+    return {"status": "ok", "rule": rule}
+
 @app.post("/api/classify_intent")
+
 def classify_intent(request: ClassifyIntentRequest, uid: str = Depends(verify_firebase_token)):
     """
     Endpoint to dynamically classify user intent (WEB or OS).
@@ -167,7 +187,8 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
             command_text=request.command_text,
             thread_history=thread_history,
             screenshot_base64=request.screenshot_base64,
-            current_sub_task=request.current_sub_task
+            current_sub_task=request.current_sub_task,
+            current_url=request.current_url
         )
         print(f"Gemini action list: {action_list}")
 
