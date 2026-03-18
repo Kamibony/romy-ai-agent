@@ -277,20 +277,10 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
         client = gemini_client
 
         contents = []
-        if screenshot_base64:
-            try:
-                # Remove data URI scheme if present (e.g., data:image/webp;base64,)
-                if "," in screenshot_base64:
-                    _, screenshot_base64 = screenshot_base64.split(",", 1)
-                img_data = base64.b64decode(screenshot_base64)
-                contents.append(
-                    types.Part.from_bytes(
-                        data=img_data,
-                        mime_type="image/webp"
-                    )
-                )
-            except Exception as e:
-                print(f"Error processing screenshot: {e}")
+
+        # Tiered Modality: The Navigator no longer receives the heavy screenshot_base64.
+        # It relies entirely on the fast/cheap text-based ui_elements.
+        # We leave the parameter in the signature for backward compatibility or if needed later.
 
         if audio_b64:
             audio_data = base64.b64decode(audio_b64)
@@ -309,8 +299,8 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             )
 
         system_instruction = (
-            "You are a structural RPA assistant implementing a ReAct Loop. You are provided with a visual screenshot showing Set-of-Mark (SoM) labels, "
-            "along with a simplified list of UI elements on the screen. Each element in the list has an ID corresponding to the visual label, xpath, and a description.\n\n"
+            "You are a structural RPA assistant implementing a ReAct Loop. You are provided with "
+            "a simplified list of UI elements on the screen. Each element in the list has an ID, xpath, and a description.\n\n"
             "Based on the user's command and current state, identify the correct target element and return strictly ONE action to execute next.\n\n"
             "Supported actions:\n"
             "- {\"action\": \"CLICK\", \"target_id\": \"<the_number>\", \"xpath\": \"<optional_xpath_fallback>\"}\n"
@@ -322,6 +312,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "- {\"action\": \"HOVER\", \"target_id\": \"<the_number>\", \"xpath\": \"<optional_xpath_fallback>\"}\n"
             "- {\"action\": \"WAIT_FOR\", \"selector\": \"<css_selector>\", \"max_wait_seconds\": 5}\n"
             "- {\"action\": \"RESET_VIEW\"} (use this to click outside or press Escape to close active overlays, dropdowns, date pickers, or modals and let the UI settle before verifying the state)\n"
+            "- {\"action\": \"EXECUTE_JS\", \"code\": \"<javascript_code>\"} (use this to execute strictly read-only JS to extract DOM values or state variables missed by normal extraction, runs in isolated world)\n"
             "- {\"action\": \"REPLY\", \"text\": \"<the answer>\"}\n"
             "- {\"action\": \"DONE\"} (when the task is fully completed)\n"
             "If you cannot determine the next step or encounter an unexpected state, return: [{\"action\": \"ASK_HUMAN\", \"reason\": \"<your specific question>\"}].\n\n"
@@ -366,6 +357,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                             "selector": types.Schema(type=types.Type.STRING),
                             "max_wait_seconds": types.Schema(type=types.Type.NUMBER),
                             "reason": types.Schema(type=types.Type.STRING),
+                            "code": types.Schema(type=types.Type.STRING, description="JavaScript code to execute"),
                             "thought": types.Schema(type=types.Type.STRING, description="The reasoning behind why this action was chosen")
                         },
                         required=["action", "thought"]
@@ -461,6 +453,12 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                                 "action": "RESET_VIEW",
                                 "thought": thought
                             })
+                        elif action_data.get("action") == "EXECUTE_JS" and "code" in action_data:
+                            parsed_actions.append({
+                                "action": "EXECUTE_JS",
+                                "code": str(action_data["code"]),
+                                "thought": thought
+                            })
                         elif action_data.get("action") == "DONE":
                             parsed_actions.append({"action": "DONE", "thought": thought})
                         else:
@@ -552,6 +550,12 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                 elif action_data.get("action") == "RESET_VIEW":
                     return [{
                         "action": "RESET_VIEW",
+                        "thought": thought
+                    }]
+                elif action_data.get("action") == "EXECUTE_JS" and "code" in action_data:
+                    return [{
+                        "action": "EXECUTE_JS",
+                        "code": str(action_data["code"]),
                         "thought": thought
                     }]
                 elif action_data.get("action") == "DONE":

@@ -762,6 +762,81 @@ async function handleExecuteNativeAction(payload) {
             });
         }
         return { success: true };
+    } else if (action.action === "EXECUTE_JS") {
+        sendTelemetryLog(`Executing JS in ISOLATED world via CDP...`);
+        try {
+            await new Promise((resolve, reject) => {
+                chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
+                    if (chrome.runtime.lastError && !chrome.runtime.lastError.message.includes("Cannot attach to this target")) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                    } else {
+                        resolve();
+                    }
+                });
+            });
+
+            // Create an isolated world
+            const isolatedWorldResult = await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: tab.id }, 'Page.createIsolatedWorld', {
+                    frameId: tab.id.toString(), // Usually works, or omit and rely on main frame implicitly if we could, but let's just use default frame by enabling Page first
+                    worldName: "ROMY_ISOLATED"
+                }, (result) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(result);
+                });
+            }).catch(async (e) => {
+                // If frameId fails, try enabling page and getting frame tree
+                await new Promise((resolve) => chrome.debugger.sendCommand({ tabId: tab.id }, 'Page.enable', {}, resolve));
+                const frameTree = await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Page.getFrameTree', {}, (res) => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve(res);
+                    });
+                });
+                return await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Page.createIsolatedWorld', {
+                        frameId: frameTree.frameTree.frame.id,
+                        worldName: "ROMY_ISOLATED"
+                    }, (res) => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve(res);
+                    });
+                });
+            });
+
+            const contextId = isolatedWorldResult.executionContextId;
+
+            const evaluateResult = await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: tab.id }, 'Runtime.evaluate', {
+                    expression: action.code,
+                    contextId: contextId,
+                    returnByValue: true
+                }, (result) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(result);
+                });
+            });
+
+            let resultValue = null;
+            if (evaluateResult && evaluateResult.result) {
+                if (evaluateResult.result.type === 'object' || evaluateResult.result.type === 'string' || evaluateResult.result.type === 'number' || evaluateResult.result.type === 'boolean') {
+                    resultValue = evaluateResult.result.value;
+                } else if (evaluateResult.result.unserializableValue) {
+                    resultValue = evaluateResult.result.unserializableValue;
+                } else if (evaluateResult.result.subtype === 'error') {
+                    resultValue = evaluateResult.result.description;
+                }
+            }
+
+            return { success: true, result: resultValue };
+        } catch (jsErr) {
+            sendTelemetryLog(`Failed to execute JS via CDP: ${jsErr.message}`);
+            return { success: false, error: jsErr.message };
+        } finally {
+            chrome.debugger.detach({ tabId: tab.id }, () => {
+                const err = chrome.runtime.lastError;
+            });
+        }
     } else {
         // SCROLL, PRESS_KEY, WAIT_FOR, HOVER, REPLY fall back to content script
         return await new Promise((resolve, reject) => {
@@ -1282,6 +1357,82 @@ async function processCommandInternally(payload) {
                     }
                     totalActionsExecuted++;
                     await new Promise(r => setTimeout(r, 1000));
+                } else if (action.action === "EXECUTE_JS") {
+                    sendTelemetryLog(`Executing JS in ISOLATED world via CDP...`);
+                    try {
+                        await new Promise((resolve, reject) => {
+                            chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
+                                if (chrome.runtime.lastError && !chrome.runtime.lastError.message.includes("Cannot attach to this target")) {
+                                    reject(new Error(chrome.runtime.lastError.message));
+                                } else {
+                                    resolve();
+                                }
+                            });
+                        });
+
+                        // Create an isolated world
+                        const isolatedWorldResult = await new Promise((resolve, reject) => {
+                            chrome.debugger.sendCommand({ tabId: tab.id }, 'Page.createIsolatedWorld', {
+                                frameId: tab.id.toString(),
+                                worldName: "ROMY_ISOLATED"
+                            }, (result) => {
+                                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                else resolve(result);
+                            });
+                        }).catch(async (e) => {
+                            await new Promise((resolve) => chrome.debugger.sendCommand({ tabId: tab.id }, 'Page.enable', {}, resolve));
+                            const frameTree = await new Promise((resolve, reject) => {
+                                chrome.debugger.sendCommand({ tabId: tab.id }, 'Page.getFrameTree', {}, (res) => {
+                                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                    else resolve(res);
+                                });
+                            });
+                            return await new Promise((resolve, reject) => {
+                                chrome.debugger.sendCommand({ tabId: tab.id }, 'Page.createIsolatedWorld', {
+                                    frameId: frameTree.frameTree.frame.id,
+                                    worldName: "ROMY_ISOLATED"
+                                }, (res) => {
+                                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                    else resolve(res);
+                                });
+                            });
+                        });
+
+                        const evaluateResult = await new Promise((resolve, reject) => {
+                            chrome.debugger.sendCommand({ tabId: tab.id }, 'Runtime.evaluate', {
+                                expression: action.code,
+                                contextId: isolatedWorldResult.executionContextId,
+                                returnByValue: true
+                            }, (result) => {
+                                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                else resolve(result);
+                            });
+                        });
+
+                        let resultValue = null;
+                        if (evaluateResult && evaluateResult.result) {
+                            if (evaluateResult.result.type === 'object' || evaluateResult.result.type === 'string' || evaluateResult.result.type === 'number' || evaluateResult.result.type === 'boolean') {
+                                resultValue = evaluateResult.result.value;
+                            } else if (evaluateResult.result.unserializableValue) {
+                                resultValue = evaluateResult.result.unserializableValue;
+                            } else if (evaluateResult.result.subtype === 'error') {
+                                resultValue = evaluateResult.result.description;
+                            }
+                        }
+
+                        // Append to thread history so LLM sees it
+                        threadHistory.push({ action: "EXECUTE_JS_RESULT", result: resultValue });
+                        sendTelemetryLog(`JS execution resulted in: ${JSON.stringify(resultValue).substring(0, 100)}`);
+
+                        totalActionsExecuted++;
+                        await new Promise(r => setTimeout(r, 500));
+                    } catch (jsErr) {
+                        sendTelemetryLog(`Failed to execute JS via CDP: ${jsErr.message}`);
+                    } finally {
+                        chrome.debugger.detach({ tabId: tab.id }, () => {
+                            const err = chrome.runtime.lastError;
+                        });
+                    }
                 } else {
                     // Send other actions (CLICK, TYPE, SCROLL, PRESS_KEY, HOVER, WAIT_FOR) to the content script
                     await new Promise((resolve, reject) => {
