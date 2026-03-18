@@ -181,6 +181,27 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             config=types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 temperature=0.2,
+                response_mime_type="application/json",
+                response_schema=types.Schema(
+                    type=types.Type.ARRAY,
+                    items=types.Schema(
+                        type=types.Type.OBJECT,
+                        properties={
+                            "action": types.Schema(type=types.Type.STRING),
+                            "target_id": types.Schema(type=types.Type.STRING),
+                            "xpath": types.Schema(type=types.Type.STRING),
+                            "text": types.Schema(type=types.Type.STRING),
+                            "direction": types.Schema(type=types.Type.STRING),
+                            "url": types.Schema(type=types.Type.STRING),
+                            "key": types.Schema(type=types.Type.STRING),
+                            "selector": types.Schema(type=types.Type.STRING),
+                            "max_wait_seconds": types.Schema(type=types.Type.NUMBER),
+                            "reason": types.Schema(type=types.Type.STRING),
+                            "thought": types.Schema(type=types.Type.STRING, description="The reasoning behind why this action was chosen")
+                        },
+                        required=["action", "thought"]
+                    )
+                )
             )
         )
 
@@ -194,10 +215,12 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                 if isinstance(actions_data, list):
                     parsed_actions = []
                     for action_data in actions_data:
+                        thought = action_data.get("thought", "")
                         if action_data.get("action") == "CLICK" and "target_id" in action_data:
                             action_dict = {
                                 "action": "CLICK",
-                                "target_id": str(action_data["target_id"])
+                                "target_id": str(action_data["target_id"]),
+                                "thought": thought
                             }
                             if "xpath" in action_data:
                                 action_dict["xpath"] = str(action_data["xpath"])
@@ -206,7 +229,8 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                             action_dict = {
                                 "action": "TYPE",
                                 "target_id": str(action_data["target_id"]),
-                                "text": str(action_data["text"])
+                                "text": str(action_data["text"]),
+                                "thought": thought
                             }
                             if "xpath" in action_data:
                                 action_dict["xpath"] = str(action_data["xpath"])
@@ -214,27 +238,32 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                         elif action_data.get("action") == "SCROLL" and "direction" in action_data:
                             parsed_actions.append({
                                 "action": "SCROLL",
-                                "direction": str(action_data["direction"])
+                                "direction": str(action_data["direction"]),
+                                "thought": thought
                             })
                         elif action_data.get("action") == "NAVIGATE" and "url" in action_data:
                             parsed_actions.append({
                                 "action": "NAVIGATE",
-                                "url": str(action_data["url"])
+                                "url": str(action_data["url"]),
+                                "thought": thought
                             })
                         elif action_data.get("action") == "OPEN_TAB" and "url" in action_data:
                             parsed_actions.append({
                                 "action": "OPEN_TAB",
-                                "url": str(action_data["url"])
+                                "url": str(action_data["url"]),
+                                "thought": thought
                             })
                         elif action_data.get("action") == "PRESS_KEY" and "key" in action_data:
                             parsed_actions.append({
                                 "action": "PRESS_KEY",
-                                "key": str(action_data["key"])
+                                "key": str(action_data["key"]),
+                                "thought": thought
                             })
                         elif action_data.get("action") == "HOVER" and "target_id" in action_data:
                             action_dict = {
                                 "action": "HOVER",
-                                "target_id": str(action_data["target_id"])
+                                "target_id": str(action_data["target_id"]),
+                                "thought": thought
                             }
                             if "xpath" in action_data:
                                 action_dict["xpath"] = str(action_data["xpath"])
@@ -243,20 +272,23 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                             parsed_actions.append({
                                 "action": "WAIT_FOR",
                                 "selector": str(action_data["selector"]),
-                                "max_wait_seconds": float(action_data.get("max_wait_seconds", 5))
+                                "max_wait_seconds": float(action_data.get("max_wait_seconds", 5)),
+                                "thought": thought
                             })
                         elif action_data.get("action") == "REPLY" and "text" in action_data:
                             parsed_actions.append({
                                 "action": "REPLY",
-                                "text": str(action_data["text"])
+                                "text": str(action_data["text"]),
+                                "thought": thought
                             })
                         elif action_data.get("action") == "ASK_HUMAN" and "reason" in action_data:
                             parsed_actions.append({
                                 "action": "ASK_HUMAN",
-                                "reason": str(action_data["reason"])
+                                "reason": str(action_data["reason"]),
+                                "thought": thought
                             })
                         elif action_data.get("action") == "DONE":
-                            parsed_actions.append({"action": "DONE"})
+                            parsed_actions.append({"action": "DONE", "thought": thought})
                         else:
                             # Keep it but let client figure it out or log it
                             parsed_actions.append(action_data)
@@ -271,10 +303,12 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
         if match_single:
             try:
                 action_data = json.loads(match_single.group(0))
+                thought = action_data.get("thought", "")
                 if action_data.get("action") == "CLICK" and "target_id" in action_data:
                     action_dict = {
                         "action": "CLICK",
-                        "target_id": str(action_data["target_id"])
+                        "target_id": str(action_data["target_id"]),
+                        "thought": thought
                     }
                     if "xpath" in action_data:
                         action_dict["xpath"] = str(action_data["xpath"])
@@ -283,7 +317,8 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                     action_dict = {
                         "action": "TYPE",
                         "target_id": str(action_data["target_id"]),
-                        "text": str(action_data["text"])
+                        "text": str(action_data["text"]),
+                        "thought": thought
                     }
                     if "xpath" in action_data:
                         action_dict["xpath"] = str(action_data["xpath"])
@@ -291,27 +326,32 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                 elif action_data.get("action") == "SCROLL" and "direction" in action_data:
                     return [{
                         "action": "SCROLL",
-                        "direction": str(action_data["direction"])
+                        "direction": str(action_data["direction"]),
+                        "thought": thought
                     }]
                 elif action_data.get("action") == "NAVIGATE" and "url" in action_data:
                     return [{
                         "action": "NAVIGATE",
-                        "url": str(action_data["url"])
+                        "url": str(action_data["url"]),
+                        "thought": thought
                     }]
                 elif action_data.get("action") == "OPEN_TAB" and "url" in action_data:
                     return [{
                         "action": "OPEN_TAB",
-                        "url": str(action_data["url"])
+                        "url": str(action_data["url"]),
+                        "thought": thought
                     }]
                 elif action_data.get("action") == "PRESS_KEY" and "key" in action_data:
                     return [{
                         "action": "PRESS_KEY",
-                        "key": str(action_data["key"])
+                        "key": str(action_data["key"]),
+                        "thought": thought
                     }]
                 elif action_data.get("action") == "HOVER" and "target_id" in action_data:
                     action_dict = {
                         "action": "HOVER",
-                        "target_id": str(action_data["target_id"])
+                        "target_id": str(action_data["target_id"]),
+                        "thought": thought
                     }
                     if "xpath" in action_data:
                         action_dict["xpath"] = str(action_data["xpath"])
@@ -320,20 +360,23 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                     return [{
                         "action": "WAIT_FOR",
                         "selector": str(action_data["selector"]),
-                        "max_wait_seconds": float(action_data.get("max_wait_seconds", 5))
+                        "max_wait_seconds": float(action_data.get("max_wait_seconds", 5)),
+                        "thought": thought
                     }]
                 elif action_data.get("action") == "REPLY" and "text" in action_data:
                     return [{
                         "action": "REPLY",
-                        "text": str(action_data["text"])
+                        "text": str(action_data["text"]),
+                        "thought": thought
                     }]
                 elif action_data.get("action") == "ASK_HUMAN" and "reason" in action_data:
                     return [{
                         "action": "ASK_HUMAN",
-                        "reason": str(action_data["reason"])
+                        "reason": str(action_data["reason"]),
+                        "thought": thought
                     }]
                 elif action_data.get("action") == "DONE":
-                    return [{"action": "DONE"}]
+                    return [{"action": "DONE", "thought": thought}]
             except json.JSONDecodeError:
                 pass
 
