@@ -1,11 +1,11 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from auth import verify_firebase_token
 from db import check_user_license, get_task_session, update_task_session, create_task_session
-from ai_service import process_with_gemini, transcribe_audio_with_gemini, classify_intent_with_gemini
+from ai_service import process_with_gemini, transcribe_audio_with_gemini, classify_intent_with_gemini, pre_flight_check_with_gemini, supervisor_plan_with_gemini, critic_verify_with_gemini
 from firebase_admin import firestore
 
 app = FastAPI(title="ROMY AI Agent Backend")
@@ -17,10 +17,24 @@ class AgentCommandRequest(BaseModel):
     audio_base64: Optional[str] = None
     command_text: Optional[str] = None
     session_id: Optional[str] = None
+    current_sub_task: Optional[str] = None
+    screenshot_base64: Optional[str] = None
 
 class ClassifyIntentRequest(BaseModel):
     command_text: Optional[str] = None
     audio_base64: Optional[str] = None
+
+class PreFlightRequest(BaseModel):
+    command_text: str
+
+class SupervisorPlanRequest(BaseModel):
+    command_text: str
+
+class CriticVerifyRequest(BaseModel):
+    sub_task: str
+    action_taken: Dict[str, Any]
+    before_state: Dict[str, Any]
+    after_state: Dict[str, Any]
 
 # Allow all origins, methods, and headers for CORS (adjust as needed in production)
 app.add_middleware(
@@ -35,6 +49,53 @@ app.add_middleware(
 def health_check():
     """Health-check endpoint."""
     return {"status": "ROMY API is running"}
+
+@app.post("/api/pre_flight")
+def pre_flight_check(request: PreFlightRequest, uid: str = Depends(verify_firebase_token)):
+    """
+    Endpoint to check if a task has missing necessary information before execution.
+    """
+    if not check_user_license(uid):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User license is not active.",
+        )
+
+    result = pre_flight_check_with_gemini(request.command_text)
+    return result
+
+@app.post("/api/critic_verify")
+def critic_verify(request: CriticVerifyRequest, uid: str = Depends(verify_firebase_token)):
+    """
+    Endpoint to verify if a sub-task was successful.
+    """
+    if not check_user_license(uid):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User license is not active.",
+        )
+
+    result = critic_verify_with_gemini(
+        request.sub_task,
+        request.before_state,
+        request.action_taken,
+        request.after_state
+    )
+    return result
+
+@app.post("/api/supervisor_plan")
+def supervisor_plan(request: SupervisorPlanRequest, uid: str = Depends(verify_firebase_token)):
+    """
+    Endpoint to generate sequential sub-tasks for a given command.
+    """
+    if not check_user_license(uid):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User license is not active.",
+        )
+
+    sub_tasks = supervisor_plan_with_gemini(request.command_text)
+    return {"sub_tasks": sub_tasks}
 
 @app.post("/api/classify_intent")
 def classify_intent(request: ClassifyIntentRequest, uid: str = Depends(verify_firebase_token)):
@@ -104,7 +165,9 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
             ui_elements=request.ui_elements,
             audio_b64=request.audio_base64,
             command_text=request.command_text,
-            thread_history=thread_history
+            thread_history=thread_history,
+            screenshot_base64=request.screenshot_base64,
+            current_sub_task=request.current_sub_task
         )
         print(f"Gemini action list: {action_list}")
 

@@ -54,6 +54,171 @@ def transcribe_audio_with_gemini(audio_b64: str) -> str:
         print(f"Error transcribing audio: {e}")
         return ""
 
+def pre_flight_check_with_gemini(command_text: str) -> dict:
+    """
+    Checks if a given command has missing necessary information (like dates, cities).
+    Returns {"status": "ok"} if all good, or {"status": "ASK_HUMAN", "reason": "..."} if missing info.
+    """
+    if not command_text or gemini_client is None:
+        return {"status": "ok"}
+
+    try:
+        system_instruction = (
+            "You are a pre-flight schema extraction agent for an AI assistant. "
+            "Analyze the user's task description. Identify if any critical information required to complete the task is missing. "
+            "For example, booking a flight requires a destination and dates (and optionally a departure city). "
+            "If information is missing, return a JSON object like {\"status\": \"ASK_HUMAN\", \"reason\": \"I need to know the dates for your flight to Paris.\"} "
+            "If the task seems fully specified or if it's a general task that doesn't need specific structured data, return strictly {\"status\": \"ok\"}."
+        )
+
+        response = gemini_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[command_text],
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.0,
+                response_mime_type="application/json",
+                response_schema=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "status": types.Schema(type=types.Type.STRING, description="'ok' or 'ASK_HUMAN'"),
+                        "reason": types.Schema(type=types.Type.STRING, description="The reason if status is ASK_HUMAN"),
+                    },
+                    required=["status"]
+                )
+            )
+        )
+        result = json.loads(response.text.strip())
+        return result
+    except Exception as e:
+        print(f"Error in pre-flight check: {e}")
+        return {"status": "ok"}
+
+def supervisor_plan_with_gemini(command_text: str) -> list[str]:
+    """
+    Breaks down a given task into sequential sub-tasks.
+    Returns a list of strings representing the sub-tasks.
+    """
+    if not command_text or gemini_client is None:
+        return []
+
+    try:
+        system_instruction = (
+            "You are a Supervisor Agent. Your job is to take a high-level user request and break it down into a strictly sequential list of concrete sub-tasks. "
+            "These sub-tasks will be executed by a web automation agent. "
+            "Keep the sub-tasks concise and descriptive. Do not include execution details like 'click the button' or 'type text' unless necessary, instead use goals like 'Navigate to the website', 'Search for flights', etc. "
+            "Output strictly a JSON array of strings, where each string is a sub-task. "
+            "Example output: [\"Navigate to pelikan.cz\", \"Enter origin city\", \"Enter destination city\", \"Select departure date\", \"Click search\"]"
+        )
+
+        response = gemini_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[command_text],
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.0,
+                response_mime_type="application/json",
+                response_schema=types.Schema(
+                    type=types.Type.ARRAY,
+                    items=types.Schema(type=types.Type.STRING)
+                )
+            )
+        )
+
+        result = json.loads(response.text.strip())
+        if isinstance(result, list):
+            return result
+        return []
+    except Exception as e:
+        print(f"Error in supervisor planning: {e}")
+        return []
+
+
+def critic_verify_with_gemini(sub_task: str, before_state: dict, action_taken: dict, after_state: dict) -> dict:
+    """
+    Verifies if a specific sub-task succeeded based on the states before and after an action.
+    Returns {"success": true/false, "reason": "..."}
+    """
+    if gemini_client is None:
+        return {"success": False, "reason": "Gemini client not initialized"}
+
+    try:
+        system_instruction = (
+            "You are a Critic Verification Agent. Your job is to analyze the 'before' state of a UI, the specific 'action taken', and the 'after' state. "
+            "Based on this, determine if the high-level 'sub-task' was successfully completed. "
+            "For example, if the sub-task was 'Navigate to pelikan.cz', and the action was NAVIGATE, check if the after state reflects being on that site. "
+            "If the sub-task was 'Enter destination city', and the action was TYPE, check if the text appears in the correct field in the after state. "
+            "Output strictly a JSON object with a boolean 'success' and a string 'reason' explaining why."
+        )
+
+        prompt = (
+            f"Sub-task to verify: {sub_task}\n\n"
+            f"Action taken:\n{json.dumps(action_taken, indent=2)}\n\n"
+            f"Before State UI Elements:\n{json.dumps(before_state.get('ui_elements', []), indent=2)}\n\n"
+            f"After State UI Elements:\n{json.dumps(after_state.get('ui_elements', []), indent=2)}\n\n"
+        )
+
+        contents = []
+
+        before_screenshot = before_state.get("screenshot_base64")
+        if before_screenshot:
+            try:
+                if "," in before_screenshot:
+                    _, before_screenshot = before_screenshot.split(",", 1)
+                img_data = base64.b64decode(before_screenshot)
+                contents.append("Before State Screenshot:")
+                contents.append(
+                    types.Part.from_bytes(
+                        data=img_data,
+                        mime_type="image/webp"
+                    )
+                )
+            except Exception as e:
+                pass
+
+        after_screenshot = after_state.get("screenshot_base64")
+        if after_screenshot:
+            try:
+                if "," in after_screenshot:
+                    _, after_screenshot = after_screenshot.split(",", 1)
+                img_data = base64.b64decode(after_screenshot)
+                contents.append("After State Screenshot:")
+                contents.append(
+                    types.Part.from_bytes(
+                        data=img_data,
+                        mime_type="image/webp"
+                    )
+                )
+            except Exception as e:
+                pass
+
+        contents.append(prompt)
+
+        response = gemini_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.0,
+                response_mime_type="application/json",
+                response_schema=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "success": types.Schema(type=types.Type.BOOLEAN),
+                        "reason": types.Schema(type=types.Type.STRING),
+                    },
+                    required=["success", "reason"]
+                )
+            )
+        )
+
+        result = json.loads(response.text.strip())
+        return result
+    except Exception as e:
+        print(f"Error in critic verification: {e}")
+        return {"success": False, "reason": str(e)}
+
+
 def classify_intent_with_gemini(command_text: str) -> str:
     """
     Classifies the user intent strictly as 'WEB' or 'OS' using Gemini 2.5 Flash.
@@ -86,7 +251,7 @@ def classify_intent_with_gemini(command_text: str) -> str:
         print(f"Error classifying intent: {e}")
         return "OS"
 
-def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[str] = None, command_text: Optional[str] = None, thread_history: str = "", screenshot_base64: Optional[str] = None) -> list[Dict[str, Any]]:
+def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[str] = None, command_text: Optional[str] = None, thread_history: str = "", screenshot_base64: Optional[str] = None, current_sub_task: Optional[str] = None) -> list[Dict[str, Any]]:
     """
     Uses Gemini 2.5 Flash to process audio/text commands, a visual screenshot, and UI elements, returning exactly ONE action in a list.
     """
@@ -170,7 +335,9 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
         ui_elements_str = json.dumps(ui_elements, indent=2)
         prompt = f"UI Elements:\n{ui_elements_str}\n\nDetermine the correct target element and output the JSON array of actions."
 
-        if command_text:
+        if current_sub_task:
+            prompt += f"\n\nCurrent Sub-Task to execute: {current_sub_task}"
+        elif command_text:
             prompt += f"\n\nAdditional text command provided by user: {command_text}"
         if thread_history:
             prompt += f"\n\nThread History:\n{thread_history}"
