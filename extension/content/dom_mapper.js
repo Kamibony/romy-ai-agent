@@ -37,20 +37,6 @@ window.RomyDomMapper = {
                 }
             }
 
-            // Check computed styles for interactivity
-            try {
-                const style = window.getComputedStyle(el);
-                if (style.cursor === 'pointer' && el.tagName !== 'BODY' && el.tagName !== 'HTML') {
-                    // Filter out massive clickable structural backgrounds/wrappers
-                    const rect = el.getBoundingClientRect();
-                    if (rect.width * rect.height < 250000) { // arbitrary threshold ~500x500
-                        return true;
-                    }
-                }
-            } catch (e) {
-                // Ignore errors reading computed styles
-            }
-
             return false;
         }
 

@@ -702,6 +702,11 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                 sub_task_iteration = 0
                 max_sub_task_iterations = 5
 
+                # Keep track of previous action state to verify in next iteration
+                previous_action = None
+                previous_state_metadata = None
+                previous_state_ui = None
+
                 while sub_task_iteration < max_sub_task_iterations:
                     break_outer = False
                     if ABORT_AGENT:
@@ -743,6 +748,21 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                     ui_elements = state_result.get("ui_elements", [])
                     screenshot_base64 = state_result.get("screenshot_base64", "")
                     current_url = state_result.get("url", "")
+
+                    # Native Verification of Previous Action
+                    if previous_action:
+                        logging.info("Attempting Orchestrator-Level Native Verification of previous action...")
+                        native_res = verify_action_natively(
+                            previous_action,
+                            {"metadata": previous_state_metadata, "ui_elements": previous_state_ui},
+                            {"metadata": {"current_url": current_url}, "ui_elements": ui_elements}
+                        )
+
+                        if native_res.get("success"):
+                            logging.info(f"Native verification succeeded: {native_res.get('reason')}")
+                            command_text += f"\n[System Note: Action {previous_action.get('action', 'UNKNOWN')} verified successfully natively: {native_res.get('reason')}]"
+                        else:
+                            logging.info(f"Native verification didn't match: {native_res.get('reason')}")
 
                     # 2. Send state to backend to receive ONE action
                     payload = {
@@ -882,43 +902,10 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                             logging.info(f"JS Execution Result: {js_result}")
                             command_text += f"\n[System Note: Last EXECUTE_JS returned: {js_result}]"
 
-                        # --- VERIFICATION LAYER ---
-                        # After delegating the action, wait briefly and verify the state change
-                        time.sleep(2)
-
-                        logging.info(f"Getting new state for Critic Verification...")
-                        verify_payload = {
-                            "action_type": "GET_STATE",
-                            "commandText": command_text,
-                            "audioBase64": ""
-                        }
-                        verify_result = bridge.delegate_command(verify_payload)
-
-                        if not verify_result.get("success"):
-                            logging.error("Failed to get state for Critic.")
-                            # Proceed with empty state to let critic decide or fail
-                            verify_state_ui_elements = []
-                            verify_screenshot = ""
-                        else:
-                            verify_state_ui_elements = verify_result.get("ui_elements", [])
-                            verify_screenshot = verify_result.get("screenshot_base64", "")
-
-                        # Call Critic Verify
-                        logging.info("Attempting Orchestrator-Level Native Verification...")
-                        native_res = verify_action_natively(
-                            act,
-                            {"metadata": payload.get("metadata", {}), "ui_elements": ui_elements},
-                            {"metadata": verify_result.get("metadata", {}), "ui_elements": verify_state_ui_elements}
-                        )
-
-                        if native_res.get("success"):
-                            logging.info(f"Native verification succeeded: {native_res.get('reason')}")
-                            command_text += f"\n[System Note: Action {action_upper} verified successfully natively: {native_res.get('reason')}]"
-                            # We no longer break the loop here. We let the LLM decide.
-                        else:
-                            logging.info(f"Native verification didn't match: {native_res.get('reason')}")
-                            # We can also add a negative note if useful, or let the LLM see the new DOM state.
-                            pass
+                        # Save state for verification in next iteration
+                        previous_action = act
+                        previous_state_metadata = {"current_url": current_url}
+                        previous_state_ui = ui_elements
 
                     except requests.exceptions.RequestException as req_e:
                         if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
@@ -1378,6 +1365,11 @@ def execute_voice_agent_loop() -> None:
                 sub_task_iteration = 0
                 max_sub_task_iterations = 5
 
+                # Keep track of previous action state to verify in next iteration
+                previous_action = None
+                previous_state_metadata = None
+                previous_state_ui = None
+
                 while sub_task_iteration < max_sub_task_iterations:
                     break_outer = False
                     if ABORT_AGENT:
@@ -1420,6 +1412,21 @@ def execute_voice_agent_loop() -> None:
                     ui_elements = state_result.get("ui_elements", [])
                     screenshot_base64 = state_result.get("screenshot_base64", "")
                     current_url = state_result.get("url", "")
+
+                    # Native Verification of Previous Action
+                    if previous_action:
+                        logging.info("Attempting Orchestrator-Level Native Verification of previous action...")
+                        native_res = verify_action_natively(
+                            previous_action,
+                            {"metadata": previous_state_metadata, "ui_elements": previous_state_ui},
+                            {"metadata": {"current_url": current_url}, "ui_elements": ui_elements}
+                        )
+
+                        if native_res.get("success"):
+                            logging.info(f"Native verification succeeded: {native_res.get('reason')}")
+                            command_text += f"\n[System Note: Action {previous_action.get('action', 'UNKNOWN')} verified successfully natively: {native_res.get('reason')}]"
+                        else:
+                            logging.info(f"Native verification didn't match: {native_res.get('reason')}")
 
                     # 2. Send state to backend to receive ONE action
                     payload = {
@@ -1553,43 +1560,10 @@ def execute_voice_agent_loop() -> None:
                             logging.info(f"JS Execution Result: {js_result}")
                             command_text += f"\n[System Note: Last EXECUTE_JS returned: {js_result}]"
 
-                        # --- VERIFICATION LAYER ---
-                        # After delegating the action, wait briefly and verify the state change
-                        time.sleep(2)
-
-                        logging.info(f"Getting new state for Critic Verification...")
-                        verify_payload = {
-                            "action_type": "GET_STATE",
-                            "commandText": command_text,
-                            "audioBase64": ""
-                        }
-                        verify_result = bridge.delegate_command(verify_payload)
-
-                        if not verify_result.get("success"):
-                            logging.error("Failed to get state for Critic.")
-                            # Proceed with empty state to let critic decide or fail
-                            verify_state_ui_elements = []
-                            verify_screenshot = ""
-                        else:
-                            verify_state_ui_elements = verify_result.get("ui_elements", [])
-                            verify_screenshot = verify_result.get("screenshot_base64", "")
-
-                        # Call Critic Verify
-                        logging.info("Attempting Orchestrator-Level Native Verification...")
-                        native_res = verify_action_natively(
-                            act,
-                            {"metadata": payload.get("metadata", {}), "ui_elements": ui_elements},
-                            {"metadata": verify_result.get("metadata", {}), "ui_elements": verify_state_ui_elements}
-                        )
-
-                        if native_res.get("success"):
-                            logging.info(f"Native verification succeeded: {native_res.get('reason')}")
-                            command_text += f"\n[System Note: Action {action_upper} verified successfully natively: {native_res.get('reason')}]"
-                            # We no longer break the loop here. We let the LLM decide.
-                        else:
-                            logging.info(f"Native verification didn't match: {native_res.get('reason')}")
-                            # We can also add a negative note if useful, or let the LLM see the new DOM state.
-                            pass
+                        # Save state for verification in next iteration
+                        previous_action = act
+                        previous_state_metadata = {"current_url": current_url}
+                        previous_state_ui = ui_elements
 
                     except requests.exceptions.RequestException as req_e:
                         if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
