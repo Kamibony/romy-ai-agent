@@ -370,7 +370,8 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "- {\"action\": \"RESET_VIEW\"} (use this to click outside or press Escape to close active overlays, dropdowns, date pickers, or modals and let the UI settle before verifying the state)\n"
             "- {\"action\": \"EXECUTE_JS\", \"code\": \"<javascript_code>\"} (use this to execute strictly read-only JS to extract DOM values or state variables missed by normal extraction, runs in isolated world)\n"
             "- {\"action\": \"REPLY\", \"text\": \"<the answer>\"}\n"
-            "- {\"action\": \"DONE\"} (when the task is fully completed)\n"
+            "- {\"action\": \"SUB_TASK_COMPLETE\"} (use this when the current sub-task has been successfully achieved, and you are ready to move on to the next one)\n"
+            "- {\"action\": \"DONE\"} (when the entire task across all sub-tasks is fully completed)\n"
             "If you cannot determine the next step or encounter an unexpected state, return: [{\"action\": \"ASK_HUMAN\", \"reason\": \"<your specific question>\"}].\n\n"
             "CRITICAL RULE for Autocomplete/Search Fields: When interacting with inputs that feature autocomplete or dropdown suggestions (e.g., city/airport selectors), typing the text is NOT enough. After issuing a TYPE action, you MUST expect a dropdown menu to appear in the next GET_STATE. Your immediate next step MUST be to use the CLICK action to select the correct suggestion from that dropdown. Never proceed to fill out other fields until you have explicitly clicked and confirmed the suggestion from the current field's dropdown.\n\n"
             "CRUCIAL INSTRUCTION: Return ONLY a valid JSON array containing exactly ONE action object. Do not return multiple actions. Do not return text outside the array.\n"
@@ -529,6 +530,8 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                                 "code": str(action_data["code"]),
                                 "thought": thought
                             })
+                        elif action_data.get("action") == "SUB_TASK_COMPLETE":
+                            parsed_actions.append({"action": "SUB_TASK_COMPLETE", "thought": thought})
                         elif action_data.get("action") == "DONE":
                             parsed_actions.append({"action": "DONE", "thought": thought})
                         else:
@@ -628,6 +631,8 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                         "code": str(action_data["code"]),
                         "thought": thought
                     }]
+                elif action_data.get("action") == "SUB_TASK_COMPLETE":
+                    return [{"action": "SUB_TASK_COMPLETE", "thought": thought}]
                 elif action_data.get("action") == "DONE":
                     return [{"action": "DONE", "thought": thought}]
             except json.JSONDecodeError:
