@@ -693,10 +693,22 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
 
                     logging.info("Sending WEB state payload to backend...")
                     try:
-                        with get_resilient_session() as session:
-                            response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
-                        response.raise_for_status()
-                        backend_data = response.json()
+                        max_retries = 3
+                        retry_delay = 5
+                        for attempt in range(max_retries):
+                            try:
+                                with get_resilient_session() as session:
+                                    response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
+                                response.raise_for_status()
+                                backend_data = response.json()
+                                break
+                            except requests.exceptions.RequestException as req_err:
+                                logging.warning(f"Network error on attempt {attempt + 1}/{max_retries}: {req_err}")
+                                if attempt < max_retries - 1:
+                                    time.sleep(retry_delay)
+                                    retry_delay *= 2
+                                else:
+                                    raise
 
                         if isinstance(backend_data, list):
                             actions = backend_data
@@ -917,10 +929,22 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
 
             logging.info(f"Sending remote payload to backend (iteration {iteration})...")
             try:
-                with get_resilient_session() as session:
-                    response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
-                response.raise_for_status()
-                backend_data = response.json()
+                max_retries = 3
+                retry_delay = 5
+                for attempt in range(max_retries):
+                    try:
+                        with get_resilient_session() as session:
+                            response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
+                        response.raise_for_status()
+                        backend_data = response.json()
+                        break
+                    except requests.exceptions.RequestException as req_err:
+                        logging.warning(f"Network error on attempt {attempt + 1}/{max_retries}: {req_err}")
+                        if attempt < max_retries - 1:
+                            time.sleep(retry_delay)
+                            retry_delay *= 2
+                        else:
+                            raise
 
                 if isinstance(backend_data, list):
                     actions = backend_data
@@ -1359,10 +1383,22 @@ def execute_voice_agent_loop() -> None:
 
                     logging.info("Sending WEB state payload to backend...")
                     try:
-                        with get_resilient_session() as session:
-                            response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
-                        response.raise_for_status()
-                        backend_data = response.json()
+                        max_retries = 3
+                        retry_delay = 5
+                        for attempt in range(max_retries):
+                            try:
+                                with get_resilient_session() as session:
+                                    response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
+                                response.raise_for_status()
+                                backend_data = response.json()
+                                break
+                            except requests.exceptions.RequestException as req_err:
+                                logging.warning(f"Network error on attempt {attempt + 1}/{max_retries}: {req_err}")
+                                if attempt < max_retries - 1:
+                                    time.sleep(retry_delay)
+                                    retry_delay *= 2
+                                else:
+                                    raise
 
                         if isinstance(backend_data, list):
                             actions = backend_data
@@ -1624,10 +1660,22 @@ def execute_voice_agent_loop() -> None:
 
             logging.info(f"Sending payload to backend (iteration {iteration})...")
             try:
-                with get_resilient_session() as session:
-                    response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
-                response.raise_for_status()
-                backend_data = response.json()
+                max_retries = 3
+                retry_delay = 5
+                for attempt in range(max_retries):
+                    try:
+                        with get_resilient_session() as session:
+                            response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
+                        response.raise_for_status()
+                        backend_data = response.json()
+                        break
+                    except requests.exceptions.RequestException as req_err:
+                        logging.warning(f"Network error on attempt {attempt + 1}/{max_retries}: {req_err}")
+                        if attempt < max_retries - 1:
+                            time.sleep(retry_delay)
+                            retry_delay *= 2
+                        else:
+                            raise
 
                 # 6. Check response
                 if isinstance(backend_data, list):
