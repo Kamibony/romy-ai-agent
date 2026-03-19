@@ -1,6 +1,5 @@
 import sys
 import os
-import json
 import time
 from unittest.mock import MagicMock
 from dotenv import load_dotenv
@@ -14,7 +13,6 @@ load_dotenv(dotenv_path)
 sys.path.insert(0, backend_dir)
 
 # Mock firebase_admin and firestore.client() to bypass database dependency errors
-# using dummy credentials and MagicMock as required by isolated testing.
 sys.modules['firebase_admin'] = MagicMock()
 sys.modules['firebase_admin.credentials'] = MagicMock()
 sys.modules['firebase_admin.firestore'] = MagicMock()
@@ -34,6 +32,7 @@ def run_diagnostics():
 
     if not os.environ.get("GEMINI_API_KEY"):
         print("Warning: GEMINI_API_KEY environment variable is not set!")
+        return
     else:
         print("Success: GEMINI_API_KEY loaded successfully.")
 
@@ -53,19 +52,8 @@ def run_diagnostics():
     print("\n[3] Testing Navigator Agent (process_with_gemini) with heavy payload")
 
     # Generate a large mock ui_elements array
-    ui_elements = []
-    for i in range(100):
-        ui_elements.append({
-            "id": str(i),
-            "xpath": f"//div[{i}]/input",
-            "description": f"Input field {i} for general data entry"
-        })
-    # Add a specific target element to see if it can find it
-    ui_elements.append({
-        "id": "100",
-        "xpath": "//input[@name='destination']",
-        "description": "Destination input"
-    })
+    ui_elements = [{"id": str(i), "xpath": f"//div[{i}]/input", "description": f"Input field {i}"} for i in range(100)]
+    ui_elements.append({"id": "100", "xpath": "//input[@name='destination']", "description": "Destination input"})
 
     print(f"Generated {len(ui_elements)} UI elements. Sending to Navigator...")
 
