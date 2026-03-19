@@ -399,7 +399,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
 
         if current_sub_task:
             prompt += f"\n\nCurrent Sub-Task to execute: {current_sub_task}"
-        elif command_text:
+        if command_text:
             prompt += f"\n\nAdditional text command provided by user: {command_text}"
         if thread_history:
             prompt += f"\n\nThread History:\n{thread_history}"
