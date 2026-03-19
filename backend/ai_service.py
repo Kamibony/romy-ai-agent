@@ -136,32 +136,28 @@ def supervisor_plan_with_gemini(command_text: str) -> list[str]:
         return []
 
 
-def critic_verify_with_gemini(sub_task: str, before_state: dict, action_taken: dict, after_state: dict) -> dict:
-    """
-    Verifies if a specific sub-task succeeded based on the states before and after an action.
-    Returns {"success": true/false, "reason": "..."}
-    """
+def _run_critic_verification(sub_task: str, action_taken: dict, before_state: dict, after_state: dict, include_images: bool) -> dict:
     if gemini_client is None:
         return {"success": False, "reason": "Gemini client not initialized"}
 
-    try:
-        system_instruction = (
-            "You are a Critic Verification Agent. Your job is to analyze the 'before' state of a UI, the specific 'action taken', and the 'after' state. "
-            "Based on this, determine if the high-level 'sub-task' was successfully completed. "
-            "For example, if the sub-task was 'Navigate to pelikan.cz', and the action was NAVIGATE, check if the after state reflects being on that site. "
-            "If the sub-task was 'Enter destination city', and the action was TYPE, check if the text appears in the correct field in the after state. "
-            "Output strictly a JSON object with a boolean 'success' and a string 'reason' explaining why."
-        )
+    system_instruction = (
+        "You are a Critic Verification Agent. Your job is to analyze the 'before' state of a UI, the specific 'action taken', and the 'after' state. "
+        "Based on this, determine if the high-level 'sub-task' was successfully completed. "
+        "For example, if the sub-task was 'Navigate to pelikan.cz', and the action was NAVIGATE, check if the after state reflects being on that site. "
+        "If the sub-task was 'Enter destination city', and the action was TYPE, check if the text appears in the correct field in the after state. "
+        "Output strictly a JSON object with a boolean 'success' and a string 'reason' explaining why."
+    )
 
-        prompt = (
-            f"Sub-task to verify: {sub_task}\n\n"
-            f"Action taken:\n{json.dumps(action_taken, indent=2)}\n\n"
-            f"Before State UI Elements:\n{json.dumps(before_state.get('ui_elements', []), indent=2)}\n\n"
-            f"After State UI Elements:\n{json.dumps(after_state.get('ui_elements', []), indent=2)}\n\n"
-        )
+    prompt = (
+        f"Sub-task to verify: {sub_task}\n\n"
+        f"Action taken:\n{json.dumps(action_taken, indent=2)}\n\n"
+        f"Before State UI Elements:\n{json.dumps(before_state.get('ui_elements', []), indent=2)}\n\n"
+        f"After State UI Elements:\n{json.dumps(after_state.get('ui_elements', []), indent=2)}\n\n"
+    )
 
-        contents = []
+    contents = []
 
+    if include_images:
         before_screenshot = before_state.get("screenshot_base64")
         if before_screenshot:
             try:
@@ -194,27 +190,49 @@ def critic_verify_with_gemini(sub_task: str, before_state: dict, action_taken: d
             except Exception as e:
                 pass
 
-        contents.append(prompt)
+    contents.append(prompt)
 
-        response = gemini_client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.0,
-                response_mime_type="application/json",
-                response_schema=types.Schema(
-                    type=types.Type.OBJECT,
-                    properties={
-                        "success": types.Schema(type=types.Type.BOOLEAN),
-                        "reason": types.Schema(type=types.Type.STRING),
-                    },
-                    required=["success", "reason"]
-                )
+    response = gemini_client.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=contents,
+        config=types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=0.0,
+            response_mime_type="application/json",
+            response_schema=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "success": types.Schema(type=types.Type.BOOLEAN),
+                    "reason": types.Schema(type=types.Type.STRING),
+                },
+                required=["success", "reason"]
             )
         )
+    )
 
-        result = json.loads(response.text.strip())
+    return json.loads(response.text.strip())
+
+def critic_verify_with_gemini(sub_task: str, before_state: dict, action_taken: dict, after_state: dict) -> dict:
+    """
+    Verifies if a specific sub-task succeeded based on the states before and after an action.
+    Implements a tiered approach: first checks strictly using text/JSON of pruned DOM.
+    If uncertain or verification fails, falls back to multimodal image evaluation.
+    Returns {"success": true/false, "reason": "..."}
+    """
+    try:
+        # Tier 1: Fast path - Text-based JSON DOM evaluation only
+        result = _run_critic_verification(sub_task, action_taken, before_state, after_state, include_images=False)
+
+        # Tier 2: Slow path - Multimodal fallback if Tier 1 fails and images are available
+        if not result.get("success"):
+            has_before_image = bool(before_state.get("screenshot_base64"))
+            has_after_image = bool(after_state.get("screenshot_base64"))
+
+            if has_before_image or has_after_image:
+                print("Text-based critic verify failed, falling back to multimodal verification...")
+                fallback_result = _run_critic_verification(sub_task, action_taken, before_state, after_state, include_images=True)
+                return fallback_result
+
         return result
     except Exception as e:
         print(f"Error in critic verification: {e}")
