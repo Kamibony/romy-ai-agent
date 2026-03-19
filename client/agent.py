@@ -694,6 +694,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                 max_sub_task_iterations = 5
 
                 while sub_task_iteration < max_sub_task_iterations:
+                    break_outer = False
                     if ABORT_AGENT:
                         logging.info("Emergency abort triggered. Stopping remote agent loop.")
                         final_status = "failed"
@@ -1369,6 +1370,7 @@ def execute_voice_agent_loop() -> None:
                 max_sub_task_iterations = 5
 
                 while sub_task_iteration < max_sub_task_iterations:
+                    break_outer = False
                     if ABORT_AGENT:
                         logging.info("Emergency abort triggered. Stopping voice agent loop.")
                         final_status = "failed"
@@ -1668,6 +1670,7 @@ def execute_voice_agent_loop() -> None:
             max_sub_task_iterations = 5
 
             while sub_task_iteration < max_sub_task_iterations:
+                break_outer = False
                 if ABORT_AGENT:
                     logging.info("Emergency abort triggered. Stopping voice agent loop.")
                     final_status = "failed"
