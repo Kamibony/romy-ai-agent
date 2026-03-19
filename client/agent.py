@@ -505,6 +505,68 @@ def supervisor_plan(command_text: str) -> list:
         logging.error(f"Error getting supervisor plan: {e}")
         return []
 
+def verify_action_natively(action, before_state, after_state):
+    action_type = str(action.get("action", "")).upper()
+    logging.info(f"Attempting native verification for action: {action_type}")
+
+    # Extract metadata and states safely
+    before_meta = before_state.get("metadata", {}) or {}
+    after_meta = after_state.get("metadata", {}) or {}
+    before_url = before_meta.get("current_url", "")
+    after_url = after_meta.get("current_url", "")
+
+    before_ui = before_state.get("ui_elements", []) or []
+    after_ui = after_state.get("ui_elements", []) or []
+
+    if action_type in ["NAVIGATE", "OPEN_TAB"]:
+        if before_url != after_url and after_url:
+            return {"success": True, "reason": "URL changed natively verified."}
+        # If URL didn't change, we might still have navigated to the same page or it's still loading.
+        # Natively we can just check if URL matches target.
+        target_url = action.get("url", "")
+        if target_url and target_url in after_url:
+             return {"success": True, "reason": "Navigated to target URL natively verified."}
+        return {"success": False, "reason": "URL did not change as expected."}
+
+    elif action_type == "TYPE":
+        text_to_type = action.get("text", "")
+        if not text_to_type:
+            return {"success": True, "reason": "No text to verify, returning true."}
+
+        # Check if typed text exists in the new UI elements natively
+        for el in after_ui:
+            # Check value or text attributes mapped by DOMSnapshot
+            el_text = el.get("text", "") or ""
+            el_value = el.get("attributes", {}).get("value", "") or ""
+            el_placeholder = el.get("attributes", {}).get("placeholder", "") or ""
+
+            if text_to_type.lower() in str(el_text).lower() or text_to_type.lower() in str(el_value).lower():
+                return {"success": True, "reason": f"Text '{text_to_type}' natively verified in DOM."}
+
+        return {"success": False, "reason": f"Text '{text_to_type}' not found natively in new DOM."}
+
+    elif action_type == "CLICK":
+        # If URL changed, click definitely did something
+        if before_url != after_url and after_url:
+            return {"success": True, "reason": "URL changed after click natively verified."}
+
+        # If DOM changed significantly (e.g. elements appeared/disappeared)
+        before_ids = {el.get("id") for el in before_ui if el.get("id")}
+        after_ids = {el.get("id") for el in after_ui if el.get("id")}
+
+        # If new elements appeared or old ones disappeared, the state changed
+        if before_ids != after_ids:
+             return {"success": True, "reason": "DOM state changed after click natively verified."}
+
+        # If state didn't change significantly (or we can't be sure), fallback to LLM Critic
+        return {"success": False, "reason": "No deterministic DOM or URL change natively detected after click."}
+
+    elif action_type in ["RESET_VIEW", "SCROLL"]:
+        return {"success": True, "reason": f"{action_type} natively verified."}
+
+    # For other actions or complex semantic checks, return False to fallback to LLM Critic
+    return {"success": False, "reason": "Action cannot be verified natively."}
+
 def critic_verify(sub_task: str, action_taken: dict, before_state: dict, after_state: dict) -> dict:
     if not CURRENT_TOKEN:
         return {"success": True, "reason": "No token"}
@@ -825,13 +887,25 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                             verify_screenshot = verify_result.get("screenshot_base64", "")
 
                         # Call Critic Verify
-                        logging.info("Requesting Critic Verification...")
-                        verify_res = critic_verify(
-                            current_sub_task,
+                        logging.info("Attempting Orchestrator-Level Native Verification...")
+                        native_res = verify_action_natively(
                             act,
-                            {"ui_elements": ui_elements, "screenshot_base64": screenshot_base64},
-                            {"ui_elements": verify_state_ui_elements, "screenshot_base64": verify_screenshot}
+                            {"metadata": payload.get("metadata", {}), "ui_elements": ui_elements},
+                            {"metadata": verify_result.get("metadata", {}), "ui_elements": verify_state_ui_elements}
                         )
+
+                        if native_res.get("success"):
+                            logging.info(f"Native verification succeeded: {native_res.get('reason')}")
+                            command_text += f"\n[System Note: Action {action_upper} verified successfully natively: {native_res.get('reason')}]"
+                            verify_res = {"success": True, "reason": native_res.get('reason')}
+                        else:
+                            logging.info(f"Native verification fell back to LLM Critic: {native_res.get('reason')}")
+                            verify_res = critic_verify(
+                                current_sub_task,
+                                act,
+                                {"ui_elements": ui_elements, "screenshot_base64": screenshot_base64},
+                                {"ui_elements": verify_state_ui_elements, "screenshot_base64": verify_screenshot}
+                            )
                         if verify_res.get("success"):
                             logging.info(f"Critic verified success for sub-task: {current_sub_task}")
                             break_outer = True
@@ -1511,13 +1585,25 @@ def execute_voice_agent_loop() -> None:
                             verify_screenshot = verify_result.get("screenshot_base64", "")
 
                         # Call Critic Verify
-                        logging.info("Requesting Critic Verification...")
-                        verify_res = critic_verify(
-                            current_sub_task,
+                        logging.info("Attempting Orchestrator-Level Native Verification...")
+                        native_res = verify_action_natively(
                             act,
-                            {"ui_elements": ui_elements, "screenshot_base64": screenshot_base64},
-                            {"ui_elements": verify_state_ui_elements, "screenshot_base64": verify_screenshot}
+                            {"metadata": payload.get("metadata", {}), "ui_elements": ui_elements},
+                            {"metadata": verify_result.get("metadata", {}), "ui_elements": verify_state_ui_elements}
                         )
+
+                        if native_res.get("success"):
+                            logging.info(f"Native verification succeeded: {native_res.get('reason')}")
+                            command_text += f"\n[System Note: Action {action_upper} verified successfully natively: {native_res.get('reason')}]"
+                            verify_res = {"success": True, "reason": native_res.get('reason')}
+                        else:
+                            logging.info(f"Native verification fell back to LLM Critic: {native_res.get('reason')}")
+                            verify_res = critic_verify(
+                                current_sub_task,
+                                act,
+                                {"ui_elements": ui_elements, "screenshot_base64": screenshot_base64},
+                                {"ui_elements": verify_state_ui_elements, "screenshot_base64": verify_screenshot}
+                            )
                         if verify_res.get("success"):
                             logging.info(f"Critic verified success for sub-task: {current_sub_task}")
                             break_outer = True
