@@ -29,6 +29,7 @@ BACKEND_URL = os.environ.get("BACKEND_URL", "https://romy-backend-1049976869239.
 CURRENT_TOKEN = None
 
 COMMAND_QUEUE = queue.Queue()
+MAX_UI_ELEMENTS = 150  # Payload size management for resilience
 ABORT_AGENT = False
 PAUSE_AGENT = False
 
@@ -479,7 +480,7 @@ def pre_flight_check(command_text: str) -> dict:
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
     try:
         with get_resilient_session() as session:
-            response = session.post(url, json=payload, headers=headers, timeout=20)
+            response = session.post(url, json=payload, headers=headers, timeout=(10, 20))
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -498,7 +499,7 @@ def supervisor_plan(command_text: str) -> list:
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
     try:
         with get_resilient_session() as session:
-            response = session.post(url, json=payload, headers=headers, timeout=30)
+            response = session.post(url, json=payload, headers=headers, timeout=(10, 30))
         response.raise_for_status()
         return response.json().get("sub_tasks", [])
     except Exception as e:
@@ -506,6 +507,7 @@ def supervisor_plan(command_text: str) -> list:
         return []
 
 def verify_action_natively(action, before_state, after_state):
+    from urllib.parse import urlparse
     action_type = str(action.get("action", "")).upper()
     logging.info(f"Attempting native verification for action: {action_type}")
 
@@ -521,11 +523,18 @@ def verify_action_natively(action, before_state, after_state):
     if action_type in ["NAVIGATE", "OPEN_TAB"]:
         if before_url != after_url and after_url:
             return {"success": True, "reason": "URL changed natively verified."}
-        # If URL didn't change, we might still have navigated to the same page or it's still loading.
-        # Natively we can just check if URL matches target.
+
         target_url = action.get("url", "")
-        if target_url and target_url in after_url:
-             return {"success": True, "reason": "Navigated to target URL natively verified."}
+        if target_url and after_url:
+            # Fuzzy verification: checking domain match instead of exact URL match
+            target_domain = urlparse(target_url).netloc.replace("www.", "")
+            after_domain = urlparse(after_url).netloc.replace("www.", "")
+            if target_domain and after_domain and target_domain == after_domain:
+                return {"success": True, "reason": "Navigated to target URL domain natively verified."}
+
+            if target_url in after_url:
+                 return {"success": True, "reason": "Navigated to target URL natively verified."}
+
         return {"success": False, "reason": "URL did not change as expected."}
 
     elif action_type == "TYPE":
@@ -584,7 +593,7 @@ def critic_verify(sub_task: str, action_taken: dict, before_state: dict, after_s
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
     try:
         with get_resilient_session() as session:
-            response = session.post(url, json=payload, headers=headers, timeout=30)
+            response = session.post(url, json=payload, headers=headers, timeout=(10, 30))
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -622,7 +631,7 @@ def classify_intent(command_text: str, audio_b64: str) -> Tuple[str, str]:
 
     try:
         with get_resilient_session() as session:
-            response = session.post(url, json=payload, headers=headers, timeout=20)
+            response = session.post(url, json=payload, headers=headers, timeout=(10, 20))
         response.raise_for_status()
         data = response.json()
 
@@ -737,7 +746,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
 
                     # 2. Send state to backend to receive ONE action
                     payload = {
-                        "ui_elements": ui_elements,
+                        "ui_elements": ui_elements[:MAX_UI_ELEMENTS] if isinstance(ui_elements, list) else ui_elements,
                         "session_id": doc_id,
                         "command_text": command_text,
                         "current_sub_task": current_sub_task,
@@ -761,7 +770,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                         for attempt in range(max_retries):
                             try:
                                 with get_resilient_session() as session:
-                                    response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
+                                    response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=(15, 60))
                                 response.raise_for_status()
                                 backend_data = response.json()
                                 break
@@ -984,7 +993,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
             ui_elements, memory_map = scan_ui_elements()
 
             payload = {
-                "ui_elements": ui_elements,
+                "ui_elements": ui_elements[:MAX_UI_ELEMENTS] if isinstance(ui_elements, list) else ui_elements,
                 "session_id": doc_id
             }
             if iteration == 0 and audio_b64:
@@ -1006,7 +1015,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                 for attempt in range(max_retries):
                     try:
                         with get_resilient_session() as session:
-                            response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
+                            response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=(15, 60))
                         response.raise_for_status()
                         backend_data = response.json()
                         break
@@ -1414,7 +1423,7 @@ def execute_voice_agent_loop() -> None:
 
                     # 2. Send state to backend to receive ONE action
                     payload = {
-                        "ui_elements": ui_elements,
+                        "ui_elements": ui_elements[:MAX_UI_ELEMENTS] if isinstance(ui_elements, list) else ui_elements,
                         "session_id": doc_id,
                         "command_text": command_text,
                         "current_sub_task": current_sub_task,
@@ -1438,7 +1447,7 @@ def execute_voice_agent_loop() -> None:
                         for attempt in range(max_retries):
                             try:
                                 with get_resilient_session() as session:
-                                    response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
+                                    response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=(15, 60))
                                 response.raise_for_status()
                                 backend_data = response.json()
                                 break
@@ -1700,7 +1709,7 @@ def execute_voice_agent_loop() -> None:
 
             # 4. Construct JSON payload
             payload = {
-                "ui_elements": ui_elements,
+                "ui_elements": ui_elements[:MAX_UI_ELEMENTS] if isinstance(ui_elements, list) else ui_elements,
                 "session_id": doc_id,
                 "command_text": command_text,
                 "current_sub_task": current_sub_task
@@ -1723,7 +1732,7 @@ def execute_voice_agent_loop() -> None:
                 for attempt in range(max_retries):
                     try:
                         with get_resilient_session() as session:
-                            response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=90)
+                            response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=(15, 60))
                         response.raise_for_status()
                         backend_data = response.json()
                         break
