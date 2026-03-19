@@ -821,8 +821,15 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                                 final_status = "AWAITING_HUMAN_INPUT"
                                 break
 
-                        if action_upper == "DONE":
+                        if action_upper == "SUB_TASK_COMPLETE":
+                            logging.info(f"Sub-task completed: {current_sub_task}")
+                            break_outer = True
+                            break
+                        elif action_upper == "DONE":
                             logging.info("Web task finished successfully.")
+                            # Even if it says DONE early, we'll mark this sub-task complete
+                            # and potentially break out entirely. For now, mark sub-task done.
+                            break_outer = True
                             break
                         elif "ERROR" in action_upper:
                             raw_response = act.get("raw_response", "No raw response provided")
@@ -897,21 +904,11 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                         if native_res.get("success"):
                             logging.info(f"Native verification succeeded: {native_res.get('reason')}")
                             command_text += f"\n[System Note: Action {action_upper} verified successfully natively: {native_res.get('reason')}]"
-                            verify_res = {"success": True, "reason": native_res.get('reason')}
+                            # We no longer break the loop here. We let the LLM decide.
                         else:
-                            logging.info(f"Native verification fell back to LLM Critic: {native_res.get('reason')}")
-                            verify_res = critic_verify(
-                                current_sub_task,
-                                act,
-                                {"ui_elements": ui_elements, "screenshot_base64": screenshot_base64},
-                                {"ui_elements": verify_state_ui_elements, "screenshot_base64": verify_screenshot}
-                            )
-                        if verify_res.get("success"):
-                            logging.info(f"Critic verified success for sub-task: {current_sub_task}")
-                            break_outer = True
-                            break # Break out of action loop
-                        else:
-                            logging.warning(f"Critic verified failure: {verify_res.get('reason')}. Retrying...")
+                            logging.info(f"Native verification didn't match: {native_res.get('reason')}")
+                            # We can also add a negative note if useful, or let the LLM see the new DOM state.
+                            pass
 
                     except requests.exceptions.RequestException as req_e:
                         if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
@@ -1081,7 +1078,11 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                             break_outer = True
                             break
 
-                    if action_upper == "DONE":
+                    if action_upper == "SUB_TASK_COMPLETE":
+                        logging.info(f"Sub-task completed: {current_sub_task}")
+                        break_outer = True
+                        break
+                    elif action_upper == "DONE":
                         logging.info("Remote task finished successfully.")
                         break_outer = True
                         break
@@ -1169,33 +1170,6 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                         break
                     else:
                         logging.info(f"Received action: {action_type}. Continuing loop...")
-
-                    # Call Critic Verify
-                    logging.info("Requesting Critic Verification...")
-                    # OS Verification
-                    time.sleep(1)
-                    new_ui_elements, _ = scan_ui_elements()
-                    try:
-                        screenshot = pyautogui.screenshot()
-                        buffered = io.BytesIO()
-                        screenshot.save(buffered, format="PNG")
-                        verify_os_screenshot_b64 = base64.b64encode(buffered.getvalue()).decode()
-                    except Exception:
-                        verify_os_screenshot_b64 = ""
-
-                    verify_res = critic_verify(
-                        current_sub_task,
-                        act,
-                        {"ui_elements": ui_elements, "screenshot_base64": os_screenshot_b64},
-                        {"ui_elements": new_ui_elements, "screenshot_base64": verify_os_screenshot_b64}
-                    )
-                    if verify_res.get("success"):
-                        logging.info(f"Critic verified success for sub-task: {current_sub_task}")
-                        had_terminal_action = True
-                        break_outer = True
-                        break # Break out of action loop
-                    else:
-                        logging.warning(f"Critic verified failure: {verify_res.get('reason')}. Retrying...")
 
                     # Micro-sleep between sequential actions within the array
                     time.sleep(0.5)
@@ -1523,8 +1497,13 @@ def execute_voice_agent_loop() -> None:
                                 break
 
 
-                        if action_upper == "DONE":
+                        if action_upper == "SUB_TASK_COMPLETE":
+                            logging.info(f"Sub-task completed: {current_sub_task}")
+                            break_outer = True
+                            break
+                        elif action_upper == "DONE":
                             logging.info("Web task finished successfully.")
+                            break_outer = True
                             break
                         elif "ERROR" in action_upper:
                             raw_response = act.get("raw_response", "No raw response provided")
@@ -1595,21 +1574,11 @@ def execute_voice_agent_loop() -> None:
                         if native_res.get("success"):
                             logging.info(f"Native verification succeeded: {native_res.get('reason')}")
                             command_text += f"\n[System Note: Action {action_upper} verified successfully natively: {native_res.get('reason')}]"
-                            verify_res = {"success": True, "reason": native_res.get('reason')}
+                            # We no longer break the loop here. We let the LLM decide.
                         else:
-                            logging.info(f"Native verification fell back to LLM Critic: {native_res.get('reason')}")
-                            verify_res = critic_verify(
-                                current_sub_task,
-                                act,
-                                {"ui_elements": ui_elements, "screenshot_base64": screenshot_base64},
-                                {"ui_elements": verify_state_ui_elements, "screenshot_base64": verify_screenshot}
-                            )
-                        if verify_res.get("success"):
-                            logging.info(f"Critic verified success for sub-task: {current_sub_task}")
-                            break_outer = True
-                            break # Break out of action loop
-                        else:
-                            logging.warning(f"Critic verified failure: {verify_res.get('reason')}. Retrying...")
+                            logging.info(f"Native verification didn't match: {native_res.get('reason')}")
+                            # We can also add a negative note if useful, or let the LLM see the new DOM state.
+                            pass
 
                     except requests.exceptions.RequestException as req_e:
                         if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
@@ -1823,7 +1792,12 @@ def execute_voice_agent_loop() -> None:
                             break_outer = True
                             break
 
-                    if action_upper == "DONE":
+                    if action_upper == "SUB_TASK_COMPLETE":
+                        logging.info(f"Sub-task completed: {current_sub_task}")
+                        had_terminal_action = True
+                        break_outer = True
+                        break
+                    elif action_upper == "DONE":
                         logging.info("Task finished.")
                         had_terminal_action = True
                         break_outer = True
@@ -1912,33 +1886,6 @@ def execute_voice_agent_loop() -> None:
                         break
                     else:
                         logging.info(f"Received action: {action_type}. Continuing loop...")
-
-                    # Call Critic Verify
-                    logging.info("Requesting Critic Verification...")
-                    # OS Verification
-                    time.sleep(1)
-                    new_ui_elements, _ = scan_ui_elements()
-                    try:
-                        screenshot = pyautogui.screenshot()
-                        buffered = io.BytesIO()
-                        screenshot.save(buffered, format="PNG")
-                        verify_os_screenshot_b64 = base64.b64encode(buffered.getvalue()).decode()
-                    except Exception:
-                        verify_os_screenshot_b64 = ""
-
-                    verify_res = critic_verify(
-                        current_sub_task,
-                        act,
-                        {"ui_elements": ui_elements, "screenshot_base64": os_screenshot_b64},
-                        {"ui_elements": new_ui_elements, "screenshot_base64": verify_os_screenshot_b64}
-                    )
-                    if verify_res.get("success"):
-                        logging.info(f"Critic verified success for sub-task: {current_sub_task}")
-                        had_terminal_action = True
-                        break_outer = True
-                        break # Break out of action loop
-                    else:
-                        logging.warning(f"Critic verified failure: {verify_res.get('reason')}. Retrying...")
 
                     # Micro-sleep between sequential actions within the array
                     time.sleep(0.5)
