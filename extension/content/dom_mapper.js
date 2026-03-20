@@ -103,10 +103,10 @@ window.RomyDomMapper = {
             let isVisible = (
                 rect.width > 0 &&
                 rect.height > 0 &&
-                rect.bottom > -BUFFER && // Element's bottom edge is below top of viewport
-                rect.top < (window.innerHeight || document.documentElement.clientHeight) + BUFFER && // Top edge is above bottom of viewport
-                rect.right > -BUFFER && // Right edge is past left side
-                rect.left < (window.innerWidth || document.documentElement.clientWidth) + BUFFER && // Left edge is before right side
+                rect.bottom >= 0 && // Element's bottom edge is strictly within or below top of viewport
+                rect.top <= (window.innerHeight || document.documentElement.clientHeight) && // Top edge is strictly above or within bottom of viewport
+                rect.right >= 0 && // Right edge is strictly within or past left side
+                rect.left <= (window.innerWidth || document.documentElement.clientWidth) && // Left edge is strictly within or before right side
                 computedStyle.visibility !== 'hidden' &&
                 computedStyle.display !== 'none' &&
                 computedStyle.opacity !== '0' &&
@@ -133,13 +133,22 @@ window.RomyDomMapper = {
                     textContent = String(textContent).trim();
                 }
 
-                // Try to avoid completely empty elements unless they are inputs
-                if (!textContent && !isInputLike && tagName !== 'button' && tagName !== 'a') {
-                     // Still allow but maybe we can prune purely empty non-semantic divs that slipped through?
-                     // If it's a div/span that has pointer cursor but no text/aria/etc and no children, might be clutter.
-                     if ((tagName === 'div' || tagName === 'span') && node.childElementCount === 0) {
-                         return; // prune
-                     }
+                // Aggressive Pruning: If the element has no meaningful text and isn't an input/button, drop it
+                // Make sure to preserve elements with a Set-of-Mark ID or critical semantic containers
+                if (!textContent && !isInputLike && tagName !== 'button' && tagName !== 'a' && !node.hasAttribute('data-romy-id') && tagName !== 'form' && tagName !== 'dialog') {
+                     // If it has children, maybe it's a structural wrapper. But we want to flatten.
+                     // If it's literally just an empty div/span with no aria, drop it completely.
+                     return;
+                }
+
+                // If it's just an empty anchor tag without text or aria-label, drop it
+                if (tagName === 'a' && !textContent && !node.hasAttribute('data-romy-id') && !node.hasAttribute('aria-label')) {
+                    return;
+                }
+
+                // If it's an empty button, but not an icon button (no svg children), drop it
+                if (tagName === 'button' && !textContent && node.querySelector('svg') === null && !node.hasAttribute('data-romy-id') && !node.hasAttribute('aria-label')) {
+                    return;
                 }
 
                 elements.push({
@@ -147,7 +156,7 @@ window.RomyDomMapper = {
                     type: node.tagName.toLowerCase(),
                     text: textContent,
                     xpath: getXPath(node),
-                    // Optionally calculate center coordinates if needed for fallback
+                    // Only send essential bounds to save payload size
                     bounds: {
                         x: rect.x + window.scrollX,
                         y: rect.y + window.scrollY,

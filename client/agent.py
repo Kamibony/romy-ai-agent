@@ -816,30 +816,75 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                             logging.info("No actions returned from backend. Considering task completed.")
                             break
 
-                        # We expect strictly ONE action per the ReAct loop
-                        act = actions[0]
+                        for action_idx, act in enumerate(actions):
+                            if ABORT_AGENT:
+                                logging.info("Emergency abort triggered. Stopping remote agent loop.")
+                                final_status = "failed"
+                                break_outer = True
+                                break
 
-                        save_flight_record(doc_id, iteration, payload, backend_data, act, screenshot_base64)
-                        if not isinstance(act, dict):
-                            logging.warning(f"Skipping invalid action type: {type(act)}")
-                            continue
+                            # Pre-check for target ID dynamically changing during batch
+                            if action_idx > 0 and "target_id" in act:
+                                # We need to fetch the state to ensure the target_id is still valid.
+                                # But getting the full state is slow, so we rely on the extension execution
+                                # to fail if the ID is missing. But let's verify if we need to bailout
+                                pass
 
-                        action_type = act.get("action", "")
-                        action_upper = str(action_type).upper()
+                            save_flight_record(doc_id, iteration, payload, backend_data, act, screenshot_base64)
+                            if not isinstance(act, dict):
+                                logging.warning(f"Skipping invalid action type: {type(act)}")
+                                continue
 
-                        logging.info(f"Backend returned action: {action_upper}")
+                            action_type = act.get("action", "")
+                            action_upper = str(action_type).upper()
 
-                        # Stuck Detector Logic
-                        history.append(payload.get("ui_elements", []))
-                        if len(history) > 3:
-                            history.pop(0)
+                            logging.info(f"Backend returned action [{action_idx+1}/{len(actions)}]: {action_upper}")
 
-                        if len(history) == 3:
-                            u1, u2, u3 = history
-                            # Check if visual state (ui_elements) remains identical for 3 consecutive iterations
-                            if u1 == u2 == u3:
-                                logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
-                                reason = "I seem to be stuck repeating the same action without state change. I need human assistance."
+                            # Stuck Detector Logic
+                            # We only append to history on the first action of the batch to avoid triggering false positives
+                            if action_idx == 0:
+                                history.append(payload.get("ui_elements", []))
+                                if len(history) > 3:
+                                    history.pop(0)
+
+                                if len(history) == 3:
+                                    u1, u2, u3 = history
+                                    # Check if visual state (ui_elements) remains identical for 3 consecutive iterations
+                                    if u1 == u2 == u3:
+                                        logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
+                                        reason = "I seem to be stuck repeating the same action without state change. I need human assistance."
+                                        try:
+                                            firestore_update_document("remote_commands", doc_id, {
+                                                "status": "AWAITING_HUMAN_INPUT",
+                                                "help_reason": reason,
+                                                "screenshot_b64": screenshot_base64
+                                            })
+                                        except Exception as img_e:
+                                            logging.error(f"Error saving stuck detector help request: {img_e}")
+                                        final_status = "AWAITING_HUMAN_INPUT"
+                                        break_outer = True
+                                        break
+
+                            if action_upper == "SUB_TASK_COMPLETE":
+                                logging.info(f"Sub-task completed: {current_sub_task}")
+                                break_outer = True
+                                break
+                            elif action_upper == "DONE":
+                                logging.info("Web task finished successfully.")
+                                # Even if it says DONE early, we'll mark this sub-task complete
+                                # and potentially break out entirely. For now, mark sub-task done.
+                                break_outer = True
+                                break
+                            elif "ERROR" in action_upper:
+                                raw_response = act.get("raw_response", "No raw response provided")
+                                error_msg = act.get("error", "No error message provided")
+                                logging.error(f"Web agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
+                                final_status = "failed"
+                                break_outer = True
+                                break
+                            elif action_upper == "ASK_HUMAN":
+                                reason = act.get("reason", "No reason provided")
+                                logging.info(f"Agent asking human for help: {reason}")
                                 try:
                                     firestore_update_document("remote_commands", doc_id, {
                                         "status": "AWAITING_HUMAN_INPUT",
@@ -847,65 +892,40 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                                         "screenshot_b64": screenshot_base64
                                     })
                                 except Exception as img_e:
-                                    logging.error(f"Error saving stuck detector help request: {img_e}")
+                                    logging.error(f"Error saving help request: {img_e}")
+
                                 final_status = "AWAITING_HUMAN_INPUT"
+                                break_outer = True
                                 break
 
-                        if action_upper == "SUB_TASK_COMPLETE":
-                            logging.info(f"Sub-task completed: {current_sub_task}")
-                            break_outer = True
-                            break
-                        elif action_upper == "DONE":
-                            logging.info("Web task finished successfully.")
-                            # Even if it says DONE early, we'll mark this sub-task complete
-                            # and potentially break out entirely. For now, mark sub-task done.
-                            break_outer = True
-                            break
-                        elif "ERROR" in action_upper:
-                            raw_response = act.get("raw_response", "No raw response provided")
-                            error_msg = act.get("error", "No error message provided")
-                            logging.error(f"Web agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
-                            final_status = "failed"
-                            break
-                        elif action_upper == "ASK_HUMAN":
-                            reason = act.get("reason", "No reason provided")
-                            logging.info(f"Agent asking human for help: {reason}")
-                            try:
-                                firestore_update_document("remote_commands", doc_id, {
-                                    "status": "AWAITING_HUMAN_INPUT",
-                                    "help_reason": reason,
-                                    "screenshot_b64": screenshot_base64
-                                })
-                            except Exception as img_e:
-                                logging.error(f"Error saving help request: {img_e}")
+                            # 3. Delegate action to the extension
+                            exec_payload = {
+                                "action_type": "EXECUTE_ACTION",
+                                "action": act
+                            }
+                            logging.info("Delegating action to extension...")
+                            exec_result = bridge.delegate_command(exec_payload)
 
-                            final_status = "AWAITING_HUMAN_INPUT"
-                            break
+                            if not exec_result.get("success"):
+                                logging.error(f"Failed to execute action in extension: {exec_result.get('error')}")
+                                # Safety Bailout: Abort the rest of the batch and trigger a fresh GET_STATE
+                                logging.info("Safety Bailout: Action failed. Aborting remaining batch actions and fetching new state.")
+                                break
 
-                        # 3. Delegate action to the extension
-                        exec_payload = {
-                            "action_type": "EXECUTE_ACTION",
-                            "action": act
-                        }
-                        logging.info("Delegating action to extension...")
-                        exec_result = bridge.delegate_command(exec_payload)
+                            if action_upper == "EXECUTE_JS":
+                                # Feed the result back to the LLM via command text or as a system note
+                                js_result = exec_result.get("result")
+                                logging.info(f"JS Execution Result: {js_result}")
+                                command_text += f"\n[System Note: Last EXECUTE_JS returned: {js_result}]"
 
-                        if not exec_result.get("success"):
-                            logging.error(f"Failed to execute action in extension: {exec_result.get('error')}")
-                            final_status = "failed"
-                            error_msg = exec_result.get("error", "Action execution failed in Chrome.")
-                            break
+                            # Save state for verification in next iteration
+                            previous_action = act
+                            previous_state_metadata = {"current_url": current_url}
+                            previous_state_ui = ui_elements
 
-                        if action_upper == "EXECUTE_JS":
-                            # Feed the result back to the LLM via command text or as a system note
-                            js_result = exec_result.get("result")
-                            logging.info(f"JS Execution Result: {js_result}")
-                            command_text += f"\n[System Note: Last EXECUTE_JS returned: {js_result}]"
-
-                        # Save state for verification in next iteration
-                        previous_action = act
-                        previous_state_metadata = {"current_url": current_url}
-                        previous_state_ui = ui_elements
+                            if action_idx < len(actions) - 1:
+                                # Micro-sleep between sequential actions
+                                time.sleep(0.5)
 
                     except requests.exceptions.RequestException as req_e:
                         if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
@@ -1053,27 +1073,28 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                     action_upper = str(action_type).upper()
 
                     # Stuck Detector Logic
-                    history.append(payload.get("ui_elements", []))
-                    if len(history) > 3:
-                        history.pop(0)
+                    if act == actions[0]:
+                        history.append(payload.get("ui_elements", []))
+                        if len(history) > 3:
+                            history.pop(0)
 
-                    if len(history) == 3:
-                        u1, u2, u3 = history
-                        if u1 == u2 == u3:
-                            logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
-                            reason = "I seem to be stuck repeating the same OS action without state change. I need human assistance."
-                            try:
-                                firestore_update_document("remote_commands", doc_id, {
-                                    "status": "AWAITING_HUMAN_INPUT",
-                                    "help_reason": reason,
-                                    "screenshot_b64": os_screenshot_b64
-                                })
-                            except Exception as img_e:
-                                logging.error(f"Error saving stuck detector help request: {img_e}")
-                            final_status = "AWAITING_HUMAN_INPUT"
-                            had_terminal_action = True
-                            break_outer = True
-                            break
+                        if len(history) == 3:
+                            u1, u2, u3 = history
+                            if u1 == u2 == u3:
+                                logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
+                                reason = "I seem to be stuck repeating the same OS action without state change. I need human assistance."
+                                try:
+                                    firestore_update_document("remote_commands", doc_id, {
+                                        "status": "AWAITING_HUMAN_INPUT",
+                                        "help_reason": reason,
+                                        "screenshot_b64": os_screenshot_b64
+                                    })
+                                except Exception as img_e:
+                                    logging.error(f"Error saving stuck detector help request: {img_e}")
+                                final_status = "AWAITING_HUMAN_INPUT"
+                                had_terminal_action = True
+                                break_outer = True
+                                break
 
                     if action_upper == "SUB_TASK_COMPLETE":
                         logging.info(f"Sub-task completed: {current_sub_task}")
@@ -1480,29 +1501,73 @@ def execute_voice_agent_loop() -> None:
                             logging.info("No actions returned from backend. Considering task completed.")
                             break
 
-                        # We expect strictly ONE action per the ReAct loop
-                        act = actions[0]
+                        for action_idx, act in enumerate(actions):
+                            if ABORT_AGENT:
+                                logging.info("Emergency abort triggered. Stopping voice agent loop.")
+                                final_status = "failed"
+                                break_outer = True
+                                break
 
-                        save_flight_record(doc_id, iteration, payload, backend_data, act, screenshot_base64)
-                        if not isinstance(act, dict):
-                            logging.warning(f"Skipping invalid action type: {type(act)}")
-                            continue
+                            # Pre-check for target ID dynamically changing during batch
+                            if action_idx > 0 and "target_id" in act:
+                                # We need to fetch the state to ensure the target_id is still valid.
+                                # But getting the full state is slow, so we rely on the extension execution
+                                # to fail if the ID is missing. But let's verify if we need to bailout
+                                pass
 
-                        action_type = act.get("action", "")
-                        action_upper = str(action_type).upper()
+                            save_flight_record(doc_id, iteration, payload, backend_data, act, screenshot_base64)
+                            if not isinstance(act, dict):
+                                logging.warning(f"Skipping invalid action type: {type(act)}")
+                                continue
 
-                        logging.info(f"Backend returned action: {action_upper}")
+                            action_type = act.get("action", "")
+                            action_upper = str(action_type).upper()
 
-                        # Stuck Detector Logic
-                        history.append(payload.get("ui_elements", []))
-                        if len(history) > 3:
-                            history.pop(0)
+                            logging.info(f"Backend returned action [{action_idx+1}/{len(actions)}]: {action_upper}")
 
-                        if len(history) == 3:
-                            u1, u2, u3 = history
-                            if u1 == u2 == u3:
-                                logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
-                                reason = "I seem to be stuck repeating the same web action without state change. I need human assistance."
+                            # Stuck Detector Logic
+                            # We only append to history on the first action of the batch to avoid triggering false positives
+                            if action_idx == 0:
+                                history.append(payload.get("ui_elements", []))
+                                if len(history) > 3:
+                                    history.pop(0)
+
+                                if len(history) == 3:
+                                    u1, u2, u3 = history
+                                    if u1 == u2 == u3:
+                                        logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
+                                        reason = "I seem to be stuck repeating the same web action without state change. I need human assistance."
+                                        try:
+                                            firestore_update_document("remote_commands", doc_id, {
+                                                "status": "AWAITING_HUMAN_INPUT",
+                                                "help_reason": reason,
+                                                "screenshot_b64": screenshot_base64
+                                            })
+                                        except Exception as img_e:
+                                            logging.error(f"Error saving stuck detector help request: {img_e}")
+                                        final_status = "AWAITING_HUMAN_INPUT"
+                                        break_outer = True
+                                        break
+
+
+                            if action_upper == "SUB_TASK_COMPLETE":
+                                logging.info(f"Sub-task completed: {current_sub_task}")
+                                break_outer = True
+                                break
+                            elif action_upper == "DONE":
+                                logging.info("Web task finished successfully.")
+                                break_outer = True
+                                break
+                            elif "ERROR" in action_upper:
+                                raw_response = act.get("raw_response", "No raw response provided")
+                                error_msg = act.get("error", "No error message provided")
+                                logging.error(f"Web agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
+                                final_status = "failed"
+                                break_outer = True
+                                break
+                            elif action_upper == "ASK_HUMAN":
+                                reason = act.get("reason", "No reason provided")
+                                logging.info(f"Agent asking human for help: {reason}")
                                 try:
                                     firestore_update_document("remote_commands", doc_id, {
                                         "status": "AWAITING_HUMAN_INPUT",
@@ -1510,60 +1575,39 @@ def execute_voice_agent_loop() -> None:
                                         "screenshot_b64": screenshot_base64
                                     })
                                 except Exception as img_e:
-                                    logging.error(f"Error saving stuck detector help request: {img_e}")
+                                    logging.error(f"Error saving help request: {img_e}")
+
                                 final_status = "AWAITING_HUMAN_INPUT"
+                                break_outer = True
                                 break
 
+                            # 3. Delegate action to the extension
+                            exec_payload = {
+                                "action_type": "EXECUTE_ACTION",
+                                "action": act
+                            }
+                            logging.info("Delegating action to extension...")
+                            exec_result = bridge.delegate_command(exec_payload)
 
-                        if action_upper == "SUB_TASK_COMPLETE":
-                            logging.info(f"Sub-task completed: {current_sub_task}")
-                            break_outer = True
-                            break
-                        elif action_upper == "DONE":
-                            logging.info("Web task finished successfully.")
-                            break_outer = True
-                            break
-                        elif "ERROR" in action_upper:
-                            raw_response = act.get("raw_response", "No raw response provided")
-                            error_msg = act.get("error", "No error message provided")
-                            logging.error(f"Web agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
-                            break
-                        elif action_upper == "ASK_HUMAN":
-                            reason = act.get("reason", "No reason provided")
-                            logging.info(f"Agent asking human for help: {reason}")
-                            try:
-                                firestore_update_document("remote_commands", doc_id, {
-                                    "status": "AWAITING_HUMAN_INPUT",
-                                    "help_reason": reason,
-                                    "screenshot_b64": screenshot_base64
-                                })
-                            except Exception as img_e:
-                                logging.error(f"Error saving help request: {img_e}")
+                            if not exec_result.get("success"):
+                                logging.error(f"Failed to execute action in extension: {exec_result.get('error')}")
+                                # Safety Bailout: Abort the rest of the batch and trigger a fresh GET_STATE
+                                logging.info("Safety Bailout: Action failed. Aborting remaining batch actions and fetching new state.")
+                                break
 
-                            final_status = "AWAITING_HUMAN_INPUT"
-                            break
+                            if action_upper == "EXECUTE_JS":
+                                js_result = exec_result.get("result")
+                                logging.info(f"JS Execution Result: {js_result}")
+                                command_text += f"\n[System Note: Last EXECUTE_JS returned: {js_result}]"
 
-                        # 3. Delegate action to the extension
-                        exec_payload = {
-                            "action_type": "EXECUTE_ACTION",
-                            "action": act
-                        }
-                        logging.info("Delegating action to extension...")
-                        exec_result = bridge.delegate_command(exec_payload)
+                            # Save state for verification in next iteration
+                            previous_action = act
+                            previous_state_metadata = {"current_url": current_url}
+                            previous_state_ui = ui_elements
 
-                        if not exec_result.get("success"):
-                            logging.error(f"Failed to execute action in extension: {exec_result.get('error')}")
-                            break
-
-                        if action_upper == "EXECUTE_JS":
-                            js_result = exec_result.get("result")
-                            logging.info(f"JS Execution Result: {js_result}")
-                            command_text += f"\n[System Note: Last EXECUTE_JS returned: {js_result}]"
-
-                        # Save state for verification in next iteration
-                        previous_action = act
-                        previous_state_metadata = {"current_url": current_url}
-                        previous_state_ui = ui_elements
+                            if action_idx < len(actions) - 1:
+                                # Micro-sleep between sequential actions
+                                time.sleep(0.5)
 
                     except requests.exceptions.RequestException as req_e:
                         if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
@@ -1756,27 +1800,28 @@ def execute_voice_agent_loop() -> None:
                     action_upper = str(action_type).upper()
 
                     # Stuck Detector Logic
-                    history.append(payload.get("ui_elements", []))
-                    if len(history) > 3:
-                        history.pop(0)
+                    if act == actions[0]:
+                        history.append(payload.get("ui_elements", []))
+                        if len(history) > 3:
+                            history.pop(0)
 
-                    if len(history) == 3:
-                        u1, u2, u3 = history
-                        if u1 == u2 == u3:
-                            logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
-                            reason = "I seem to be stuck repeating the same OS action without state change. I need human assistance."
-                            try:
-                                firestore_update_document("remote_commands", doc_id, {
-                                    "status": "AWAITING_HUMAN_INPUT",
-                                    "help_reason": reason,
-                                    "screenshot_b64": os_screenshot_b64
-                                })
-                            except Exception as img_e:
-                                logging.error(f"Error saving stuck detector help request: {img_e}")
-                            final_status = "AWAITING_HUMAN_INPUT"
-                            had_terminal_action = True
-                            break_outer = True
-                            break
+                        if len(history) == 3:
+                            u1, u2, u3 = history
+                            if u1 == u2 == u3:
+                                logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
+                                reason = "I seem to be stuck repeating the same OS action without state change. I need human assistance."
+                                try:
+                                    firestore_update_document("remote_commands", doc_id, {
+                                        "status": "AWAITING_HUMAN_INPUT",
+                                        "help_reason": reason,
+                                        "screenshot_b64": os_screenshot_b64
+                                    })
+                                except Exception as img_e:
+                                    logging.error(f"Error saving stuck detector help request: {img_e}")
+                                final_status = "AWAITING_HUMAN_INPUT"
+                                had_terminal_action = True
+                                break_outer = True
+                                break
 
                     if action_upper == "SUB_TASK_COMPLETE":
                         logging.info(f"Sub-task completed: {current_sub_task}")
