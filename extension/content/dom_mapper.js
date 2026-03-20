@@ -149,8 +149,8 @@ window.RomyDomMapper = {
                     xpath: getXPath(node),
                     // Optionally calculate center coordinates if needed for fallback
                     bounds: {
-                        x: rect.x,
-                        y: rect.y,
+                        x: rect.x + window.scrollX,
+                        y: rect.y + window.scrollY,
                         width: rect.width,
                         height: rect.height
                     }
