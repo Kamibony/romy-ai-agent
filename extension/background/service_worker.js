@@ -316,6 +316,7 @@ async function handleGetState(payload) {
         const boundsMap = {};
         const valueMap = {}; // Map to store node values
         const classMap = {}; // Map to store class names
+        const attributesMap = {}; // Map to store explicit input affordances
 
         if (snap && snap.documents && snap.documents.length > 0) {
             const doc = snap.documents[0];
@@ -337,21 +338,28 @@ async function handleGetState(payload) {
                 }
             }
 
-            // Extract class attributes
+            // Extract class attributes and input affordances
             if (nodes.attributes) {
                 for (let i = 0; i < nodes.attributes.length; i++) {
                     const attrs = nodes.attributes[i]; // Array of string indexes [nameIdx, valueIdx, nameIdx, valueIdx, ...]
                     const backendNodeId = nodes.backendNodeId[i];
                     let classStr = "";
+                    let nodeAttrs = {};
                     for (let j = 0; j < attrs.length; j += 2) {
                         const name = strings[attrs[j]];
+                        const value = strings[attrs[j+1]] || "";
                         if (name === "class") {
-                            classStr = strings[attrs[j+1]] || "";
-                            break;
+                            classStr = value;
+                        }
+                        if (["type", "disabled", "readonly", "required", "placeholder"].includes(name)) {
+                            nodeAttrs[name] = value;
                         }
                     }
                     if (classStr) {
                         classMap[backendNodeId] = classStr;
+                    }
+                    if (Object.keys(nodeAttrs).length > 0) {
+                        attributesMap[backendNodeId] = nodeAttrs;
                     }
                 }
             }
@@ -500,14 +508,18 @@ async function handleGetState(payload) {
                             text = text ? `${text} (Value: ${nodeValue})` : `Value: ${nodeValue}`;
                         }
 
-                        uiElements.push({
+                        let elPayload = {
                             id: String(idCounter++),
                             type: role,
                             text: text,
                             value: nodeValue,
                             bounds: bounds,
                             backendNodeId: node.backendDOMNodeId
-                        });
+                        };
+                        if (attributesMap[node.backendDOMNodeId]) {
+                            elPayload.attributes = attributesMap[node.backendDOMNodeId];
+                        }
+                        uiElements.push(elPayload);
                     }
                 }
             }
@@ -1103,6 +1115,7 @@ async function processCommandInternally(payload) {
             const boundsMap = {};
             const valueMap = {}; // Map to store node values
             const classMap = {}; // Map to store class names
+            const attributesMap = {}; // Map to store explicit input affordances
 
             if (snap && snap.documents && snap.documents.length > 0) {
                 const doc = snap.documents[0];
@@ -1124,21 +1137,28 @@ async function processCommandInternally(payload) {
                     }
                 }
 
-                // Extract class attributes
+                // Extract class attributes and input affordances
                 if (nodes.attributes) {
                     for (let i = 0; i < nodes.attributes.length; i++) {
                         const attrs = nodes.attributes[i]; // Array of string indexes
                         const backendNodeId = nodes.backendNodeId[i];
                         let classStr = "";
+                        let nodeAttrs = {};
                         for (let j = 0; j < attrs.length; j += 2) {
                             const name = strings[attrs[j]];
+                            const value = strings[attrs[j+1]] || "";
                             if (name === "class") {
-                                classStr = strings[attrs[j+1]] || "";
-                                break;
+                                classStr = value;
+                            }
+                            if (["type", "disabled", "readonly", "required", "placeholder"].includes(name)) {
+                                nodeAttrs[name] = value;
                             }
                         }
                         if (classStr) {
                             classMap[backendNodeId] = classStr;
+                        }
+                        if (Object.keys(nodeAttrs).length > 0) {
+                            attributesMap[backendNodeId] = nodeAttrs;
                         }
                     }
                 }
@@ -1287,14 +1307,18 @@ async function processCommandInternally(payload) {
                                 text = text ? `${text} (Value: ${nodeValue})` : `Value: ${nodeValue}`;
                             }
 
-                            uiElements.push({
+                            let elPayload = {
                                 id: String(idCounter++),
                                 type: role,
                                 text: text,
                                 value: nodeValue,
                                 bounds: bounds,
                                 backendNodeId: node.backendDOMNodeId
-                            });
+                            };
+                            if (attributesMap[node.backendDOMNodeId]) {
+                                elPayload.attributes = attributesMap[node.backendDOMNodeId];
+                            }
+                            uiElements.push(elPayload);
                         }
                     }
                 }
