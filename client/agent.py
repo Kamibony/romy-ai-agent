@@ -1097,7 +1097,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                                 break
 
                     if action_upper == "SUB_TASK_COMPLETE":
-                        logging.info(f"Sub-task completed: {current_sub_task}")
+                        logging.info("Sub-task completed.")
                         break_outer = True
                         break
                     elif action_upper == "DONE":
