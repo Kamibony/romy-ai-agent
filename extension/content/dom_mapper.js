@@ -10,15 +10,20 @@ window.RomyDomMapper = {
         // visibilityState to be 'hidden', which would result in an empty payload.
 
         // Broad locator string matching Playwright scanning
-        const locators = 'button, a, input, select, textarea, [role="button"], [role="link"], [role="menuitem"], [role="tab"], [role="checkbox"], [role="radio"], [role="switch"], [onclick]';
+        const locators = 'button, a, input, select, textarea, [role="button"], [role="link"], [role="menuitem"], [role="tab"], [role="checkbox"], [role="radio"], [role="switch"], [role="combobox"], [role="textbox"], [role="searchbox"], [role="widget"], [role="slider"], [role="spinbutton"], [role="listbox"], [role="option"], [role="gridcell"], [role="treeitem"], [onclick], [tabindex]:not([tabindex="-1"]), [contenteditable]:not([contenteditable="false"])';
 
         function isInteractive(el) {
             if (el.matches(locators)) return true;
 
+            // Check for interactive ARIA states and properties
+            if (el.hasAttribute('aria-haspopup') || el.hasAttribute('aria-expanded') || el.hasAttribute('aria-pressed')) {
+                return true;
+            }
+
             // Check ARIA attributes
             if (el.hasAttribute('aria-label') || el.hasAttribute('role')) {
                 const role = el.getAttribute('role');
-                if (['button', 'link', 'menuitem', 'tab', 'checkbox', 'radio', 'switch'].includes(role)) {
+                if (['button', 'link', 'menuitem', 'tab', 'checkbox', 'radio', 'switch', 'combobox', 'textbox', 'searchbox', 'widget', 'slider', 'spinbutton', 'listbox', 'option', 'gridcell', 'treeitem'].includes(role)) {
                     return true;
                 }
                 // If it has aria-label and isn't just a generic container
@@ -32,7 +37,7 @@ window.RomyDomMapper = {
             if (className) {
                 const classes = className.toLowerCase().split(/\s+/);
                 // Require exact matches or strict prefixes/suffixes to prevent vacuuming structural wrappers (e.g., 'action-bar', 'submit-container')
-                if (classes.some(c => c === 'btn' || c === 'button' || c.endsWith('-btn') || c.endsWith('-button') || c.startsWith('btn-') || c === 'submit')) {
+                if (classes.some(c => c === 'btn' || c === 'button' || c.endsWith('-btn') || c.endsWith('-button') || c.startsWith('btn-') || c === 'submit' || c.includes('datepicker') || c.endsWith('-input'))) {
                     return true;
                 }
             }
