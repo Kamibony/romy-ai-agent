@@ -708,74 +708,27 @@ async function handleExecuteNativeAction(payload) {
             }
 
             // Native Click (Universally precede keystroke loop with a CDP Input.dispatchMouseEvent exactly on those coordinates)
-            if (action.action === "TYPE") {
-                // Triple click to reliably select all existing text in React/Vue SPAs
-                for (let click = 1; click <= 3; click++) {
-                    await new Promise((resolve, reject) => {
-                        chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
-                            type: 'mousePressed', x: x, y: y, button: 'left', clickCount: click
-                        }, (result) => {
-                            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                            else resolve(result);
-                        });
-                    });
-                    await new Promise(r => setTimeout(r, 20)); // Tiny delay
-                    await new Promise((resolve, reject) => {
-                        chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
-                            type: 'mouseReleased', x: x, y: y, button: 'left', clickCount: click
-                        }, (result) => {
-                            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                            else resolve(result);
-                        });
-                    });
-                    await new Promise(r => setTimeout(r, 20));
-                }
-
-                await new Promise(r => setTimeout(r, 100));
-
-                // Backspace to clear selection
-                await new Promise((resolve, reject) => {
-                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
-                        type: 'keyDown',
-                        key: 'Backspace'
-                    }, (result) => {
-                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                        else resolve(result);
-                    });
+            // Regular single click
+            await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
+                    type: 'mousePressed', x: x, y: y, button: 'left', clickCount: 1
+                }, (result) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(result);
                 });
-                await new Promise((resolve, reject) => {
-                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
-                        type: 'keyUp',
-                        key: 'Backspace'
-                    }, (result) => {
-                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                        else resolve(result);
-                    });
+            });
+            await new Promise(r => setTimeout(r, 50)); // Tiny delay
+            await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
+                    type: 'mouseReleased', x: x, y: y, button: 'left', clickCount: 1
+                }, (result) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(result);
                 });
-
-                await new Promise(r => setTimeout(r, 100));
-            } else {
-                // Regular single click
-                await new Promise((resolve, reject) => {
-                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
-                        type: 'mousePressed', x: x, y: y, button: 'left', clickCount: 1
-                    }, (result) => {
-                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                        else resolve(result);
-                    });
-                });
-                await new Promise(r => setTimeout(r, 50)); // Tiny delay
-                await new Promise((resolve, reject) => {
-                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
-                        type: 'mouseReleased', x: x, y: y, button: 'left', clickCount: 1
-                    }, (result) => {
-                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                        else resolve(result);
-                    });
-                });
-            }
+            });
 
             if (action.action === "TYPE") {
+                await new Promise(r => setTimeout(r, 100));
 
                 // Dispatch individual key events to properly trigger React/Vue synthetic events
                 for (let i = 0; i < action.text.length; i++) {
