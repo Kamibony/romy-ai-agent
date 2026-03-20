@@ -167,7 +167,14 @@ window.RomyDomMapper = {
                     return;
                 }
 
-                elements.push({
+                let nodeAttrs = {};
+                ["type", "disabled", "readonly", "required", "placeholder"].forEach(attr => {
+                    if (node.hasAttribute(attr)) {
+                        nodeAttrs[attr] = node.getAttribute(attr);
+                    }
+                });
+
+                let elPayload = {
                     id: uniqueId,
                     type: node.tagName.toLowerCase(),
                     text: textContent,
@@ -179,7 +186,12 @@ window.RomyDomMapper = {
                         width: rect.width,
                         height: rect.height
                     }
-                });
+                };
+                if (Object.keys(nodeAttrs).length > 0) {
+                    elPayload.attributes = nodeAttrs;
+                }
+
+                elements.push(elPayload);
             }
         });
 
