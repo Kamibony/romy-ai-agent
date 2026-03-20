@@ -315,6 +315,7 @@ async function handleGetState(payload) {
         const viewport = layoutMetrics.layoutViewport || { pageX: 0, pageY: 0, clientWidth: 1920, clientHeight: 1080 };
         const boundsMap = {};
         const valueMap = {}; // Map to store node values
+        const classMap = {}; // Map to store class names
 
         if (snap && snap.documents && snap.documents.length > 0) {
             const doc = snap.documents[0];
@@ -332,6 +333,25 @@ async function handleGetState(payload) {
                     if (val !== undefined) {
                         const backendNodeId = nodes.backendNodeId[nodeIdx];
                         valueMap[backendNodeId] = val;
+                    }
+                }
+            }
+
+            // Extract class attributes
+            if (nodes.attributes) {
+                for (let i = 0; i < nodes.attributes.length; i++) {
+                    const attrs = nodes.attributes[i]; // Array of string indexes [nameIdx, valueIdx, nameIdx, valueIdx, ...]
+                    const backendNodeId = nodes.backendNodeId[i];
+                    let classStr = "";
+                    for (let j = 0; j < attrs.length; j += 2) {
+                        const name = strings[attrs[j]];
+                        if (name === "class") {
+                            classStr = strings[attrs[j+1]] || "";
+                            break;
+                        }
+                    }
+                    if (classStr) {
+                        classMap[backendNodeId] = classStr;
                     }
                 }
             }
@@ -393,19 +413,59 @@ async function handleGetState(payload) {
         }
 
         const interactiveRoles = ['button', 'link', 'textbox', 'searchbox', 'combobox', 'menuitem', 'tab', 'checkbox', 'radio', 'switch', 'slider'];
+        const textContainerRoles = ['StaticText', 'LayoutTableCell', 'GenericContainer', 'ListMarker', 'List', 'ListItem', 'LayoutTableRow'];
         let idCounter = 0;
 
         if (axTree && axTree.nodes) {
+            // Build parent map for inheritance and O(1) node lookup
+            const parentMap = {};
+            const nodeMap = new Map();
+            for (const node of axTree.nodes) {
+                nodeMap.set(node.nodeId, node);
+                if (node.childIds) {
+                    for (const childId of node.childIds) {
+                        parentMap[childId] = node.nodeId;
+                    }
+                }
+            }
+
+            // Helper to check if node or ancestors have a specific class
+            const hasClassLike = (startNodeId, matchStrs) => {
+                let currId = startNodeId;
+                let depth = 0;
+                while (currId && depth < 5) { // Limit depth to avoid massive traversals
+                    const n = nodeMap.get(currId);
+                    if (n && n.backendDOMNodeId && classMap[n.backendDOMNodeId]) {
+                        const c = classMap[n.backendDOMNodeId].toLowerCase();
+                        if (matchStrs.some(s => c.includes(s))) return true;
+                    }
+                    currId = parentMap[currId];
+                    depth++;
+                }
+                return false;
+            };
+
             for (const node of axTree.nodes) {
                 if (!node.role) continue;
                 const role = node.role.value;
 
                 let isInteractive = interactiveRoles.includes(role);
+
                 // Expand interactivity check
                 if (!isInteractive && node.properties) {
                     const focusableProp = node.properties.find(p => p.name === 'focusable');
                     if (focusableProp && focusableProp.value && focusableProp.value.value === true) {
                         isInteractive = true;
+                    }
+                }
+
+                // Fallback heuristic: Check for elements embedded in dynamic overlays (dropdowns, autocomplete)
+                if (!isInteractive && textContainerRoles.includes(role)) {
+                    const textContent = node.name ? node.name.value : '';
+                    if (textContent && textContent.trim().length > 0) {
+                        if (hasClassLike(node.nodeId, ['dropdown', 'suggestion', 'autocomplete', 'menu', 'popup', 'option', 'listbox', 'select'])) {
+                            isInteractive = true;
+                        }
                     }
                 }
 
@@ -1000,6 +1060,7 @@ async function processCommandInternally(payload) {
             const viewport = layoutMetrics.layoutViewport || { pageX: 0, pageY: 0, clientWidth: 1920, clientHeight: 1080 };
             const boundsMap = {};
             const valueMap = {}; // Map to store node values
+            const classMap = {}; // Map to store class names
 
             if (snap && snap.documents && snap.documents.length > 0) {
                 const doc = snap.documents[0];
@@ -1017,6 +1078,25 @@ async function processCommandInternally(payload) {
                         if (val !== undefined) {
                             const backendNodeId = nodes.backendNodeId[nodeIdx];
                             valueMap[backendNodeId] = val;
+                        }
+                    }
+                }
+
+                // Extract class attributes
+                if (nodes.attributes) {
+                    for (let i = 0; i < nodes.attributes.length; i++) {
+                        const attrs = nodes.attributes[i]; // Array of string indexes
+                        const backendNodeId = nodes.backendNodeId[i];
+                        let classStr = "";
+                        for (let j = 0; j < attrs.length; j += 2) {
+                            const name = strings[attrs[j]];
+                            if (name === "class") {
+                                classStr = strings[attrs[j+1]] || "";
+                                break;
+                            }
+                        }
+                        if (classStr) {
+                            classMap[backendNodeId] = classStr;
                         }
                     }
                 }
@@ -1078,19 +1158,59 @@ async function processCommandInternally(payload) {
             }
 
             const interactiveRoles = ['button', 'link', 'textbox', 'searchbox', 'combobox', 'menuitem', 'tab', 'checkbox', 'radio', 'switch', 'slider'];
+            const textContainerRoles = ['StaticText', 'LayoutTableCell', 'GenericContainer', 'ListMarker', 'List', 'ListItem', 'LayoutTableRow'];
             let idCounter = 0;
 
             if (axTree && axTree.nodes) {
+                // Build parent map for inheritance and O(1) node lookup
+                const parentMap = {};
+                const nodeMap = new Map();
+                for (const node of axTree.nodes) {
+                    nodeMap.set(node.nodeId, node);
+                    if (node.childIds) {
+                        for (const childId of node.childIds) {
+                            parentMap[childId] = node.nodeId;
+                        }
+                    }
+                }
+
+                // Helper to check if node or ancestors have a specific class
+                const hasClassLike = (startNodeId, matchStrs) => {
+                    let currId = startNodeId;
+                    let depth = 0;
+                    while (currId && depth < 5) { // Limit depth to avoid massive traversals
+                        const n = nodeMap.get(currId);
+                        if (n && n.backendDOMNodeId && classMap[n.backendDOMNodeId]) {
+                            const c = classMap[n.backendDOMNodeId].toLowerCase();
+                            if (matchStrs.some(s => c.includes(s))) return true;
+                        }
+                        currId = parentMap[currId];
+                        depth++;
+                    }
+                    return false;
+                };
+
                 for (const node of axTree.nodes) {
                     if (!node.role) continue;
                     const role = node.role.value;
 
                     let isInteractive = interactiveRoles.includes(role);
+
                     // Expand interactivity check
                     if (!isInteractive && node.properties) {
                         const focusableProp = node.properties.find(p => p.name === 'focusable');
                         if (focusableProp && focusableProp.value && focusableProp.value.value === true) {
                             isInteractive = true;
+                        }
+                    }
+
+                    // Fallback heuristic: Check for elements embedded in dynamic overlays (dropdowns, autocomplete)
+                    if (!isInteractive && textContainerRoles.includes(role)) {
+                        const textContent = node.name ? node.name.value : '';
+                        if (textContent && textContent.trim().length > 0) {
+                            if (hasClassLike(node.nodeId, ['dropdown', 'suggestion', 'autocomplete', 'menu', 'popup', 'option', 'listbox', 'select'])) {
+                                isInteractive = true;
+                            }
                         }
                     }
 
