@@ -816,6 +816,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                             logging.info("No actions returned from backend. Considering task completed.")
                             break
 
+                        has_typed_in_batch = False
                         for action_idx, act in enumerate(actions):
                             if ABORT_AGENT:
                                 logging.info("Emergency abort triggered. Stopping remote agent loop.")
@@ -837,6 +838,14 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
 
                             action_type = act.get("action", "")
                             action_upper = str(action_type).upper()
+
+                            if action_upper == "TYPE":
+                                has_typed_in_batch = True
+
+                            # Intercept premature sub-task completions to enforce Stable State Law
+                            if action_upper == "SUB_TASK_COMPLETE" and has_typed_in_batch:
+                                logging.warning("Systemic Safety Intercept: Dropping SUB_TASK_COMPLETE because a TYPE action occurred in this batch. Forcing a state check for dynamic overlays.")
+                                break
 
                             logging.info(f"Backend returned action [{action_idx+1}/{len(actions)}]: {action_upper}")
 
@@ -1501,6 +1510,7 @@ def execute_voice_agent_loop() -> None:
                             logging.info("No actions returned from backend. Considering task completed.")
                             break
 
+                        has_typed_in_batch = False
                         for action_idx, act in enumerate(actions):
                             if ABORT_AGENT:
                                 logging.info("Emergency abort triggered. Stopping voice agent loop.")
@@ -1522,6 +1532,14 @@ def execute_voice_agent_loop() -> None:
 
                             action_type = act.get("action", "")
                             action_upper = str(action_type).upper()
+
+                            if action_upper == "TYPE":
+                                has_typed_in_batch = True
+
+                            # Intercept premature sub-task completions to enforce Stable State Law
+                            if action_upper == "SUB_TASK_COMPLETE" and has_typed_in_batch:
+                                logging.warning("Systemic Safety Intercept: Dropping SUB_TASK_COMPLETE because a TYPE action occurred in this batch. Forcing a state check for dynamic overlays.")
+                                break
 
                             logging.info(f"Backend returned action [{action_idx+1}/{len(actions)}]: {action_upper}")
 
