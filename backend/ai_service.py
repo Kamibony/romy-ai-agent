@@ -309,7 +309,7 @@ def synthesize_playbook_rule_with_gemini(domain: str, execution_telemetry: str) 
 
 def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[str] = None, command_text: Optional[str] = None, thread_history: str = "", screenshot_base64: Optional[str] = None, current_sub_task: Optional[str] = None, current_url: Optional[str] = None) -> list[Dict[str, Any]]:
     """
-    Uses Gemini 2.5 Flash to process audio/text commands, a visual screenshot, and UI elements, returning exactly ONE action in a list.
+    Uses Gemini 2.5 Flash to process audio/text commands, a visual screenshot, and UI elements, returning an array of one or more actions.
     """
     if not audio_b64 and not command_text:
         return [{"action": "ASK_HUMAN", "reason": "EMPTY_AUDIO"}]
@@ -357,7 +357,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
         system_instruction = (
             "You are a structural RPA assistant implementing a ReAct Loop. You are provided with "
             "a simplified list of UI elements on the screen. Each element in the list has an ID, xpath, and a description.\n\n"
-            "Based on the user's command and current state, identify the correct target element and return strictly ONE action to execute next.\n\n"
+            "Based on the user's command and current state, identify the correct target element and return one or more actions to execute next.\n\n"
             "Supported actions:\n"
             "- {\"action\": \"CLICK\", \"target_id\": \"<the_number>\", \"xpath\": \"<optional_xpath_fallback>\"}\n"
             "- {\"action\": \"TYPE\", \"target_id\": \"<the_number>\", \"xpath\": \"<optional_xpath_fallback>\", \"text\": \"<text to type>\"}\n"

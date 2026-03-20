@@ -764,7 +764,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                         else:
                             logging.info(f"Native verification didn't match: {native_res.get('reason')}")
 
-                    # 2. Send state to backend to receive ONE action
+                    # 2. Send state to backend to receive ONE OR MORE actions
                     payload = {
                         "ui_elements": ui_elements[:MAX_UI_ELEMENTS] if isinstance(ui_elements, list) else ui_elements,
                         "session_id": doc_id,
@@ -1449,7 +1449,7 @@ def execute_voice_agent_loop() -> None:
                         else:
                             logging.info(f"Native verification didn't match: {native_res.get('reason')}")
 
-                    # 2. Send state to backend to receive ONE action
+                    # 2. Send state to backend to receive ONE OR MORE actions
                     payload = {
                         "ui_elements": ui_elements[:MAX_UI_ELEMENTS] if isinstance(ui_elements, list) else ui_elements,
                         "session_id": doc_id,
