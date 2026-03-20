@@ -720,6 +720,48 @@ async function handleExecuteNativeAction(payload) {
             if (action.action === "TYPE") {
                 await new Promise(r => setTimeout(r, 100));
 
+                // Systemically clear existing input before typing
+                await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                        type: 'keyDown',
+                        modifiers: 2, // Ctrl/Cmd
+                        key: 'a'
+                    }, (result) => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve(result);
+                    });
+                });
+                await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                        type: 'keyUp',
+                        modifiers: 2,
+                        key: 'a'
+                    }, (result) => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve(result);
+                    });
+                });
+                await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                        type: 'keyDown',
+                        key: 'Backspace'
+                    }, (result) => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve(result);
+                    });
+                });
+                await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                        type: 'keyUp',
+                        key: 'Backspace'
+                    }, (result) => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve(result);
+                    });
+                });
+
+                await new Promise(r => setTimeout(r, 100));
+
                 // Dispatch individual key events to properly trigger React/Vue synthetic events
                 for (let i = 0; i < action.text.length; i++) {
                     const char = action.text[i];
