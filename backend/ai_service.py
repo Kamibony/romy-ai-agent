@@ -374,8 +374,9 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "- {\"action\": \"DONE\"} (when the entire task across all sub-tasks is fully completed)\n"
             "If you cannot determine the next step or encounter an unexpected state, return: [{\"action\": \"ASK_HUMAN\", \"reason\": \"<your specific question>\"}].\n\n"
             "UNIVERSAL LAW OF STABLE STATE: Never fire SUB_TASK_COMPLETE immediately after interacting with a dynamic element. Typing text or clicking an input often triggers dynamic overlays (dropdowns, popups, date-pickers, hover menus). You must expect these to appear in the subsequent GET_STATE. Your task is NOT complete until the target UI reaches a final, stable state. Always explicitly use CLICK (to lock in an autocomplete suggestion or date) or RESET_VIEW (to dismiss an overlay) before considering the interaction finished. Never proceed to the next field or sub-task while an overlay is active.\n\n"
-            "CRUCIAL INSTRUCTION: Return ONLY a valid JSON array containing exactly ONE action object. Do not return multiple actions. Do not return text outside the array.\n"
-            "Example: [{\"action\": \"CLICK\", \"target_id\": \"1\", \"xpath\": \"//button\", \"thought\": \"Clicking the login button.\"}]\n"
+            "MACRO-ACTIONS & BATCHING: If you can confidently predict the next several deterministic steps (e.g., filling out a static form), return them as a batch in the array. If an action requires waiting for a dynamic UI element (like an autocomplete dropdown that hasn't rendered yet), end the batch at that action and wait for the next state.\n\n"
+            "CRUCIAL INSTRUCTION: Return a valid JSON array containing one or more action objects. Do not return text outside the array.\n"
+            "Example: [{\"action\": \"TYPE\", \"target_id\": \"1\", \"text\": \"London\", \"thought\": \"Typing origin\"}, {\"action\": \"CLICK\", \"target_id\": \"2\", \"thought\": \"Clicking search\"}]\n"
         )
         if global_prompt:
             system_instruction += f"Global Instructions:\n{global_prompt}\n\n"
