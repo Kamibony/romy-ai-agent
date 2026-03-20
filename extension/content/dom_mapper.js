@@ -32,12 +32,19 @@ window.RomyDomMapper = {
                 }
             }
 
+            // Explicitly preserve elements with direct text content (e.g. dropdown list items)
+            for (let i = 0; i < el.childNodes.length; i++) {
+                if (el.childNodes[i].nodeType === Node.TEXT_NODE && el.childNodes[i].textContent.trim().length > 0) {
+                    return true;
+                }
+            }
+
             // Check common structural action classes (handling SVG className objects)
             const className = typeof el.className === 'string' ? el.className : (el.className && el.className.baseVal ? el.className.baseVal : '');
             if (className) {
                 const classes = className.toLowerCase().split(/\s+/);
                 // Require exact matches or strict prefixes/suffixes to prevent vacuuming structural wrappers (e.g., 'action-bar', 'submit-container')
-                if (classes.some(c => c === 'btn' || c === 'button' || c.endsWith('-btn') || c.endsWith('-button') || c.startsWith('btn-') || c === 'submit' || c.includes('datepicker') || c.endsWith('-input'))) {
+                if (classes.some(c => c === 'btn' || c === 'button' || c.endsWith('-btn') || c.endsWith('-button') || c.startsWith('btn-') || c === 'submit' || c.includes('datepicker') || c.endsWith('-input') || c.includes('dropdown') || c.includes('suggestion') || c.includes('modal') || c.includes('popup') || c.includes('menu') || c.includes('autocomplete') || c.includes('select'))) {
                     return true;
                 }
             }
@@ -135,7 +142,16 @@ window.RomyDomMapper = {
 
                 // Aggressive Pruning: If the element has no meaningful text and isn't an input/button, drop it
                 // Make sure to preserve elements with a Set-of-Mark ID or critical semantic containers
-                if (!textContent && !isInputLike && tagName !== 'button' && tagName !== 'a' && !node.hasAttribute('data-romy-id') && tagName !== 'form' && tagName !== 'dialog') {
+                let keepDueToClass = false;
+                const classNameStr = typeof node.className === 'string' ? node.className : (node.className && node.className.baseVal ? node.className.baseVal : '');
+                if (classNameStr) {
+                    const classes = classNameStr.toLowerCase().split(/\s+/);
+                    if (classes.some(c => c.includes('dropdown') || c.includes('suggestion') || c.includes('modal') || c.includes('popup') || c.includes('menu') || c.includes('autocomplete') || c.includes('select'))) {
+                        keepDueToClass = true;
+                    }
+                }
+
+                if (!textContent && !isInputLike && tagName !== 'button' && tagName !== 'a' && !node.hasAttribute('data-romy-id') && tagName !== 'form' && tagName !== 'dialog' && !keepDueToClass) {
                      // If it has children, maybe it's a structural wrapper. But we want to flatten.
                      // If it's literally just an empty div/span with no aria, drop it completely.
                      return;
