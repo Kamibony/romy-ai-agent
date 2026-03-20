@@ -197,32 +197,34 @@ function handleInjectSom(sendResponse, payload) {
         overlayContainer.id = 'romy-som-overlay-container';
         // Make sure it sits on top of everything but doesn't block interactions
         Object.assign(overlayContainer.style, {
-            position: 'absolute',
+            all: 'initial',
+            position: 'fixed',
             top: '0',
             left: '0',
-            width: '100%',
-            height: '100%',
+            width: '100vw',
+            height: '100vh',
             pointerEvents: 'none',
             zIndex: '2147483647', // Max z-index
-            overflow: 'hidden' // prevents adding scrollbars
+            margin: '0',
+            padding: '0',
+            border: 'none',
+            overflow: 'visible'
         });
 
         elements.forEach(el => {
-            let rect;
+            let viewportTop, viewportLeft, width, height;
+
             if (el.bounds) {
-                rect = {
-                    left: el.bounds.x,
-                    top: el.bounds.y,
-                    width: el.bounds.width,
-                    height: el.bounds.height,
-                    right: el.bounds.x + el.bounds.width,
-                    bottom: el.bounds.y + el.bounds.height
-                };
+                // CDP bounds and dom_mapper bounds are absolute page coordinates
+                viewportTop = el.bounds.y - window.scrollY;
+                viewportLeft = el.bounds.x - window.scrollX;
+                width = el.bounds.width;
+                height = el.bounds.height;
             } else {
                 const target = document.querySelector(`[data-romy-id="${el.id}"]`);
                 if (!target) return;
 
-                rect = target.getBoundingClientRect();
+                const rect = target.getBoundingClientRect();
                 if (rect.width === 0 || rect.height === 0 || rect.bottom <= 0 || rect.top >= window.innerHeight || rect.right <= 0 || rect.left >= window.innerWidth) {
                     return;
                 }
@@ -231,14 +233,24 @@ function handleInjectSom(sendResponse, payload) {
                 if (computedStyle.visibility === 'hidden' || computedStyle.display === 'none' || computedStyle.opacity === '0') {
                     return;
                 }
+
+                viewportTop = rect.top;
+                viewportLeft = rect.left;
+                width = rect.width;
+                height = rect.height;
+            }
+
+            // Only draw if it's within or partially within the viewport
+            if (width === 0 || height === 0 || viewportTop >= window.innerHeight || viewportLeft >= window.innerWidth || (viewportTop + height) <= 0 || (viewportLeft + width) <= 0) {
+                return;
             }
 
             const tag = document.createElement('div');
             tag.textContent = el.id;
             Object.assign(tag.style, {
                 position: 'absolute',
-                top: `${(el.bounds ? 0 : window.scrollY) + rect.top}px`,
-                left: `${(el.bounds ? 0 : window.scrollX) + rect.left}px`,
+                top: `${viewportTop}px`,
+                left: `${viewportLeft}px`,
                 backgroundColor: 'red',
                 color: 'white',
                 padding: '1px 3px',
@@ -250,28 +262,30 @@ function handleInjectSom(sendResponse, payload) {
                 boxShadow: '0 0 2px black',
                 zIndex: '2147483647',
                 // Add slight offset so it doesn't cover the exact corner completely if needed
-                transform: 'translate(-50%, -50%)'
+                transform: 'translate(-50%, -50%)',
+                fontFamily: 'sans-serif'
             });
 
             // Optional: Draw a bounding box frame
             const box = document.createElement('div');
             Object.assign(box.style, {
                 position: 'absolute',
-                top: `${(el.bounds ? 0 : window.scrollY) + rect.top}px`,
-                left: `${(el.bounds ? 0 : window.scrollX) + rect.left}px`,
-                width: `${rect.width}px`,
-                height: `${rect.height}px`,
+                top: `${viewportTop}px`,
+                left: `${viewportLeft}px`,
+                width: `${width}px`,
+                height: `${height}px`,
                 border: '1px dashed red',
                 pointerEvents: 'none',
                 zIndex: '2147483646',
-                boxSizing: 'border-box'
+                boxSizing: 'border-box',
+                backgroundColor: 'rgba(255, 0, 0, 0.05)'
             });
 
             overlayContainer.appendChild(box);
             overlayContainer.appendChild(tag);
         });
 
-        document.body.appendChild(overlayContainer);
+        (document.documentElement || document.body).appendChild(overlayContainer);
         sendResponse({ success: true, count: elements.length });
     } catch (error) {
         console.error("Failed to inject SoM overlay:", error);
