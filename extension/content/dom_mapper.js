@@ -44,8 +44,30 @@ window.RomyDomMapper = {
             if (className) {
                 const classes = className.toLowerCase().split(/\s+/);
                 // Require exact matches or strict prefixes/suffixes to prevent vacuuming structural wrappers (e.g., 'action-bar', 'submit-container')
-                if (classes.some(c => c === 'btn' || c === 'button' || c.endsWith('-btn') || c.endsWith('-button') || c.startsWith('btn-') || c === 'submit' || c.includes('datepicker') || c.endsWith('-input') || c.includes('dropdown') || c.includes('suggestion') || c.includes('modal') || c.includes('popup') || c.includes('menu') || c.includes('autocomplete') || c.includes('select'))) {
+                if (classes.some(c => c === 'btn' || c === 'button' || c.endsWith('-btn') || c.endsWith('-button') || c.startsWith('btn-') || c === 'submit' || c.includes('datepicker') || c.endsWith('-input') || c.includes('dropdown') || c.includes('suggestion') || c.includes('modal') || c.includes('popup') || c.includes('menu') || c.includes('autocomplete') || c.includes('select') || c.includes('clear') || c.includes('close') || c.includes('remove'))) {
                     return true;
+                }
+            }
+
+            // Explicitly preserve SVG or other elements acting as clear/close buttons
+            if (el.tagName.toLowerCase() === 'svg' || el.tagName.toLowerCase() === 'path') {
+                const ariaLabel = el.getAttribute('aria-label') || '';
+                const title = el.getAttribute('title') || '';
+                if (ariaLabel.toLowerCase().includes('clear') || ariaLabel.toLowerCase().includes('close') || ariaLabel.toLowerCase().includes('remove')) return true;
+                if (title.toLowerCase().includes('clear') || title.toLowerCase().includes('close') || title.toLowerCase().includes('remove')) return true;
+
+                let parent = el.parentElement;
+                let depth = 0;
+                while (parent && depth < 2) { // check immediate parents for clickability or button-like traits
+                    if (parent.tagName === 'BUTTON' || parent.tagName === 'A' || parent.getAttribute('role') === 'button') {
+                        return true;
+                    }
+                    const parentClass = typeof parent.className === 'string' ? parent.className.toLowerCase() : '';
+                    if (parentClass.includes('clear') || parentClass.includes('close') || parentClass.includes('remove')) {
+                        return true;
+                    }
+                    parent = parent.parentElement;
+                    depth++;
                 }
             }
 
@@ -146,24 +168,26 @@ window.RomyDomMapper = {
                 const classNameStr = typeof node.className === 'string' ? node.className : (node.className && node.className.baseVal ? node.className.baseVal : '');
                 if (classNameStr) {
                     const classes = classNameStr.toLowerCase().split(/\s+/);
-                    if (classes.some(c => c.includes('dropdown') || c.includes('suggestion') || c.includes('modal') || c.includes('popup') || c.includes('menu') || c.includes('autocomplete') || c.includes('select'))) {
+                    if (classes.some(c => c.includes('dropdown') || c.includes('suggestion') || c.includes('modal') || c.includes('popup') || c.includes('menu') || c.includes('autocomplete') || c.includes('select') || c.includes('clear') || c.includes('close') || c.includes('remove'))) {
                         keepDueToClass = true;
                     }
                 }
 
-                if (!textContent && !isInputLike && tagName !== 'button' && tagName !== 'a' && !node.hasAttribute('data-romy-id') && tagName !== 'form' && tagName !== 'dialog' && !keepDueToClass) {
+                const isClearIcon = tagName === 'svg' || tagName === 'path' || node.getAttribute('aria-label')?.toLowerCase().includes('clear') || node.getAttribute('aria-label')?.toLowerCase().includes('close') || node.getAttribute('aria-label')?.toLowerCase().includes('remove');
+
+                if (!textContent && !isInputLike && tagName !== 'button' && tagName !== 'a' && !node.hasAttribute('data-romy-id') && tagName !== 'form' && tagName !== 'dialog' && !keepDueToClass && !isClearIcon) {
                      // If it has children, maybe it's a structural wrapper. But we want to flatten.
                      // If it's literally just an empty div/span with no aria, drop it completely.
                      return;
                 }
 
                 // If it's just an empty anchor tag without text or aria-label, drop it
-                if (tagName === 'a' && !textContent && !node.hasAttribute('data-romy-id') && !node.hasAttribute('aria-label')) {
+                if (tagName === 'a' && !textContent && !node.hasAttribute('data-romy-id') && !node.hasAttribute('aria-label') && !isClearIcon) {
                     return;
                 }
 
                 // If it's an empty button, but not an icon button (no svg children), drop it
-                if (tagName === 'button' && !textContent && node.querySelector('svg') === null && !node.hasAttribute('data-romy-id') && !node.hasAttribute('aria-label')) {
+                if (tagName === 'button' && !textContent && node.querySelector('svg') === null && !node.hasAttribute('data-romy-id') && !node.hasAttribute('aria-label') && !isClearIcon) {
                     return;
                 }
 
