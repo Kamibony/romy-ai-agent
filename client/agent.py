@@ -356,6 +356,13 @@ def start_remote_listener() -> None:
                             "command_text": command_text,
                             "audio_b64": audio_b64
                         })
+            except requests.exceptions.SSLError as e:
+                error_count += 1
+                logging.error(f"SSL/Network error in remote listener poll (attempt {error_count}): {e}")
+                if error_count >= 3:
+                    session.close()
+                    session = get_resilient_session()
+                    logging.warning("Re-initializing resilient requests session due to repeated errors.")
             except requests.exceptions.RequestException as e:
                 error_count += 1
                 logging.error(f"Network error in remote listener poll (attempt {error_count}): {e}")
