@@ -33,11 +33,11 @@ def test_harness():
     Logs success/failure and execution time of each.
     """
     commands = [
-        "Navigate to wikipedia.org and search for 'Artificial Intelligence'",
-        "Navigate to github.com and search for 'tensorflow'",
-        "Navigate to amazon.com and search for 'laptop'",
-        "Navigate to news.ycombinator.com and click the first article",
-        "Navigate to duckduckgo.com and search for 'OpenAI'"
+        "Navigate to alza.cz, search for 'MacBook Air M2', filter by 'Skladem', click on the first result, and add it to the cart.",
+        "Navigate to sreality.cz, select 'Pronájem', select 'Byty', set disposition to '2+kk', enter location 'Praha', and click 'Zobrazit'.",
+        "Navigate to czu.cz, open the 'Studium' menu, search for information regarding student internships ('praxe studentů'), and click on the first relevant article or portal link.",
+        "Navigate to jobs.cz, search for job title 'Python Developer', set location to 'Brno', check the 'Remote' filter if available, and search.",
+        "Navigate to pelikan.cz, set origin to 'Prague', set destination to 'London', select departure date '10/05/2026', and search."
     ]
 
     print("=" * 60)
