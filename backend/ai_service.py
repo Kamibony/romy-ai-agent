@@ -379,6 +379,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "- {\"action\": \"OPEN_TAB\", \"url\": \"<url>\"}\n"
             "- {\"action\": \"PRESS_KEY\", \"key\": \"<key>\"}\n"
             "- {\"action\": \"WAIT_FOR\", \"selector\": \"<css_selector>\", \"max_wait_seconds\": 5}\n"
+            "- {\"action\": \"WAIT\", \"seconds\": 2} (use this if the page or an element is actively loading, e.g., a visible spinner, or you need to give the DOM a moment to settle before checking the state again)\n"
             "- {\"action\": \"RESET_VIEW\"} (use this to click outside or press Escape to close active overlays, dropdowns, date pickers, or modals and let the UI settle before verifying the state)\n"
             "- {\"action\": \"EXECUTE_JS\", \"code\": \"<javascript_code>\"}\n"
             "- {\"action\": \"REPLY\", \"text\": \"<the answer>\"}\n"
@@ -511,6 +512,12 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                                 "max_wait_seconds": float(action_data.get("max_wait_seconds", 5)),
                                 "thought": thought
                             })
+                        elif action_data.get("action") == "WAIT" and "seconds" in action_data:
+                            parsed_actions.append({
+                                "action": "WAIT",
+                                "seconds": float(action_data.get("seconds", 2)),
+                                "thought": thought
+                            })
                         elif action_data.get("action") == "REPLY" and "text" in action_data:
                             parsed_actions.append({
                                 "action": "REPLY",
@@ -597,6 +604,12 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                         "action": "WAIT_FOR",
                         "selector": str(action_data["selector"]),
                         "max_wait_seconds": float(action_data.get("max_wait_seconds", 5)),
+                        "thought": thought
+                    }]
+                elif action_data.get("action") == "WAIT" and "seconds" in action_data:
+                    return [{
+                        "action": "WAIT",
+                        "seconds": float(action_data.get("seconds", 2)),
                         "thought": thought
                     }]
                 elif action_data.get("action") == "REPLY" and "text" in action_data:
