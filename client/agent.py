@@ -29,7 +29,7 @@ BACKEND_URL = os.environ.get("BACKEND_URL", "https://romy-backend-1049976869239.
 CURRENT_TOKEN = None
 
 COMMAND_QUEUE = queue.Queue()
-MAX_UI_ELEMENTS = 150  # Payload size management for resilience
+MAX_UI_ELEMENTS = 75  # Payload size management for resilience
 ABORT_AGENT = False
 PAUSE_AGENT = False
 
@@ -773,7 +773,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
 
                     # 2. Send state to backend to receive ONE OR MORE actions
                     payload = {
-                        "ui_elements": ui_elements[:MAX_UI_ELEMENTS] if isinstance(ui_elements, list) else ui_elements,
+                        "ui_elements": [{k: v for k, v in el.items() if k not in ["bounds", "backendNodeId"]} for el in ui_elements[:MAX_UI_ELEMENTS]] if isinstance(ui_elements, list) else ui_elements,
                         "session_id": doc_id,
                         "command_text": command_text,
                         "current_sub_task": current_sub_task,
@@ -1016,7 +1016,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
             ui_elements, memory_map = scan_ui_elements()
 
             payload = {
-                "ui_elements": ui_elements[:MAX_UI_ELEMENTS] if isinstance(ui_elements, list) else ui_elements,
+                "ui_elements": [{k: v for k, v in el.items() if k not in ["bounds", "backendNodeId"]} for el in ui_elements[:MAX_UI_ELEMENTS]] if isinstance(ui_elements, list) else ui_elements,
                 "session_id": doc_id
             }
             if iteration == 0 and audio_b64:
@@ -1467,7 +1467,7 @@ def execute_voice_agent_loop() -> None:
 
                     # 2. Send state to backend to receive ONE OR MORE actions
                     payload = {
-                        "ui_elements": ui_elements[:MAX_UI_ELEMENTS] if isinstance(ui_elements, list) else ui_elements,
+                        "ui_elements": [{k: v for k, v in el.items() if k not in ["bounds", "backendNodeId"]} for el in ui_elements[:MAX_UI_ELEMENTS]] if isinstance(ui_elements, list) else ui_elements,
                         "session_id": doc_id,
                         "command_text": command_text,
                         "current_sub_task": current_sub_task,
@@ -1752,7 +1752,7 @@ def execute_voice_agent_loop() -> None:
 
             # 4. Construct JSON payload
             payload = {
-                "ui_elements": ui_elements[:MAX_UI_ELEMENTS] if isinstance(ui_elements, list) else ui_elements,
+                "ui_elements": [{k: v for k, v in el.items() if k not in ["bounds", "backendNodeId"]} for el in ui_elements[:MAX_UI_ELEMENTS]] if isinstance(ui_elements, list) else ui_elements,
                 "session_id": doc_id,
                 "command_text": command_text,
                 "current_sub_task": current_sub_task
