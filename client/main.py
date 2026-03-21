@@ -80,6 +80,10 @@ def main() -> None:
         from local_bridge import bridge
         bridge.start()
 
+        # Start local API for E2E testing
+        from agent import start_local_api
+        start_local_api()
+
         try:
             # Run the agent worker loop on the main thread
             agent_worker_loop()

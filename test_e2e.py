@@ -2,17 +2,34 @@ import sys
 import os
 import time
 import logging
-import threading
 import uuid
-import datetime
+import json
+import urllib.request
+import urllib.error
 
 # Configure logging to console
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+LOCAL_API_URL = "http://127.0.0.1:8764/api"
+
+def check_local_api_running():
+    try:
+        # Just checking if the port is open and responding with 404 to a random GET
+        req = urllib.request.Request(f"{LOCAL_API_URL}/ping")
+        try:
+            urllib.request.urlopen(req, timeout=2)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return True
+            return False
+        return True
+    except urllib.error.URLError:
+        return False
+
 def test_harness():
     """
     E2E Test Harness:
-    Automatically feeds 5 distinct commands targeting generic websites to the agent queue.
+    Automatically feeds 5 distinct commands targeting generic websites to the agent queue via local API.
     Logs success/failure and execution time of each.
     """
     commands = [
@@ -27,20 +44,10 @@ def test_harness():
     print("STARTING E2E TEST HARNESS FOR UNIVERSAL CAPABILITY")
     print("=" * 60)
 
-    # We import inside the function to avoid ModuleNotFoundError when running via `python test_e2e.py` without requirements
-    try:
-        from client.agent import COMMAND_QUEUE, agent_worker_loop, run_remote_agent_loop, set_firebase_token, firestore_get_document
-        from client.local_bridge import bridge
-    except ImportError as e:
-        print(f"Skipping actual test execution due to missing dependencies: {e}")
-        print("To run this test, activate the environment and install requirements.txt")
+    if not check_local_api_running():
+        print("ERROR: Local API server is not running on port 8764.")
+        print("Please ensure that main.py is running and logged in before executing test_e2e.py")
         return
-
-    # Start the local bridge
-    bridge.start()
-
-    worker_thread = threading.Thread(target=agent_worker_loop, daemon=True)
-    worker_thread.start()
 
     results = []
 
@@ -51,27 +58,38 @@ def test_harness():
 
         start_time = time.time()
 
-        # Enqueue the command
-        COMMAND_QUEUE.put({
-            "type": "remote",
+        # Enqueue the command via local API
+        payload = json.dumps({
             "doc_id": doc_id,
-            "command_text": cmd,
-            "audio_b64": ""
-        })
+            "command_text": cmd
+        }).encode('utf-8')
 
-        # Wait for the task to finish.
-        COMMAND_QUEUE.join()
+        req = urllib.request.Request(f"{LOCAL_API_URL}/run_command", data=payload, headers={'Content-Type': 'application/json'}, method='POST')
+        try:
+            response = urllib.request.urlopen(req)
+            resp_data = json.loads(response.read().decode())
+            if resp_data.get("status") != "queued":
+                print(f"Failed to queue command. API returned: {resp_data}")
+                continue
+        except Exception as e:
+            print(f"Failed to queue command. Error: {e}")
+            continue
+
+        # Wait for the task to finish by polling status
+        status = "pending"
+        while status in ["pending", "in_progress", "unknown"]:
+            time.sleep(2)
+            try:
+                status_req = urllib.request.Request(f"{LOCAL_API_URL}/status/{doc_id}")
+                status_response = urllib.request.urlopen(status_req)
+                status_data = json.loads(status_response.read().decode())
+                status = status_data.get("status", "unknown")
+            except Exception as e:
+                print(f"Failed to get status. Error: {e}")
+                break
 
         end_time = time.time()
         elapsed = end_time - start_time
-
-        status = "unknown"
-        try:
-            doc = firestore_get_document("remote_commands", doc_id)
-            if doc:
-                status = doc.get("status", "unknown")
-        except Exception:
-            pass
 
         print(f"-> Command finished in {elapsed:.2f} seconds. Final Status: {status}")
 
@@ -93,5 +111,5 @@ def test_harness():
     print("=" * 60)
 
 if __name__ == "__main__":
-    print("Note: Make sure your desktop client is logged in or you set a valid CURRENT_TOKEN")
+    print("Note: Make sure your desktop client (main.py) is actively running and logged in.")
     test_harness()
