@@ -195,12 +195,9 @@ function sendTelemetryLog(message) {
     });
 }
 
-// Store the latest DOM bounds globally for native execution
-let latestDomBounds = {};
-
 async function handleGetState(payload) {
     const { commandText } = payload;
-    sendTelemetryLog(`Requesting WEB State...`);
+    sendTelemetryLog(`Requesting WEB State (Vision-First)...`);
 
     // 1. Get Active Tab
     let [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -268,9 +265,8 @@ async function handleGetState(payload) {
         await new Promise(r => setTimeout(r, 1000));
     }
 
-    // 2. Extract DOM Natively via CDP
-    sendTelemetryLog(`Extracting DOM from tab natively via CDP...`);
-    const uiElements = [];
+    // 2. Capture Clean Screenshot Natively via CDP
+    sendTelemetryLog(`Capturing pure screenshot via CDP...`);
     let screenshotBase64 = null;
 
     try {
@@ -284,293 +280,31 @@ async function handleGetState(payload) {
             });
         });
 
-        await new Promise(r => chrome.debugger.sendCommand({ tabId: tab.id }, "DOMSnapshot.enable", {}, r));
-        const axTree = await new Promise((resolve, reject) => {
-            chrome.debugger.sendCommand({ tabId: tab.id }, "Accessibility.getFullAXTree", {}, (res) => {
-                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                else resolve(res);
-            });
-        });
-        const snap = await new Promise((resolve, reject) => {
-            chrome.debugger.sendCommand({ tabId: tab.id }, "DOMSnapshot.captureSnapshot", {
-                computedStyles: [],
-                includePaintOrder: true,
-                includeDOMRects: true
-            }, (res) => {
-                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                else resolve(res);
+        const captureResult = await new Promise((resolve, reject) => {
+            chrome.debugger.sendCommand({ tabId: tab.id }, "Page.captureScreenshot", { format: "webp", quality: 80 }, (result) => {
+                if (chrome.runtime.lastError) {
+                    reject(new Error(chrome.runtime.lastError.message));
+                } else {
+                    resolve(result);
+                }
             });
         });
 
-        const layoutMetrics = await new Promise((resolve, reject) => {
-            chrome.debugger.sendCommand({ tabId: tab.id }, "Page.getLayoutMetrics", {}, (res) => {
-                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                else resolve(res);
-            });
-        });
-
-        const viewport = layoutMetrics.layoutViewport || { pageX: 0, pageY: 0, clientWidth: 1920, clientHeight: 1080 };
-        const boundsMap = {};
-        const valueMap = {}; // Map to store node values
-        const classMap = {}; // Map to store class names
-        const attributesMap = {}; // Map to store explicit input affordances
-
-        if (snap && snap.documents && snap.documents.length > 0) {
-            const doc = snap.documents[0];
-            const nodes = doc.nodes;
-            const layout = doc.layout;
-            const strings = snap.strings; // Get strings array
-
-            // Process inputValue if it exists
-            const inputValues = nodes.inputValue;
-            if (inputValues && inputValues.index && inputValues.value) {
-                for (let i = 0; i < inputValues.index.length; i++) {
-                    const nodeIdx = inputValues.index[i];
-                    const stringIdx = inputValues.value[i];
-                    const val = strings[stringIdx];
-                    if (val !== undefined) {
-                        const backendNodeId = nodes.backendNodeId[nodeIdx];
-                        valueMap[backendNodeId] = val;
-                    }
-                }
-            }
-
-            // Extract class attributes and input affordances
-            if (nodes.attributes) {
-                for (let i = 0; i < nodes.attributes.length; i++) {
-                    const attrs = nodes.attributes[i]; // Array of string indexes [nameIdx, valueIdx, nameIdx, valueIdx, ...]
-                    const backendNodeId = nodes.backendNodeId[i];
-                    let classStr = "";
-                    let nodeAttrs = {};
-                    for (let j = 0; j < attrs.length; j += 2) {
-                        const name = strings[attrs[j]];
-                        const value = strings[attrs[j+1]] || "";
-                        if (name === "class") {
-                            classStr = value;
-                        }
-                        if (["type", "disabled", "readonly", "required", "placeholder"].includes(name)) {
-                            nodeAttrs[name] = value;
-                        }
-                    }
-                    if (classStr) {
-                        classMap[backendNodeId] = classStr;
-                    }
-                    if (Object.keys(nodeAttrs).length > 0) {
-                        attributesMap[backendNodeId] = nodeAttrs;
-                    }
-                }
-            }
-
-            for (let i = 0; i < layout.nodeIndex.length; i++) {
-                const nodeIdx = layout.nodeIndex[i];
-                const backendNodeId = nodes.backendNodeId[nodeIdx];
-                const bounds = layout.bounds[i]; // [x, y, width, height]
-                boundsMap[backendNodeId] = { x: bounds[0], y: bounds[1], width: bounds[2], height: bounds[3] };
-            }
-        }
-
-        // 2b. Runtime evaluate fallback for inputs that might be missed by snap
-        try {
-            const runtimeValues = await new Promise((resolve, reject) => {
-                chrome.debugger.sendCommand({ tabId: tab.id }, "Runtime.evaluate", {
-                    expression: `
-                        (function() {
-                            const inputs = document.querySelectorAll('input, textarea');
-                            const results = [];
-                            for (const el of inputs) {
-                                if (el.value !== undefined && el.value !== null && el.value !== '') {
-                                    const rect = el.getBoundingClientRect();
-                                    results.push({
-                                        x: rect.x, y: rect.y, width: rect.width, height: rect.height,
-                                        value: el.value
-                                    });
-                                }
-                            }
-                            return JSON.stringify(results);
-                        })();
-                    `,
-                    returnByValue: true
-                }, (res) => {
-                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                    else resolve(res);
-                });
-            });
-
-            if (runtimeValues && runtimeValues.result && runtimeValues.result.value) {
-                const rtVals = JSON.parse(runtimeValues.result.value);
-                // Try to match runtime values to boundsMap
-                for (const backendId in boundsMap) {
-                    const b = boundsMap[backendId];
-                    if (!valueMap[backendId]) {
-                        for (const rt of rtVals) {
-                            // Give a small margin of error for matching bounds
-                            if (Math.abs(b.x - rt.x) < 2 && Math.abs(b.y - rt.y) < 2 &&
-                                Math.abs(b.width - rt.width) < 2 && Math.abs(b.height - rt.height) < 2) {
-                                valueMap[backendId] = rt.value;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (rtErr) {
-            sendTelemetryLog(`Runtime evaluation for input values failed: ${rtErr.message}`);
-        }
-
-        const interactiveRoles = ['button', 'link', 'textbox', 'searchbox', 'combobox', 'menuitem', 'tab', 'checkbox', 'radio', 'switch', 'slider'];
-        const textContainerRoles = ['StaticText', 'LayoutTableCell', 'GenericContainer', 'ListMarker', 'List', 'ListItem', 'LayoutTableRow'];
-        let idCounter = 0;
-
-        if (axTree && axTree.nodes) {
-            // Build parent map for inheritance and O(1) node lookup
-            const parentMap = {};
-            const nodeMap = new Map();
-            for (const node of axTree.nodes) {
-                nodeMap.set(node.nodeId, node);
-                if (node.childIds) {
-                    for (const childId of node.childIds) {
-                        parentMap[childId] = node.nodeId;
-                    }
-                }
-            }
-
-            // Helper to check if node or ancestors have a specific class
-            const hasClassLike = (startNodeId, matchStrs) => {
-                let currId = startNodeId;
-                let depth = 0;
-                while (currId && depth < 5) { // Limit depth to avoid massive traversals
-                    const n = nodeMap.get(currId);
-                    if (n && n.backendDOMNodeId && classMap[n.backendDOMNodeId]) {
-                        const c = classMap[n.backendDOMNodeId].toLowerCase();
-                        if (matchStrs.some(s => c.includes(s))) return true;
-                    }
-                    currId = parentMap[currId];
-                    depth++;
-                }
-                return false;
-            };
-
-            for (const node of axTree.nodes) {
-                if (!node.role) continue;
-                const role = node.role.value;
-
-                let isInteractive = interactiveRoles.includes(role);
-
-                // Expand interactivity check
-                if (!isInteractive && node.properties) {
-                    const focusableProp = node.properties.find(p => p.name === 'focusable');
-                    if (focusableProp && focusableProp.value && focusableProp.value.value === true) {
-                        isInteractive = true;
-                    }
-                }
-
-                // Fallback heuristic: Check for elements embedded in dynamic overlays (dropdowns, autocomplete)
-                if (!isInteractive && textContainerRoles.includes(role)) {
-                    const textContent = node.name ? node.name.value : '';
-                    if (textContent && textContent.trim().length > 0) {
-                        if (hasClassLike(node.nodeId, ['dropdown', 'suggestion', 'autocomplete', 'menu', 'popup', 'option', 'listbox', 'select'])) {
-                            isInteractive = true;
-                        }
-                    }
-                }
-
-                if (isInteractive && node.backendDOMNodeId && boundsMap[node.backendDOMNodeId]) {
-                    const bounds = boundsMap[node.backendDOMNodeId];
-
-                    const isVisible = (
-                        bounds.width > 0 && bounds.height > 0 &&
-                        bounds.y + bounds.height > viewport.pageY &&
-                        bounds.y < viewport.pageY + viewport.clientHeight &&
-                        bounds.x + bounds.width > viewport.pageX &&
-                        bounds.x < viewport.pageX + viewport.clientWidth
-                    );
-
-                    if (isVisible) {
-                        let text = node.name ? node.name.value : '';
-
-                        // Extract value with redundancy
-                        let nodeValue = '';
-
-                        // 1. Try valueMap (DOMSnapshot or Runtime)
-                        if (valueMap[node.backendDOMNodeId]) {
-                            nodeValue = valueMap[node.backendDOMNodeId];
-                        }
-                        // 2. Try AXTree native value
-                        else if (node.value && node.value.value) {
-                            nodeValue = String(node.value.value);
-                        }
-
-                        // Combine into text for LLM visibility
-                        if (nodeValue) {
-                            text = text ? `${text} (Value: ${nodeValue})` : `Value: ${nodeValue}`;
-                        }
-
-                        let elPayload = {
-                            id: String(idCounter++),
-                            type: role,
-                            text: text,
-                            value: nodeValue,
-                            bounds: bounds,
-                            backendNodeId: node.backendDOMNodeId
-                        };
-                        if (attributesMap[node.backendDOMNodeId]) {
-                            elPayload.attributes = attributesMap[node.backendDOMNodeId];
-                        }
-                        uiElements.push(elPayload);
-                    }
-                }
-            }
-        }
-
-        // Store bounds and backendNodeId for native execution
-        latestDomBounds = {};
-        uiElements.forEach(el => {
-            if (el.bounds) {
-                latestDomBounds[el.id] = {
-                    bounds: el.bounds,
-                    backendNodeId: el.backendNodeId
-                };
-            }
-        });
-
-        // 3. Capture SoM Screenshot using CDP
-        sendTelemetryLog(`Capturing Set-of-Mark (SoM) screenshot via CDP...`);
-
-        try {
-            await new Promise((resolve) => {
-                chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.INJECT_SOM, elements: uiElements }, resolve);
-            });
-            await new Promise(r => setTimeout(r, 100));
-
-            const captureResult = await new Promise((resolve, reject) => {
-                chrome.debugger.sendCommand({ tabId: tab.id }, "Page.captureScreenshot", { format: "webp", quality: 80 }, (result) => {
-                    if (chrome.runtime.lastError) {
-                        reject(new Error(chrome.runtime.lastError.message));
-                    } else {
-                        resolve(result);
-                    }
-                });
-            });
-
-            if (captureResult && captureResult.data) {
-                screenshotBase64 = captureResult.data;
-            }
-        } catch (cdpError) {
-            sendTelemetryLog(`CDP Screenshot Error: ${cdpError.message}`);
+        if (captureResult && captureResult.data) {
+            screenshotBase64 = captureResult.data;
+            sendTelemetryLog(`Successfully captured pure screenshot.`);
         }
     } catch (e) {
-        sendTelemetryLog(`Native DOM extraction or CDP Error: ${e.message}`);
+        sendTelemetryLog(`CDP Screenshot Error: ${e.message}`);
         throw e;
     } finally {
-        await new Promise((resolve) => {
-            chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.REMOVE_SOM }, resolve);
-        });
         chrome.debugger.detach({ tabId: tab.id }, () => {
             const err = chrome.runtime.lastError;
         });
     }
 
-    return { success: true, ui_elements: uiElements, screenshot_base64: screenshotBase64, tabId: tab.id, url: tab.url };
+    // Return empty ui_elements as we now rely on vision
+    return { success: true, ui_elements: [], screenshot_base64: screenshotBase64, tabId: tab.id, url: tab.url };
 }
 
 async function handleExecuteNativeAction(payload) {
@@ -653,21 +387,13 @@ async function handleExecuteNativeAction(payload) {
         }
         return { success: true };
     } else if (action.action === "CLICK" || action.action === "TYPE" || action.action === "PASTE") {
-        const domData = latestDomBounds[action.target_id];
-        if (!domData || !domData.bounds) {
-            // Fallback to content script if bounds not found
-            sendTelemetryLog(`Bounds not found for ID ${action.target_id}, falling back to content script execution.`);
-            return await new Promise((resolve, reject) => {
-                chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.EXECUTE_ACTION, payload: action }, (res) => {
-                    if (chrome.runtime.lastError) resolve({error: chrome.runtime.lastError.message});
-                    else if (res && res.error) reject(new Error(res.error));
-                    else resolve(res);
-                });
-            });
+        if (!action.coordinates || !Array.isArray(action.coordinates) || action.coordinates.length !== 2) {
+            sendTelemetryLog(`Coordinates missing for action ${action.action}. Cannot execute native action.`);
+            return { success: false, error: "Coordinates missing for vision-based action." };
         }
 
-        const bounds = domData.bounds;
-        const backendNodeId = domData.backendNodeId;
+        let x = Math.round(action.coordinates[0]);
+        let y = Math.round(action.coordinates[1]);
 
         try {
             await new Promise((resolve, reject) => {
@@ -680,35 +406,7 @@ async function handleExecuteNativeAction(payload) {
                 });
             });
 
-            // Enable DOM agent for getBoxModel
-            await new Promise((resolve) => chrome.debugger.sendCommand({ tabId: tab.id }, 'DOM.enable', {}, resolve));
-
-            // Default to cached bounds calculation
-            let x = Math.round(bounds.x + bounds.width / 2);
-            let y = Math.round(bounds.y + bounds.height / 2);
-
-            // Fetch the element's BoxModel via CDP to get its physical center (X, Y)
-            if (backendNodeId) {
-                try {
-                    const boxModelResult = await new Promise((resolve, reject) => {
-                        chrome.debugger.sendCommand({ tabId: tab.id }, 'DOM.getBoxModel', { backendNodeId: backendNodeId }, (res) => {
-                            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                            else resolve(res);
-                        });
-                    });
-
-                    if (boxModelResult && boxModelResult.model && boxModelResult.model.content) {
-                        const quad = boxModelResult.model.content;
-                        x = Math.round((quad[0] + quad[2] + quad[4] + quad[6]) / 4);
-                        y = Math.round((quad[1] + quad[3] + quad[5] + quad[7]) / 4);
-                    }
-                } catch (boxModelErr) {
-                    sendTelemetryLog(`Failed to get BoxModel via CDP, falling back to cached bounds: ${boxModelErr.message}`);
-                }
-            }
-
-            // Native Click (Universally precede keystroke loop with a CDP Input.dispatchMouseEvent exactly on those coordinates)
-            // Regular single click
+            // Native Click using coordinates
             await new Promise((resolve, reject) => {
                 chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
                     type: 'mousePressed', x: x, y: y, button: 'left', clickCount: 1
@@ -717,7 +415,7 @@ async function handleExecuteNativeAction(payload) {
                     else resolve(result);
                 });
             });
-            await new Promise(r => setTimeout(r, 50)); // Tiny delay
+            await new Promise(r => setTimeout(r, 50));
             await new Promise((resolve, reject) => {
                 chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
                     type: 'mouseReleased', x: x, y: y, button: 'left', clickCount: 1
@@ -1027,9 +725,8 @@ async function processCommandInternally(payload) {
     while (true) {
         sendTelemetryLog(`Iteration ${iteration + 1}...`);
 
-        // 2. Extract DOM Natively via CDP
-        sendTelemetryLog(`Extracting DOM from tab natively via CDP...`);
-        const uiElements = [];
+        // 2. Capture Clean Screenshot Natively via CDP
+        sendTelemetryLog(`Capturing pure screenshot via CDP...`);
         let screenshotBase64 = null;
         try {
             await new Promise((resolve, reject) => {
@@ -1042,303 +739,25 @@ async function processCommandInternally(payload) {
                 });
             });
 
-            await new Promise(r => chrome.debugger.sendCommand({ tabId: tab.id }, "DOMSnapshot.enable", {}, r));
-            const axTree = await new Promise((resolve, reject) => {
-                chrome.debugger.sendCommand({ tabId: tab.id }, "Accessibility.getFullAXTree", {}, (res) => {
-                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                    else resolve(res);
-                });
-            });
-            const snap = await new Promise((resolve, reject) => {
-                chrome.debugger.sendCommand({ tabId: tab.id }, "DOMSnapshot.captureSnapshot", {
-                    computedStyles: [],
-                    includePaintOrder: true,
-                    includeDOMRects: true
-                }, (res) => {
-                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                    else resolve(res);
+            const captureResult = await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: tab.id }, "Page.captureScreenshot", { format: "webp", quality: 80 }, (result) => {
+                    if (chrome.runtime.lastError) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                    } else {
+                        resolve(result);
+                    }
                 });
             });
 
-            const layoutMetrics = await new Promise((resolve, reject) => {
-                chrome.debugger.sendCommand({ tabId: tab.id }, "Page.getLayoutMetrics", {}, (res) => {
-                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                    else resolve(res);
-                });
-            });
-
-            const viewport = layoutMetrics.layoutViewport || { pageX: 0, pageY: 0, clientWidth: 1920, clientHeight: 1080 };
-            const boundsMap = {};
-            const valueMap = {}; // Map to store node values
-            const classMap = {}; // Map to store class names
-            const attributesMap = {}; // Map to store explicit input affordances
-
-            if (snap && snap.documents && snap.documents.length > 0) {
-                const doc = snap.documents[0];
-                const nodes = doc.nodes;
-                const layout = doc.layout;
-                const strings = snap.strings; // Get strings array
-
-                // Process inputValue if it exists
-                const inputValues = nodes.inputValue;
-                if (inputValues && inputValues.index && inputValues.value) {
-                    for (let i = 0; i < inputValues.index.length; i++) {
-                        const nodeIdx = inputValues.index[i];
-                        const stringIdx = inputValues.value[i];
-                        const val = strings[stringIdx];
-                        if (val !== undefined) {
-                            const backendNodeId = nodes.backendNodeId[nodeIdx];
-                            valueMap[backendNodeId] = val;
-                        }
-                    }
-                }
-
-                // Extract class attributes and input affordances
-                if (nodes.attributes) {
-                    for (let i = 0; i < nodes.attributes.length; i++) {
-                        const attrs = nodes.attributes[i]; // Array of string indexes
-                        const backendNodeId = nodes.backendNodeId[i];
-                        let classStr = "";
-                        let nodeAttrs = {};
-                        for (let j = 0; j < attrs.length; j += 2) {
-                            const name = strings[attrs[j]];
-                            const value = strings[attrs[j+1]] || "";
-                            if (name === "class") {
-                                classStr = value;
-                            }
-                            if (["type", "disabled", "readonly", "required", "placeholder"].includes(name)) {
-                                nodeAttrs[name] = value;
-                            }
-                        }
-                        if (classStr) {
-                            classMap[backendNodeId] = classStr;
-                        }
-                        if (Object.keys(nodeAttrs).length > 0) {
-                            attributesMap[backendNodeId] = nodeAttrs;
-                        }
-                    }
-                }
-
-                for (let i = 0; i < layout.nodeIndex.length; i++) {
-                    const nodeIdx = layout.nodeIndex[i];
-                    const backendNodeId = nodes.backendNodeId[nodeIdx];
-                    const bounds = layout.bounds[i]; // [x, y, width, height]
-                    boundsMap[backendNodeId] = { x: bounds[0], y: bounds[1], width: bounds[2], height: bounds[3] };
-                }
+            if (captureResult && captureResult.data) {
+                screenshotBase64 = captureResult.data;
+                sendTelemetryLog(`Successfully captured pure screenshot.`);
             }
-
-            // 2b. Runtime evaluate fallback for inputs that might be missed by snap
-            try {
-                const runtimeValues = await new Promise((resolve, reject) => {
-                    chrome.debugger.sendCommand({ tabId: tab.id }, "Runtime.evaluate", {
-                        expression: `
-                            (function() {
-                                const inputs = document.querySelectorAll('input, textarea');
-                                const results = [];
-                                for (const el of inputs) {
-                                    if (el.value !== undefined && el.value !== null && el.value !== '') {
-                                        const rect = el.getBoundingClientRect();
-                                        results.push({
-                                            x: rect.x, y: rect.y, width: rect.width, height: rect.height,
-                                            value: el.value
-                                        });
-                                    }
-                                }
-                                return JSON.stringify(results);
-                            })();
-                        `,
-                        returnByValue: true
-                    }, (res) => {
-                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                        else resolve(res);
-                    });
-                });
-
-                if (runtimeValues && runtimeValues.result && runtimeValues.result.value) {
-                    const rtVals = JSON.parse(runtimeValues.result.value);
-                    // Try to match runtime values to boundsMap
-                    for (const backendId in boundsMap) {
-                        const b = boundsMap[backendId];
-                        if (!valueMap[backendId]) {
-                            for (const rt of rtVals) {
-                                // Give a small margin of error for matching bounds
-                                if (Math.abs(b.x - rt.x) < 2 && Math.abs(b.y - rt.y) < 2 &&
-                                    Math.abs(b.width - rt.width) < 2 && Math.abs(b.height - rt.height) < 2) {
-                                    valueMap[backendId] = rt.value;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            } catch (rtErr) {
-                sendTelemetryLog(`Runtime evaluation for input values failed: ${rtErr.message}`);
-            }
-
-            const interactiveRoles = ['button', 'link', 'textbox', 'searchbox', 'combobox', 'menuitem', 'tab', 'checkbox', 'radio', 'switch', 'slider'];
-            const textContainerRoles = ['StaticText', 'LayoutTableCell', 'GenericContainer', 'ListMarker', 'List', 'ListItem', 'LayoutTableRow'];
-            let idCounter = 0;
-
-            if (axTree && axTree.nodes) {
-                // Build parent map for inheritance and O(1) node lookup
-                const parentMap = {};
-                const nodeMap = new Map();
-                for (const node of axTree.nodes) {
-                    nodeMap.set(node.nodeId, node);
-                    if (node.childIds) {
-                        for (const childId of node.childIds) {
-                            parentMap[childId] = node.nodeId;
-                        }
-                    }
-                }
-
-                // Helper to check if node or ancestors have a specific class
-                const hasClassLike = (startNodeId, matchStrs) => {
-                    let currId = startNodeId;
-                    let depth = 0;
-                    while (currId && depth < 5) { // Limit depth to avoid massive traversals
-                        const n = nodeMap.get(currId);
-                        if (n && n.backendDOMNodeId && classMap[n.backendDOMNodeId]) {
-                            const c = classMap[n.backendDOMNodeId].toLowerCase();
-                            if (matchStrs.some(s => c.includes(s))) return true;
-                        }
-                        currId = parentMap[currId];
-                        depth++;
-                    }
-                    return false;
-                };
-
-                for (const node of axTree.nodes) {
-                    if (!node.role) continue;
-                    const role = node.role.value;
-
-                    let isInteractive = interactiveRoles.includes(role);
-
-                    // Expand interactivity check
-                    if (!isInteractive && node.properties) {
-                        const focusableProp = node.properties.find(p => p.name === 'focusable');
-                        if (focusableProp && focusableProp.value && focusableProp.value.value === true) {
-                            isInteractive = true;
-                        }
-                    }
-
-                    // Fallback heuristic: Check for elements embedded in dynamic overlays (dropdowns, autocomplete)
-                    if (!isInteractive && textContainerRoles.includes(role)) {
-                        const textContent = node.name ? node.name.value : '';
-                        if (textContent && textContent.trim().length > 0) {
-                            if (hasClassLike(node.nodeId, ['dropdown', 'suggestion', 'autocomplete', 'menu', 'popup', 'option', 'listbox', 'select'])) {
-                                isInteractive = true;
-                            }
-                        }
-                    }
-
-                    if (isInteractive && node.backendDOMNodeId && boundsMap[node.backendDOMNodeId]) {
-                        const bounds = boundsMap[node.backendDOMNodeId];
-
-                        const isVisible = (
-                            bounds.width > 0 && bounds.height > 0 &&
-                            bounds.y + bounds.height > viewport.pageY &&
-                            bounds.y < viewport.pageY + viewport.clientHeight &&
-                            bounds.x + bounds.width > viewport.pageX &&
-                            bounds.x < viewport.pageX + viewport.clientWidth
-                        );
-
-                        if (isVisible) {
-                            let text = node.name ? node.name.value : '';
-
-                            // Extract value with redundancy
-                            let nodeValue = '';
-
-                            // 1. Try valueMap (DOMSnapshot or Runtime)
-                            if (valueMap[node.backendDOMNodeId]) {
-                                nodeValue = valueMap[node.backendDOMNodeId];
-                            }
-                            // 2. Try AXTree native value
-                            else if (node.value && node.value.value) {
-                                nodeValue = String(node.value.value);
-                            }
-
-                            // Combine into text for LLM visibility
-                            if (nodeValue) {
-                                text = text ? `${text} (Value: ${nodeValue})` : `Value: ${nodeValue}`;
-                            }
-
-                            let elPayload = {
-                                id: String(idCounter++),
-                                type: role,
-                                text: text,
-                                value: nodeValue,
-                                bounds: bounds,
-                                backendNodeId: node.backendDOMNodeId
-                            };
-                            if (attributesMap[node.backendDOMNodeId]) {
-                                elPayload.attributes = attributesMap[node.backendDOMNodeId];
-                            }
-                            uiElements.push(elPayload);
-                        }
-                    }
-                }
-            }
-
-            // Store bounds and backendNodeId for native execution
-            latestDomBounds = {};
-            uiElements.forEach(el => {
-                if (el.bounds) {
-                    latestDomBounds[el.id] = {
-                        bounds: el.bounds,
-                        backendNodeId: el.backendNodeId
-                    };
-                }
-            });
-
-            sendTelemetryLog(`Extracted ${uiElements.length} elements from DOM.`);
-
-            // 3. Capture SoM Screenshot using CDP
-            sendTelemetryLog(`Capturing Set-of-Mark (SoM) screenshot via CDP...`);
-
-            try {
-                // Inject SoM overlay
-                await new Promise((resolve) => {
-                    chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.INJECT_SOM, elements: uiElements }, resolve);
-                });
-
-                // Give the browser a moment to render the SVG overlay
-                await new Promise(r => setTimeout(r, 100));
-
-                // Capture Screenshot
-                const captureResult = await new Promise((resolve, reject) => {
-                    chrome.debugger.sendCommand({ tabId: tab.id }, "Page.captureScreenshot", { format: "webp", quality: 80 }, (result) => {
-                        if (chrome.runtime.lastError) {
-                            reject(new Error(chrome.runtime.lastError.message));
-                        } else {
-                            resolve(result);
-                        }
-                    });
-                });
-
-                if (captureResult && captureResult.data) {
-                    screenshotBase64 = captureResult.data;
-                    sendTelemetryLog(`Successfully captured SoM screenshot.`);
-                } else {
-                    sendTelemetryLog(`Failed to capture screenshot data.`);
-                }
-
-            } catch (cdpError) {
-                sendTelemetryLog(`CDP Screenshot Error: ${cdpError.message}`);
-            }
-
         } catch (e) {
-            sendTelemetryLog(`Native DOM extraction failed: ${e.message}`);
+            sendTelemetryLog(`Native Screenshot capture failed: ${e.message}`);
             throw e;
         } finally {
-            // Always remove the SoM overlay immediately
-            await new Promise((resolve) => {
-                chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.REMOVE_SOM }, resolve);
-            });
-
-            // Detach debugger
             chrome.debugger.detach({ tabId: tab.id }, () => {
-                // Ignore detach errors since it might have already been detached
                 const err = chrome.runtime.lastError;
             });
         }
