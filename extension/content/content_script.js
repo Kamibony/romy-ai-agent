@@ -79,11 +79,24 @@ function handleExecuteAction(action, sendResponse) {
         }
     }
 
-    function findElement(target_id, xpath) {
-        let el = document.querySelector(`[data-romy-id="${target_id}"]`);
-        if (!el && xpath) {
-            console.log(`Target ID ${target_id} not found, falling back to XPath: ${xpath}`);
-            el = getElementByXPath(xpath);
+    function findElement(action) {
+        let el = null;
+        if (action.coordinates && Array.isArray(action.coordinates) && action.coordinates.length === 2) {
+            const x = Math.round(action.coordinates[0]);
+            const y = Math.round(action.coordinates[1]);
+            el = document.elementFromPoint(x, y);
+            if (el) {
+                console.log(`Element found using coordinates (${x}, ${y})`);
+                return el;
+            }
+        }
+        if (action.target_id) {
+            el = document.querySelector(`[data-romy-id="${action.target_id}"]`);
+            if (el) return el;
+        }
+        if (action.xpath) {
+            console.log(`Falling back to XPath: ${action.xpath}`);
+            el = getElementByXPath(action.xpath);
         }
         return el;
     }
@@ -91,13 +104,13 @@ function handleExecuteAction(action, sendResponse) {
     try {
         switch (action.action) {
             case "CLICK":
-                const clickTarget = findElement(action.target_id, action.xpath);
-                if (!clickTarget) throw new Error(`Target ID ${action.target_id} (and XPath ${action.xpath || 'N/A'}) not found.`);
+                const clickTarget = findElement(action);
+                if (!clickTarget) throw new Error(`Target not found for action using coordinates, ID, or XPath.`);
                 clickTarget.click();
                 break;
             case "TYPE":
-                const typeTarget = findElement(action.target_id, action.xpath);
-                if (!typeTarget) throw new Error(`Target ID ${action.target_id} (and XPath ${action.xpath || 'N/A'}) not found.`);
+                const typeTarget = findElement(action);
+                if (!typeTarget) throw new Error(`Target not found for action using coordinates, ID, or XPath.`);
 
                 typeTarget.focus();
 
@@ -134,8 +147,8 @@ function handleExecuteAction(action, sendResponse) {
                 targetElem.dispatchEvent(new KeyboardEvent('keyup', { key: action.key, bubbles: true }));
                 break;
             case "HOVER":
-                const hoverTarget = findElement(action.target_id, action.xpath);
-                if (!hoverTarget) throw new Error(`Target ID ${action.target_id} (and XPath ${action.xpath || 'N/A'}) not found.`);
+                const hoverTarget = findElement(action);
+                if (!hoverTarget) throw new Error(`Target not found for action using coordinates, ID, or XPath.`);
                 hoverTarget.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
                 hoverTarget.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
                 break;
