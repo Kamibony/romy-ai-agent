@@ -266,6 +266,71 @@ async function handleGetState(payload) {
     }
 
     // 2. Capture Clean Screenshot Natively via CDP
+    // --- SMART WAIT: Wait for the SPA to visually settle ---
+    sendTelemetryLog(`Waiting for page to visually settle...`);
+    try {
+        await new Promise((resolve) => {
+            chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
+                const err = chrome.runtime.lastError; // Ignore already attached
+                resolve();
+            });
+        });
+
+        await new Promise((resolve) => {
+            chrome.debugger.sendCommand({ tabId: tab.id }, 'Runtime.evaluate', {
+                expression: `
+                    new Promise((resolve) => {
+                        let isSettled = false;
+                        const finish = () => {
+                            if (isSettled) return;
+                            isSettled = true;
+                            resolve();
+                        };
+
+                        const startObserver = () => {
+                            // Wait for 500ms of DOM stability
+                            let timeoutId;
+                            const observer = new MutationObserver(() => {
+                                clearTimeout(timeoutId);
+                                timeoutId = setTimeout(() => {
+                                    observer.disconnect();
+                                    finish();
+                                }, 500);
+                            });
+                            observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+
+                            // Fallback to resolve after 1.5 seconds if page is constantly mutating
+                            setTimeout(() => {
+                                observer.disconnect();
+                                finish();
+                            }, 1500);
+
+                            // Trigger initial timeout in case there are no mutations
+                            timeoutId = setTimeout(() => {
+                                observer.disconnect();
+                                finish();
+                            }, 500);
+                        };
+
+                        if (document.readyState !== 'complete') {
+                            window.addEventListener('load', startObserver, { once: true });
+                            // Fallback if load never fires
+                            setTimeout(startObserver, 3000);
+                        } else {
+                            startObserver();
+                        }
+                    });
+                `,
+                awaitPromise: true
+            }, (result) => {
+                resolve(result);
+            });
+        });
+    } catch (waitErr) {
+        sendTelemetryLog(`Smart wait failed: ${waitErr.message}`);
+    }
+    // --- END SMART WAIT ---
+
     sendTelemetryLog(`Capturing pure screenshot via CDP...`);
     let screenshotBase64 = null;
 
@@ -392,9 +457,6 @@ async function handleExecuteNativeAction(payload) {
             return { success: false, error: "Coordinates missing for vision-based action." };
         }
 
-        let x = Math.round(action.coordinates[0]);
-        let y = Math.round(action.coordinates[1]);
-
         try {
             await new Promise((resolve, reject) => {
                 chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
@@ -405,6 +467,21 @@ async function handleExecuteNativeAction(payload) {
                     }
                 });
             });
+
+            // Adjust coordinates for device pixel ratio
+            const evaluateDprResult = await new Promise((resolve) => {
+                chrome.debugger.sendCommand({ tabId: tab.id }, 'Runtime.evaluate', {
+                    expression: 'window.devicePixelRatio || 1',
+                    returnByValue: true
+                }, (result) => {
+                    if (chrome.runtime.lastError) resolve({ result: { value: 1 } });
+                    else resolve(result);
+                });
+            });
+            const dpr = evaluateDprResult?.result?.value || 1;
+
+            let x = Math.round(action.coordinates[0] / dpr);
+            let y = Math.round(action.coordinates[1] / dpr);
 
             if (action.action === "HOVER") {
                 await new Promise((resolve, reject) => {
@@ -737,6 +814,71 @@ async function processCommandInternally(payload) {
         sendTelemetryLog(`Iteration ${iteration + 1}...`);
 
         // 2. Capture Clean Screenshot Natively via CDP
+        // --- SMART WAIT: Wait for the SPA to visually settle ---
+    sendTelemetryLog(`Waiting for page to visually settle...`);
+    try {
+        await new Promise((resolve) => {
+            chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
+                const err = chrome.runtime.lastError; // Ignore already attached
+                resolve();
+            });
+        });
+
+        await new Promise((resolve) => {
+            chrome.debugger.sendCommand({ tabId: tab.id }, 'Runtime.evaluate', {
+                expression: `
+                    new Promise((resolve) => {
+                        let isSettled = false;
+                        const finish = () => {
+                            if (isSettled) return;
+                            isSettled = true;
+                            resolve();
+                        };
+
+                        const startObserver = () => {
+                            // Wait for 500ms of DOM stability
+                            let timeoutId;
+                            const observer = new MutationObserver(() => {
+                                clearTimeout(timeoutId);
+                                timeoutId = setTimeout(() => {
+                                    observer.disconnect();
+                                    finish();
+                                }, 500);
+                            });
+                            observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+
+                            // Fallback to resolve after 1.5 seconds if page is constantly mutating
+                            setTimeout(() => {
+                                observer.disconnect();
+                                finish();
+                            }, 1500);
+
+                            // Trigger initial timeout in case there are no mutations
+                            timeoutId = setTimeout(() => {
+                                observer.disconnect();
+                                finish();
+                            }, 500);
+                        };
+
+                        if (document.readyState !== 'complete') {
+                            window.addEventListener('load', startObserver, { once: true });
+                            // Fallback if load never fires
+                            setTimeout(startObserver, 3000);
+                        } else {
+                            startObserver();
+                        }
+                    });
+                `,
+                awaitPromise: true
+            }, (result) => {
+                resolve(result);
+            });
+        });
+    } catch (waitErr) {
+        sendTelemetryLog(`Smart wait failed: ${waitErr.message}`);
+    }
+    // --- END SMART WAIT ---
+
         sendTelemetryLog(`Capturing pure screenshot via CDP...`);
         let screenshotBase64 = null;
         try {
@@ -935,9 +1077,6 @@ async function processCommandInternally(payload) {
                         throw new Error("Coordinates missing for vision-based action.");
                     }
 
-                    let x = Math.round(action.coordinates[0]);
-                    let y = Math.round(action.coordinates[1]);
-
                     try {
                         await new Promise((resolve, reject) => {
                             chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
@@ -948,6 +1087,21 @@ async function processCommandInternally(payload) {
                                 }
                             });
                         });
+
+                        // Adjust coordinates for device pixel ratio
+                        const evaluateDprResult = await new Promise((resolve) => {
+                            chrome.debugger.sendCommand({ tabId: tab.id }, 'Runtime.evaluate', {
+                                expression: 'window.devicePixelRatio || 1',
+                                returnByValue: true
+                            }, (result) => {
+                                if (chrome.runtime.lastError) resolve({ result: { value: 1 } });
+                                else resolve(result);
+                            });
+                        });
+                        const dpr = evaluateDprResult?.result?.value || 1;
+
+                        let x = Math.round(action.coordinates[0] / dpr);
+                        let y = Math.round(action.coordinates[1] / dpr);
 
                         if (action.action === "HOVER") {
                             await new Promise((resolve, reject) => {
