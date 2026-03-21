@@ -335,9 +335,20 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
 
         contents = []
 
-        # Tiered Modality: The Navigator no longer receives the heavy screenshot_base64.
-        # It relies entirely on the fast/cheap text-based ui_elements.
-        # We leave the parameter in the signature for backward compatibility or if needed later.
+        # Vision-First Paradigm: The Navigator relies on the screenshot to output precise coordinates.
+        if screenshot_base64:
+            try:
+                if "," in screenshot_base64:
+                    _, screenshot_base64 = screenshot_base64.split(",", 1)
+                img_data = base64.b64decode(screenshot_base64)
+                contents.append(
+                    types.Part.from_bytes(
+                        data=img_data,
+                        mime_type="image/webp"
+                    )
+                )
+            except Exception as e:
+                print(f"Error decoding screenshot: {e}")
 
         if audio_b64:
             audio_data = base64.b64decode(audio_b64)
@@ -356,20 +367,20 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             )
 
         system_instruction = (
-            "You are a structural RPA assistant implementing a ReAct Loop. You are provided with "
-            "a simplified list of UI elements on the screen. Each element in the list has an ID, xpath, and a description.\n\n"
-            "Based on the user's command and current state, identify the correct target element and return one or more actions to execute next.\n\n"
+            "You are a Vision-First RPA assistant implementing a ReAct Loop. You will be provided with "
+            "a screenshot of the current state of the application.\n\n"
+            "Based on the user's command, the current sub-task, and the visual state, visually locate the correct target element. "
+            "You must output the exact [x, y] coordinates representing the center of the target element to interact with it.\n\n"
             "Supported actions:\n"
-            "- {\"action\": \"CLICK\", \"target_id\": \"<the_number>\", \"xpath\": \"<optional_xpath_fallback>\"}\n"
-            "- {\"action\": \"TYPE\", \"target_id\": \"<the_number>\", \"xpath\": \"<optional_xpath_fallback>\", \"text\": \"<text to type>\"} (this automatically clears existing text first)\n"
+            "- {\"action\": \"CLICK\", \"coordinates\": [x, y]}\n"
+            "- {\"action\": \"TYPE\", \"coordinates\": [x, y], \"text\": \"<text to type>\"} (this automatically focuses the element via click and types)\n"
             "- {\"action\": \"SCROLL\", \"direction\": \"down\"} (or \"up\")\n"
             "- {\"action\": \"NAVIGATE\", \"url\": \"<url>\"}\n"
             "- {\"action\": \"OPEN_TAB\", \"url\": \"<url>\"}\n"
             "- {\"action\": \"PRESS_KEY\", \"key\": \"<key>\"}\n"
-            "- {\"action\": \"HOVER\", \"target_id\": \"<the_number>\", \"xpath\": \"<optional_xpath_fallback>\"}\n"
             "- {\"action\": \"WAIT_FOR\", \"selector\": \"<css_selector>\", \"max_wait_seconds\": 5}\n"
             "- {\"action\": \"RESET_VIEW\"} (use this to click outside or press Escape to close active overlays, dropdowns, date pickers, or modals and let the UI settle before verifying the state)\n"
-            "- {\"action\": \"EXECUTE_JS\", \"code\": \"<javascript_code>\"} (use this to execute strictly read-only JS to extract DOM values or state variables missed by normal extraction, runs in isolated world)\n"
+            "- {\"action\": \"EXECUTE_JS\", \"code\": \"<javascript_code>\"}\n"
             "- {\"action\": \"REPLY\", \"text\": \"<the answer>\"}\n"
             "- {\"action\": \"SUB_TASK_COMPLETE\"} (use this when the current sub-task has been successfully achieved, and you are ready to move on to the next one)\n"
             "- {\"action\": \"DONE\"} (when the entire task across all sub-tasks is fully completed)\n"
@@ -379,7 +390,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "MACRO-ACTIONS & BATCHING: If you can confidently predict the next several deterministic steps (e.g., filling out a static form), return them as a batch in the array. If an action requires waiting for a dynamic UI element (like an autocomplete dropdown that hasn't rendered yet), end the batch at that action and wait for the next state. CRITICAL: Never include SUB_TASK_COMPLETE in the same batch as a TYPE action. You must always wait for the next state after typing to verify if an autocomplete dropdown appeared.\n\n"
             "SUB-TASK COMPLETION & STATE ADVANCEMENT: It is critical that you advance the state when a sub-task is met. If the sequence of actions you are about to output successfully fulfills the goal of the 'Current Sub-Task to execute', you MUST append {\"action\": \"SUB_TASK_COMPLETE\", \"thought\": \"Goal met, advancing...\"} as the FINAL object in your returned array. If you do not explicitly output this, the system will infinitely loop on the current sub-task. Only execute actions related to the current sub-task; do not preemptively perform actions for the next logical step until the system prompts you with the next sub-task.\n\n"
             "CRUCIAL INSTRUCTION: Return a valid JSON array containing one or more action objects. Do not return text outside the array.\n"
-            "Example: [{\"action\": \"TYPE\", \"target_id\": \"1\", \"text\": \"London\", \"thought\": \"Typing origin\"}, {\"action\": \"CLICK\", \"target_id\": \"2\", \"thought\": \"Clicking search\"}]\n"
+            "Example: [{\"action\": \"TYPE\", \"coordinates\": [350, 420], \"text\": \"London\", \"thought\": \"Typing origin\"}, {\"action\": \"CLICK\", \"coordinates\": [800, 420], \"thought\": \"Clicking search\"}]\n"
         )
         if global_prompt:
             system_instruction += f"Global Instructions:\n{global_prompt}\n\n"
@@ -398,8 +409,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             except Exception as e:
                 print(f"Error fetching playbook rules for {current_url}: {e}")
 
-        ui_elements_str = json.dumps(ui_elements, indent=2)
-        prompt = f"UI Elements:\n{ui_elements_str}\n\nDetermine the correct target element and output the JSON array of actions."
+        prompt = f"Determine the correct target element from the image and output the JSON array of actions using [x, y] coordinates."
 
         if current_sub_task:
             prompt += f"\n\nCurrent Sub-Task to execute: {current_sub_task}"
@@ -423,8 +433,11 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                         type=types.Type.OBJECT,
                         properties={
                             "action": types.Schema(type=types.Type.STRING),
-                            "target_id": types.Schema(type=types.Type.STRING),
-                            "xpath": types.Schema(type=types.Type.STRING),
+                            "coordinates": types.Schema(
+                                type=types.Type.ARRAY,
+                                items=types.Schema(type=types.Type.NUMBER),
+                                description="[x, y] coordinates for CLICK/TYPE actions"
+                            ),
                             "text": types.Schema(type=types.Type.STRING),
                             "direction": types.Schema(type=types.Type.STRING),
                             "url": types.Schema(type=types.Type.STRING),
@@ -452,24 +465,20 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                     parsed_actions = []
                     for action_data in actions_data:
                         thought = action_data.get("thought", "")
-                        if action_data.get("action") == "CLICK" and "target_id" in action_data:
+                        if action_data.get("action") == "CLICK" and "coordinates" in action_data:
                             action_dict = {
                                 "action": "CLICK",
-                                "target_id": str(action_data["target_id"]),
+                                "coordinates": action_data["coordinates"],
                                 "thought": thought
                             }
-                            if "xpath" in action_data:
-                                action_dict["xpath"] = str(action_data["xpath"])
                             parsed_actions.append(action_dict)
-                        elif action_data.get("action") == "TYPE" and "target_id" in action_data and "text" in action_data:
+                        elif action_data.get("action") == "TYPE" and "coordinates" in action_data and "text" in action_data:
                             action_dict = {
                                 "action": "TYPE",
-                                "target_id": str(action_data["target_id"]),
+                                "coordinates": action_data["coordinates"],
                                 "text": str(action_data["text"]),
                                 "thought": thought
                             }
-                            if "xpath" in action_data:
-                                action_dict["xpath"] = str(action_data["xpath"])
                             parsed_actions.append(action_dict)
                         elif action_data.get("action") == "SCROLL" and "direction" in action_data:
                             parsed_actions.append({
@@ -495,15 +504,6 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                                 "key": str(action_data["key"]),
                                 "thought": thought
                             })
-                        elif action_data.get("action") == "HOVER" and "target_id" in action_data:
-                            action_dict = {
-                                "action": "HOVER",
-                                "target_id": str(action_data["target_id"]),
-                                "thought": thought
-                            }
-                            if "xpath" in action_data:
-                                action_dict["xpath"] = str(action_data["xpath"])
-                            parsed_actions.append(action_dict)
                         elif action_data.get("action") == "WAIT_FOR" and "selector" in action_data:
                             parsed_actions.append({
                                 "action": "WAIT_FOR",
@@ -553,24 +553,20 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             try:
                 action_data = json.loads(match_single.group(0))
                 thought = action_data.get("thought", "")
-                if action_data.get("action") == "CLICK" and "target_id" in action_data:
+                if action_data.get("action") == "CLICK" and "coordinates" in action_data:
                     action_dict = {
                         "action": "CLICK",
-                        "target_id": str(action_data["target_id"]),
+                        "coordinates": action_data["coordinates"],
                         "thought": thought
                     }
-                    if "xpath" in action_data:
-                        action_dict["xpath"] = str(action_data["xpath"])
                     return [action_dict]
-                elif action_data.get("action") == "TYPE" and "target_id" in action_data and "text" in action_data:
+                elif action_data.get("action") == "TYPE" and "coordinates" in action_data and "text" in action_data:
                     action_dict = {
                         "action": "TYPE",
-                        "target_id": str(action_data["target_id"]),
+                        "coordinates": action_data["coordinates"],
                         "text": str(action_data["text"]),
                         "thought": thought
                     }
-                    if "xpath" in action_data:
-                        action_dict["xpath"] = str(action_data["xpath"])
                     return [action_dict]
                 elif action_data.get("action") == "SCROLL" and "direction" in action_data:
                     return [{
@@ -596,15 +592,6 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                         "key": str(action_data["key"]),
                         "thought": thought
                     }]
-                elif action_data.get("action") == "HOVER" and "target_id" in action_data:
-                    action_dict = {
-                        "action": "HOVER",
-                        "target_id": str(action_data["target_id"]),
-                        "thought": thought
-                    }
-                    if "xpath" in action_data:
-                        action_dict["xpath"] = str(action_data["xpath"])
-                    return [action_dict]
                 elif action_data.get("action") == "WAIT_FOR" and "selector" in action_data:
                     return [{
                         "action": "WAIT_FOR",
