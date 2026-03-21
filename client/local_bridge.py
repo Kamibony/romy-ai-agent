@@ -61,7 +61,7 @@ class LocalBridgeManager:
 
     async def _run_server(self):
         self.loop = asyncio.get_running_loop()
-        self.server = await websockets.serve(self._handle_client, '127.0.0.1', self.port)
+        self.server = await websockets.serve(self._handle_client, '127.0.0.1', self.port, max_size=16 * 1024 * 1024)
         self.stop_event = asyncio.Event()
         logging.info(f"WebSocket local bridge server started on ws://127.0.0.1:{self.port}")
 

@@ -783,7 +783,7 @@ async function processCommandInternally(payload) {
         const apiPayload = {
             audio_base64: audioBase64,
             command_text: commandText,
-            ui_elements: uiElements,
+            ui_elements: [],
             screenshot_base64: screenshotBase64,
             thread_history: threadHistory
         };
