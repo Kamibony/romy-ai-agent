@@ -9,6 +9,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import queue
 import json
+import threading
 from datetime import datetime
 
 import uiautomation as auto
