@@ -33,6 +33,8 @@ MAX_UI_ELEMENTS = 75  # Payload size management for resilience
 ABORT_AGENT = False
 PAUSE_AGENT = False
 
+LOCAL_STATUS = {} # Dictionary to store local task statuses mapping doc_id to status
+
 def save_flight_record(doc_id: str, iteration: int, payload: dict, response: dict, action_executed: dict, screenshot_b64: str) -> None:
     """Saves a timestamped record of the ReAct cycle locally for debugging."""
     try:
@@ -133,6 +135,9 @@ def get_resilient_session() -> requests.Session:
 
 def firestore_update_document(collection: str, doc_id: str, updates: Dict[str, Any], delete_fields: list = None) -> None:
     """Updates a Firestore document using the REST API with retries for network resilience."""
+    if "status" in updates:
+        LOCAL_STATUS[doc_id] = updates["status"]
+
     if not CURRENT_TOKEN:
         logging.error("Missing token, cannot update Firestore.")
         return
@@ -1967,3 +1972,78 @@ def execute_voice_agent_loop() -> None:
 
     except Exception as e:
         logging.error(f"Error activating agent: {e}")
+
+
+import http.server
+import socketserver
+import urllib.parse
+from http import HTTPStatus
+
+class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        if self.path == '/api/run_command':
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+
+            try:
+                data = json.loads(post_data.decode('utf-8'))
+                doc_id = data.get("doc_id")
+                command_text = data.get("command_text", "")
+
+                if not doc_id or not command_text:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "Missing doc_id or command_text"}).encode())
+                    return
+
+                # Update status locally to pending immediately
+                LOCAL_STATUS[doc_id] = "pending"
+
+                COMMAND_QUEUE.put({
+                    "type": "remote",
+                    "doc_id": doc_id,
+                    "command_text": command_text,
+                    "audio_b64": ""
+                })
+
+                self.send_response(HTTPStatus.OK)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "queued", "doc_id": doc_id}).encode())
+
+            except json.JSONDecodeError:
+                self.send_response(HTTPStatus.BAD_REQUEST)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
+        else:
+            self.send_response(HTTPStatus.NOT_FOUND)
+            self.end_headers()
+
+    def do_GET(self):
+        parsed_path = urllib.parse.urlparse(self.path)
+        if parsed_path.path.startswith('/api/status/'):
+            doc_id = parsed_path.path.split('/')[-1]
+            status = LOCAL_STATUS.get(doc_id, "unknown")
+
+            self.send_response(HTTPStatus.OK)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"doc_id": doc_id, "status": status}).encode())
+        else:
+            self.send_response(HTTPStatus.NOT_FOUND)
+            self.end_headers()
+
+def start_local_api(port=8764):
+    """Starts the local API server in a daemon thread."""
+    def run_server():
+        try:
+            with socketserver.TCPServer(("127.0.0.1", port), LocalAPIHandler) as httpd:
+                logging.info(f"Started Local API Server on http://127.0.0.1:{port}")
+                httpd.serve_forever()
+        except OSError as e:
+            logging.error(f"Failed to start Local API Server: {e}")
+
+    t = threading.Thread(target=run_server, daemon=True)
+    t.start()
