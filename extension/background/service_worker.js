@@ -386,7 +386,7 @@ async function handleExecuteNativeAction(payload) {
             });
         }
         return { success: true };
-    } else if (action.action === "CLICK" || action.action === "TYPE" || action.action === "PASTE") {
+    } else if (action.action === "CLICK" || action.action === "TYPE" || action.action === "PASTE" || action.action === "HOVER") {
         if (!action.coordinates || !Array.isArray(action.coordinates) || action.coordinates.length !== 2) {
             sendTelemetryLog(`Coordinates missing for action ${action.action}. Cannot execute native action.`);
             return { success: false, error: "Coordinates missing for vision-based action." };
@@ -406,24 +406,35 @@ async function handleExecuteNativeAction(payload) {
                 });
             });
 
-            // Native Click using coordinates
-            await new Promise((resolve, reject) => {
-                chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
-                    type: 'mousePressed', x: x, y: y, button: 'left', clickCount: 1
-                }, (result) => {
-                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                    else resolve(result);
+            if (action.action === "HOVER") {
+                await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
+                        type: 'mouseMoved', x: x, y: y
+                    }, (result) => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve(result);
+                    });
                 });
-            });
-            await new Promise(r => setTimeout(r, 50));
-            await new Promise((resolve, reject) => {
-                chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
-                    type: 'mouseReleased', x: x, y: y, button: 'left', clickCount: 1
-                }, (result) => {
-                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                    else resolve(result);
+            } else {
+                // Native Click using coordinates
+                await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
+                        type: 'mousePressed', x: x, y: y, button: 'left', clickCount: 1
+                    }, (result) => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve(result);
+                    });
                 });
-            });
+                await new Promise(r => setTimeout(r, 50));
+                await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
+                        type: 'mouseReleased', x: x, y: y, button: 'left', clickCount: 1
+                    }, (result) => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve(result);
+                    });
+                });
+            }
 
             if (action.action === "TYPE") {
                 await new Promise(r => setTimeout(r, 100));
@@ -606,7 +617,7 @@ async function handleExecuteNativeAction(payload) {
             });
         }
     } else {
-        // SCROLL, PRESS_KEY, WAIT_FOR, HOVER, REPLY fall back to content script
+        // SCROLL, PRESS_KEY, WAIT_FOR, REPLY fall back to content script
         return await new Promise((resolve, reject) => {
             chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.EXECUTE_ACTION, payload: action }, (res) => {
                 if (chrome.runtime.lastError) resolve({error: chrome.runtime.lastError.message});
@@ -918,6 +929,161 @@ async function processCommandInternally(payload) {
                     }
                     totalActionsExecuted++;
                     await new Promise(r => setTimeout(r, 1000));
+                } else if (action.action === "CLICK" || action.action === "TYPE" || action.action === "PASTE" || action.action === "HOVER") {
+                    if (!action.coordinates || !Array.isArray(action.coordinates) || action.coordinates.length !== 2) {
+                        sendTelemetryLog(`Coordinates missing for action ${action.action}. Cannot execute native action.`);
+                        throw new Error("Coordinates missing for vision-based action.");
+                    }
+
+                    let x = Math.round(action.coordinates[0]);
+                    let y = Math.round(action.coordinates[1]);
+
+                    try {
+                        await new Promise((resolve, reject) => {
+                            chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
+                                if (chrome.runtime.lastError && !chrome.runtime.lastError.message.includes("Cannot attach to this target")) {
+                                    reject(new Error(chrome.runtime.lastError.message));
+                                } else {
+                                    resolve();
+                                }
+                            });
+                        });
+
+                        if (action.action === "HOVER") {
+                            await new Promise((resolve, reject) => {
+                                chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
+                                    type: 'mouseMoved', x: x, y: y
+                                }, (result) => {
+                                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                    else resolve(result);
+                                });
+                            });
+                        } else {
+                            // Native Click using coordinates
+                            await new Promise((resolve, reject) => {
+                                chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
+                                    type: 'mousePressed', x: x, y: y, button: 'left', clickCount: 1
+                                }, (result) => {
+                                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                    else resolve(result);
+                                });
+                            });
+                            await new Promise(r => setTimeout(r, 50));
+                            await new Promise((resolve, reject) => {
+                                chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
+                                    type: 'mouseReleased', x: x, y: y, button: 'left', clickCount: 1
+                                }, (result) => {
+                                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                    else resolve(result);
+                                });
+                            });
+                        }
+
+                        if (action.action === "TYPE") {
+                            await new Promise(r => setTimeout(r, 100));
+
+                            // Dispatch individual key events to properly trigger React/Vue synthetic events
+                            for (let i = 0; i < action.text.length; i++) {
+                                const char = action.text[i];
+                                await new Promise((resolve, reject) => {
+                                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                                        type: 'keyDown',
+                                        text: char,
+                                        unmodifiedText: char,
+                                        key: char
+                                    }, (result) => {
+                                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                        else resolve(result);
+                                    });
+                                });
+
+                                await new Promise((resolve, reject) => {
+                                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                                        type: 'keyUp',
+                                        key: char
+                                    }, (result) => {
+                                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                        else resolve(result);
+                                    });
+                                });
+                            }
+                        } else if (action.action === "PASTE") {
+                            await new Promise(r => setTimeout(r, 100));
+
+                            // Select all via Ctrl+A / Cmd+A
+                            await new Promise((resolve, reject) => {
+                                chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                                    type: 'keyDown',
+                                    modifiers: 2, // Ctrl (or Cmd on Mac)
+                                    key: 'a'
+                                }, (result) => {
+                                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                    else resolve(result);
+                                });
+                            });
+                            await new Promise((resolve, reject) => {
+                                chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                                    type: 'keyUp',
+                                    modifiers: 2,
+                                    key: 'a'
+                                }, (result) => {
+                                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                    else resolve(result);
+                                });
+                            });
+
+                            // Delete selection
+                            await new Promise((resolve, reject) => {
+                                chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                                    type: 'keyDown',
+                                    key: 'Backspace'
+                                }, (result) => {
+                                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                    else resolve(result);
+                                });
+                            });
+                            await new Promise((resolve, reject) => {
+                                chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchKeyEvent', {
+                                    type: 'keyUp',
+                                    key: 'Backspace'
+                                }, (result) => {
+                                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                    else resolve(result);
+                                });
+                            });
+
+                            // Direct value override and dispatch input event
+                            await new Promise((resolve, reject) => {
+                                chrome.debugger.sendCommand({ tabId: tab.id }, 'Runtime.evaluate', {
+                                    expression: `
+                                        (function() {
+                                            let el = document.activeElement;
+                                            if (!el) return;
+                                            let desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value") ||
+                                                       Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value");
+                                            if (desc && desc.set) {
+                                                desc.set.call(el, ${JSON.stringify(action.text)});
+                                            } else {
+                                                el.value = ${JSON.stringify(action.text)};
+                                            }
+                                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                                        })();
+                                    `,
+                                    returnByValue: true
+                                }, (result) => {
+                                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                                    else resolve(result);
+                                });
+                            });
+                        }
+                    } finally {
+                        chrome.debugger.detach({ tabId: tab.id }, () => {
+                            const err = chrome.runtime.lastError;
+                        });
+                    }
+                    totalActionsExecuted++;
+                    await new Promise(r => setTimeout(r, 1000));
                 } else if (action.action === "EXECUTE_JS") {
                     sendTelemetryLog(`Executing JS in ISOLATED world via CDP...`);
                     try {
@@ -995,7 +1161,7 @@ async function processCommandInternally(payload) {
                         });
                     }
                 } else {
-                    // Send other actions (CLICK, TYPE, SCROLL, PRESS_KEY, HOVER, WAIT_FOR) to the content script
+                    // Send other actions (SCROLL, PRESS_KEY, WAIT_FOR) to the content script
                     await new Promise((resolve, reject) => {
                         chrome.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.EXECUTE_ACTION, payload: action }, (res) => {
                             if (chrome.runtime.lastError) {
