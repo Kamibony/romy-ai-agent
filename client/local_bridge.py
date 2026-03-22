@@ -20,6 +20,9 @@ class LocalBridgeManager:
         self.condition = threading.Condition(self.lock)
         self.result_event = threading.Event()
 
+        # Chunk reassembly buffer
+        self.chunk_buffers = {}
+
     async def _handle_client(self, websocket):
         logging.info(f"WebSocket client connected from {websocket.remote_address}")
 
@@ -42,7 +45,32 @@ class LocalBridgeManager:
             async for message in websocket:
                 try:
                     data = json.loads(message)
-                    if 'type' in data and data['type'] == 'ping':
+                    if 'type' in data and data['type'] == 'chunk':
+                        msg_id = data.get('message_id')
+                        chunk_idx = data.get('chunk_index')
+                        total_chunks = data.get('total_chunks')
+                        chunk_data = data.get('data')
+
+                        if msg_id not in self.chunk_buffers:
+                            self.chunk_buffers[msg_id] = [None] * total_chunks
+
+                        self.chunk_buffers[msg_id][chunk_idx] = chunk_data
+
+                        if all(c is not None for c in self.chunk_buffers[msg_id]):
+                            full_msg = "".join(self.chunk_buffers[msg_id])
+                            del self.chunk_buffers[msg_id]
+
+                            try:
+                                reconstructed_data = json.loads(full_msg)
+                                if 'type' in reconstructed_data and reconstructed_data['type'] == 'result':
+                                    self.receive_result(reconstructed_data.get('payload', {}))
+                                elif 'type' in reconstructed_data and reconstructed_data['type'] == 'telemetry':
+                                    logging.info(f"Extension Telemetry: {reconstructed_data.get('payload')}")
+                                else:
+                                    logging.warning(f"Unknown reconstructed WebSocket message received: {reconstructed_data}")
+                            except json.JSONDecodeError:
+                                logging.error("Failed to decode reconstructed WebSocket message.")
+                    elif 'type' in data and data['type'] == 'ping':
                         await websocket.send(json.dumps({"type": "pong"}))
                     elif 'type' in data and data['type'] == 'result':
                         self.receive_result(data.get('payload', {}))
