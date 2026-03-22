@@ -103,7 +103,8 @@ def agent_worker_loop() -> None:
                 doc_id = task.get("doc_id")
                 command_text = task.get("command_text", "")
                 audio_b64 = task.get("audio_b64", "")
-                run_remote_agent_loop(doc_id, command_text, audio_b64)
+                client_context = task.get("client_context")
+                run_remote_agent_loop(doc_id, command_text, audio_b64, client_context)
             elif task_type == "voice":
                 execute_voice_agent_loop()
 
@@ -667,13 +668,14 @@ def load_client_profile() -> Dict[str, Any]:
             logging.error(f"Failed to load client_profile.json: {e}")
     return {}
 
-def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -> None:
+def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "", client_context: dict = None) -> None:
     """Runs the agent loop triggered by a remote text command."""
     if not CURRENT_TOKEN:
         logging.error("Error: Missing Firebase Token. Cannot execute remote command.")
         return
 
-    client_context = load_client_profile()
+    if client_context is None:
+        client_context = load_client_profile()
 
     try:
         logging.info(f"=== Remote Agent Activated for Document: {doc_id} ===")
@@ -2020,6 +2022,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 data = json.loads(post_data.decode('utf-8'))
                 doc_id = data.get("doc_id")
                 command_text = data.get("command_text", "")
+                client_context = data.get("client_context")
 
                 if not doc_id or not command_text:
                     self.send_response(HTTPStatus.BAD_REQUEST)
@@ -2031,12 +2034,33 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 # Update status locally to pending immediately
                 LOCAL_STATUS[doc_id] = "pending"
 
-                COMMAND_QUEUE.put({
+                # Push dummy document to Firestore to make it appear in the dashboard's live feed
+                # since the live feed queries remote_commands with a created_at timestamp
+                try:
+                    uid = _get_uid_from_token()
+                    if uid:
+                        # Use local time for timestamp in REST API if serverTimestamp() is not available
+                        now_str = datetime.utcnow().isoformat() + "Z"
+                        firestore_update_document("remote_commands", doc_id, {
+                            "uid": uid,
+                            "command": command_text,
+                            "status": "pending",
+                            "created_at": now_str
+                        })
+                except Exception as e:
+                    logging.error(f"Failed to create dummy remote command document for local API run: {e}")
+
+                command_payload = {
                     "type": "remote",
                     "doc_id": doc_id,
                     "command_text": command_text,
                     "audio_b64": ""
-                })
+                }
+
+                if client_context:
+                    command_payload["client_context"] = client_context
+
+                COMMAND_QUEUE.put(command_payload)
 
                 self.send_response(HTTPStatus.OK)
                 self.send_header('Content-type', 'application/json')
