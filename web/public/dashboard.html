@@ -292,7 +292,7 @@
             const sessionsQuery = query(
                 collection(db, "task_sessions"),
                 where("uid", "==", uid),
-                where("status", "==", "help_needed"),
+                where("status", "in", ["help_needed", "AWAITING_HUMAN_INPUT"]),
                 orderBy("created_at", "desc"),
                 limit(1)
             );
@@ -308,7 +308,7 @@
                         const cmdQ = query(
                             collection(db, "remote_commands"),
                             where("uid", "==", uid),
-                            where("status", "==", "help_needed"),
+                            where("status", "in", ["help_needed", "AWAITING_HUMAN_INPUT"]),
                             limit(1)
                         );
 
@@ -328,7 +328,7 @@
                         const cmdQ = query(
                             collection(db, "remote_commands"),
                             where("uid", "==", uid),
-                            where("status", "==", "help_needed"),
+                            where("status", "in", ["help_needed", "AWAITING_HUMAN_INPUT"]),
                             limit(1)
                         );
 
@@ -359,7 +359,17 @@
                     let html = '';
                     snapshot.forEach((doc) => {
                         const data = doc.data();
-                        const time = data.created_at ? data.created_at.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        let time = "Unknown time";
+                        if (data.created_at) {
+                            if (typeof data.created_at.toDate === 'function') {
+                                time = data.created_at.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                            } else if (typeof data.created_at === 'string') {
+                                time = new Date(data.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                            }
+                        } else {
+                            time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        }
+
                         const command = data.command || "Unknown command";
                         const status = data.status || "unknown";
 
@@ -367,7 +377,7 @@
                         if (status === "completed") statusColor = "text-green-600";
                         if (status === "in_progress") statusColor = "text-blue-600";
                         if (status === "failed") statusColor = "text-red-600";
-                        if (status === "help_needed") statusColor = "text-orange-600";
+                        if (status === "help_needed" || status === "AWAITING_HUMAN_INPUT") statusColor = "text-orange-600";
                         if (status === "pending") statusColor = "text-yellow-600";
 
                         html += `<div class="border-b border-gray-100 pb-2 mb-2"><span class="font-semibold text-gray-500">${time}</span> - Command: "${command}" | Status: <span class="${statusColor} font-semibold">${status}</span></div>`;
@@ -431,6 +441,12 @@
                 askHumanNoScreenshot.classList.add('hidden');
                 askHumanImgLink.href = cmdData.last_screenshot;
                 askHumanImgLink.style.display = 'inline';
+            } else if (cmdData && cmdData.screenshot_b64) {
+                askHumanScreenshot.src = `data:image/png;base64,${cmdData.screenshot_b64}`;
+                askHumanScreenshot.classList.remove('hidden');
+                askHumanNoScreenshot.classList.add('hidden');
+                askHumanImgLink.href = `data:image/png;base64,${cmdData.screenshot_b64}`;
+                askHumanImgLink.style.display = 'inline';
             } else {
                 askHumanScreenshot.classList.add('hidden');
                 askHumanNoScreenshot.classList.remove('hidden');
@@ -463,8 +479,8 @@
             try {
                 if (activeTaskId) {
                     await updateDoc(doc(db, "remote_commands", activeTaskId), {
-                        status: "pending",
-                        command: `[HUMAN GUIDANCE]: ${guidance}`, // The agent's python loop should pick this up or we restart it
+                        status: "in_progress",
+                        human_response: guidance,
                         updated_at: new Date()
                     });
                 }

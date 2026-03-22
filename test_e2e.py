@@ -33,11 +33,29 @@ def test_harness():
     Logs success/failure and execution time of each.
     """
     commands = [
-        "Navigate to alza.cz, search for 'MacBook Air M2', filter by 'Skladem', click on the first result, and add it to the cart.",
-        "Navigate to sreality.cz, select 'Pronájem', select 'Byty', set disposition to '2+kk', enter location 'Praha', and click 'Zobrazit'.",
-        "Navigate to czu.cz, open the 'Studium' menu, search for information regarding student internships ('praxe studentů'), and click on the first relevant article or portal link.",
-        "Navigate to jobs.cz, search for job title 'Python Developer', set location to 'Brno', check the 'Remote' filter if available, and search.",
-        "Navigate to pelikan.cz, set origin to 'Prague', set destination to 'London', select departure date '10/05/2026', and search."
+        {
+            "command_text": "Navigate to alza.cz, search for 'MacBook Air M2', filter by 'Skladem', click on the first result, and add it to the cart."
+        },
+        {
+            "command_text": "Navigate to sreality.cz, select 'Pronájem', select 'Byty', set disposition to '2+kk', enter location 'Praha', and click 'Zobrazit'.",
+            "client_context": {
+                "client_id": "sreality",
+                "rules": [
+                    "Always accept cookies",
+                    "Filter by Prague",
+                    "Only ground floor"
+                ]
+            }
+        },
+        {
+            "command_text": "Navigate to czu.cz, open the 'Studium' menu, search for information regarding student internships ('praxe studentů'), and click on the first relevant article or portal link."
+        },
+        {
+            "command_text": "Navigate to jobs.cz, search for job title 'Python Developer', set location to 'Brno', check the 'Remote' filter if available, and search."
+        },
+        {
+            "command_text": "Navigate to pelikan.cz, set origin to 'Prague', set destination to 'London', select departure date '10/05/2026', and search."
+        }
     ]
 
     print("=" * 60)
@@ -51,7 +69,9 @@ def test_harness():
 
     results = []
 
-    for i, cmd in enumerate(commands, 1):
+    for i, cmd_obj in enumerate(commands, 1):
+        cmd = cmd_obj["command_text"]
+        client_context = cmd_obj.get("client_context")
         doc_id = f"e2e_test_run_{uuid.uuid4().hex[:8]}"
         print(f"\n[{i}/{len(commands)}] Queueing command: {cmd}")
         print(f"Tracking session ID: {doc_id}")
@@ -59,10 +79,14 @@ def test_harness():
         start_time = time.time()
 
         # Enqueue the command via local API
-        payload = json.dumps({
+        payload_dict = {
             "doc_id": doc_id,
             "command_text": cmd
-        }).encode('utf-8')
+        }
+        if client_context:
+            payload_dict["client_context"] = client_context
+
+        payload = json.dumps(payload_dict).encode('utf-8')
 
         req = urllib.request.Request(f"{LOCAL_API_URL}/run_command", data=payload, headers={'Content-Type': 'application/json'}, method='POST')
         try:
