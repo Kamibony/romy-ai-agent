@@ -379,7 +379,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "- {\"action\": \"OPEN_TAB\", \"url\": \"<url>\"}\n"
             "- {\"action\": \"PRESS_KEY\", \"key\": \"<key>\"}\n"
             "- {\"action\": \"WAIT_FOR\", \"selector\": \"<css_selector>\", \"max_wait_seconds\": 5}\n"
-            "- {\"action\": \"WAIT\", \"seconds\": 2} (use this if the page or an element is actively loading, e.g., a visible spinner, or you need to give the DOM a moment to settle before checking the state again)\n"
+            "- {\"action\": \"WAIT\", \"seconds\": 2} (use this if the page or an element is actively loading, e.g., a visible spinner, a white screen, a half-loaded UI, or you need to give the DOM a moment to settle before checking the state again)\n"
             "- {\"action\": \"RESET_VIEW\"} (use this to click outside or press Escape to close active overlays, dropdowns, date pickers, or modals and let the UI settle before verifying the state)\n"
             "- {\"action\": \"EXECUTE_JS\", \"code\": \"<javascript_code>\"}\n"
             "- {\"action\": \"REPLY\", \"text\": \"<the answer>\"}\n"
