@@ -4,14 +4,78 @@ import logging
 import threading
 import time
 import websockets
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import urllib.parse
+
+
+class StateAPIHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        if self.path == '/api/state':
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+
+            try:
+                data = json.loads(post_data.decode('utf-8'))
+
+                # Send the result to the global bridge instance
+                bridge.receive_result(data)
+
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+
+                # Enable CORS for the extension
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
+                self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            except json.JSONDecodeError:
+                logging.error("Failed to decode JSON from HTTP POST payload")
+                self.send_response(400)
+                self.send_header('Content-type', 'application/json')
+
+                # Enable CORS
+                self.send_header('Access-Control-Allow-Origin', '*')
+
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
+            except Exception as e:
+                logging.error(f"Error handling HTTP POST payload: {e}")
+                self.send_response(500)
+                self.send_header('Content-type', 'application/json')
+
+                # Enable CORS
+                self.send_header('Access-Control-Allow-Origin', '*')
+
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.end_headers()
+
+    def log_message(self, format, *args):
+        # Suppress default logging of requests
+        pass
 
 class LocalBridgeManager:
-    def __init__(self, port=8765):
+    def __init__(self, port=8765, http_port=8766):
         self.port = port
+        self.http_port = http_port
         self.active_websocket = None
         self.pending_command = None
         self.result = None
         self.server_thread = None
+        self.http_thread = None
+        self.http_server = None
         self.loop = None
         self.server = None
 
@@ -119,11 +183,21 @@ class LocalBridgeManager:
             logging.error(f"WebSocket server thread exception: {e}")
 
     def start(self):
-        if self.server_thread is not None and self.server_thread.is_alive():
-            return
+        if self.server_thread is None or not self.server_thread.is_alive():
+            self.server_thread = threading.Thread(target=self._start_loop, daemon=True)
+            self.server_thread.start()
 
-        self.server_thread = threading.Thread(target=self._start_loop, daemon=True)
-        self.server_thread.start()
+        if self.http_thread is None or not self.http_thread.is_alive():
+            self.http_thread = threading.Thread(target=self._start_http_server, daemon=True)
+            self.http_thread.start()
+
+    def _start_http_server(self):
+        try:
+            self.http_server = HTTPServer(('127.0.0.1', self.http_port), StateAPIHandler)
+            logging.info(f"HTTP local bridge server started on http://127.0.0.1:{self.http_port}")
+            self.http_server.serve_forever()
+        except Exception as e:
+            logging.error(f"HTTP server thread exception: {e}")
 
     def stop(self):
         if self.loop and self.loop.is_running():
@@ -131,6 +205,13 @@ class LocalBridgeManager:
 
         if self.server_thread:
             self.server_thread.join(timeout=2)
+
+        if self.http_server:
+            self.http_server.shutdown()
+            self.http_server.server_close()
+
+        if self.http_thread:
+            self.http_thread.join(timeout=2)
 
     def delegate_command(self, payload: dict, timeout=300):
         # Import inside the method to avoid circular imports if any
