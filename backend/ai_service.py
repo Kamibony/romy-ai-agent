@@ -272,7 +272,7 @@ def classify_intent_with_gemini(command_text: str) -> str:
         print(f"Error classifying intent: {e}")
         return "OS"
 
-def synthesize_playbook_rule_with_gemini(domain: str, execution_telemetry: str) -> Optional[str]:
+def synthesize_playbook_rule_with_gemini(domain: str, execution_telemetry: str, client_id: str = None) -> Optional[str]:
     """
     Synthesizer Agent (Sleep Cycle): Reviews execution telemetry for a domain and extracts a universal rule.
     Saves the rule to ChromaDB if found.
@@ -301,14 +301,14 @@ def synthesize_playbook_rule_with_gemini(domain: str, execution_telemetry: str) 
 
         rule = response.text.strip()
         if rule:
-            save_playbook_rule(domain, rule)
+            save_playbook_rule(domain, rule, client_id=client_id)
             return rule
         return None
     except Exception as e:
         print(f"Error synthesizing playbook rule: {e}")
         return None
 
-def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[str] = None, command_text: Optional[str] = None, thread_history: str = "", screenshot_base64: Optional[str] = None, current_sub_task: Optional[str] = None, current_url: Optional[str] = None) -> list[Dict[str, Any]]:
+def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[str] = None, command_text: Optional[str] = None, thread_history: str = "", screenshot_base64: Optional[str] = None, current_sub_task: Optional[str] = None, current_url: Optional[str] = None, client_context: Optional[Dict[str, Any]] = None) -> list[Dict[str, Any]]:
     """
     Uses Gemini 2.5 Flash to process audio/text commands, a visual screenshot, and UI elements, returning an array of one or more actions.
     """
@@ -396,13 +396,21 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
         if global_prompt:
             system_instruction += f"Global Instructions:\n{global_prompt}\n\n"
 
+        client_id = None
+        if client_context:
+            system_instruction += "\n\n[CLIENT PROFILE CONTEXT]:\n"
+            system_instruction += f"You are acting on behalf of the following client profile:\n"
+            system_instruction += json.dumps(client_context, indent=2) + "\n"
+            system_instruction += "Adhere to these business rules, preferred UI behaviors, and roles when executing tasks.\n\n"
+            client_id = client_context.get("client_id")
+
         if current_url:
             from urllib.parse import urlparse
             try:
                 domain = urlparse(current_url).netloc
                 if domain:
                     domain = domain.replace("www.", "")
-                    playbook_rules = get_playbook_rules(domain)
+                    playbook_rules = get_playbook_rules(domain, client_id=client_id)
                     if playbook_rules:
                         system_instruction += f"\n\n[SITE_SPECIFIC_RULE] for {domain}:\n"
                         for rule in playbook_rules:

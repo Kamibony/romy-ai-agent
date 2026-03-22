@@ -1,0 +1,12 @@
+{
+  "client_id": "sreality_pilot",
+  "name": "Sreality",
+  "business_rules": [
+    "Always search for apartments (byty) unless specified otherwise.",
+    "Prioritize properties with a balcony or terrace."
+  ],
+  "preferred_ui_behaviors": [
+    "Wait for the map to fully load before extracting listing details."
+  ],
+  "role": "Real Estate Agent"
+}

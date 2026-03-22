@@ -20,6 +20,7 @@ class AgentCommandRequest(BaseModel):
     current_sub_task: Optional[str] = None
     screenshot_base64: Optional[str] = None
     current_url: Optional[str] = None
+    client_context: Optional[Dict[str, Any]] = None
 
 class ClassifyIntentRequest(BaseModel):
     command_text: Optional[str] = None
@@ -40,6 +41,7 @@ class CriticVerifyRequest(BaseModel):
 class SynthesizePlaybookRequest(BaseModel):
     domain: str
     execution_telemetry: str
+    client_id: Optional[str] = None
 
 # Allow all origins, methods, and headers for CORS (adjust as needed in production)
 app.add_middleware(
@@ -113,7 +115,7 @@ def synthesize_playbook(request: SynthesizePlaybookRequest, uid: str = Depends(v
             detail="User license is not active.",
         )
 
-    rule = synthesize_playbook_rule_with_gemini(request.domain, request.execution_telemetry)
+    rule = synthesize_playbook_rule_with_gemini(request.domain, request.execution_telemetry, client_id=request.client_id)
     return {"status": "ok", "rule": rule}
 
 @app.post("/api/classify_intent")
@@ -188,7 +190,8 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
             thread_history=thread_history,
             screenshot_base64=request.screenshot_base64,
             current_sub_task=request.current_sub_task,
-            current_url=request.current_url
+            current_url=request.current_url,
+            client_context=request.client_context
         )
         print(f"Gemini action list: {action_list}")
 

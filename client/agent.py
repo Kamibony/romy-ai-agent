@@ -656,11 +656,24 @@ def classify_intent(command_text: str, audio_b64: str) -> Tuple[str, str]:
         logging.error(f"Error classifying intent with backend: {e}. Defaulting to OS.")
         return "OS", command_text
 
+def load_client_profile() -> Dict[str, Any]:
+    """Loads the client profile from client_profile.json if it exists."""
+    profile_path = os.path.join(os.path.dirname(__file__), "client_profile.json")
+    if os.path.exists(profile_path):
+        try:
+            with open(profile_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logging.error(f"Failed to load client_profile.json: {e}")
+    return {}
+
 def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -> None:
     """Runs the agent loop triggered by a remote text command."""
     if not CURRENT_TOKEN:
         logging.error("Error: Missing Firebase Token. Cannot execute remote command.")
         return
+
+    client_context = load_client_profile()
 
     try:
         logging.info(f"=== Remote Agent Activated for Document: {doc_id} ===")
@@ -783,7 +796,8 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                         "command_text": command_text,
                         "current_sub_task": current_sub_task,
                         "screenshot_base64": screenshot_base64,
-                        "current_url": current_url
+                        "current_url": current_url,
+                        "client_context": client_context
                     }
                     if sub_task_iteration == 0 and sub_task_idx == 0 and audio_b64:
                         payload["audio_base64"] = audio_b64
@@ -1028,7 +1042,8 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
 
             payload = {
                 "ui_elements": ui_elements,
-                "session_id": doc_id
+                "session_id": doc_id,
+                "client_context": client_context
             }
             if iteration == 0 and audio_b64:
                 payload["audio_base64"] = audio_b64
@@ -1341,6 +1356,8 @@ def execute_voice_agent_loop() -> None:
         logging.error("Error: Missing Firebase Token. Please log in first.")
         return
 
+    client_context = load_client_profile()
+
     try:
         logging.info("=== Agent Activated: Ready for commands ===")
 
@@ -1483,7 +1500,8 @@ def execute_voice_agent_loop() -> None:
                         "command_text": command_text,
                         "current_sub_task": current_sub_task,
                         "screenshot_base64": screenshot_base64,
-                        "current_url": current_url
+                        "current_url": current_url,
+                        "client_context": client_context
                     }
                     if sub_task_iteration == 0 and sub_task_idx == 0 and audio_b64:
                         payload["audio_base64"] = audio_b64
@@ -1772,7 +1790,8 @@ def execute_voice_agent_loop() -> None:
                 "ui_elements": ui_elements,
                 "session_id": doc_id,
                 "command_text": command_text,
-                "current_sub_task": current_sub_task
+                "current_sub_task": current_sub_task,
+                "client_context": client_context
             }
             if sub_task_iteration == 0 and sub_task_idx == 0 and audio_b64:
                 payload["audio_base64"] = audio_b64
