@@ -6,6 +6,43 @@ import { getAuthToken } from '../utils/auth.js';
 // Central orchestrator for the Chrome Extension
 console.log("Romy Agent Service Worker initialized.");
 
+function generateId() {
+    return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+}
+
+async function sendChunkedMessage(ws, type, payload) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        console.error("WebSocket not open. Cannot send chunked message.");
+        return;
+    }
+
+    const messageStr = JSON.stringify({ type, payload });
+    const chunkSize = 128 * 1024; // 128KB chunks
+    const totalChunks = Math.ceil(messageStr.length / chunkSize);
+    const messageId = generateId();
+
+    for (let i = 0; i < totalChunks; i++) {
+        const start = i * chunkSize;
+        const end = Math.min(start + chunkSize, messageStr.length);
+        const chunk = messageStr.substring(start, end);
+
+        const chunkMsg = JSON.stringify({
+            type: 'chunk',
+            message_id: messageId,
+            chunk_index: i,
+            total_chunks: totalChunks,
+            data: chunk
+        });
+
+        ws.send(chunkMsg);
+
+        // Yield to the event loop occasionally to avoid blocking the thread or flooding the socket buffer
+        if (i % 10 === 0) {
+            await new Promise(resolve => setTimeout(resolve, 1));
+        }
+    }
+}
+
 let isRecording = false;
 let isProcessing = false;
 
@@ -77,11 +114,7 @@ function connectLocalBridge() {
                     }
 
                     // Send result back
-                    if (localBridgeWs && localBridgeWs.readyState === WebSocket.OPEN) {
-                        localBridgeWs.send(JSON.stringify({ type: 'result', payload: result }));
-                    } else {
-                        console.error("WebSocket not open. Cannot send result.");
-                    }
+                    await sendChunkedMessage(localBridgeWs, 'result', result);
                 }
             } catch (err) {
                 console.error("Error handling WebSocket message:", err);
@@ -208,7 +241,9 @@ function sendTelemetryLog(message) {
     });
     // Send to local Python agent to aid debugging and maintain active connection
     if (localBridgeWs && localBridgeWs.readyState === WebSocket.OPEN) {
-        localBridgeWs.send(JSON.stringify({ type: 'telemetry', payload: message }));
+        sendChunkedMessage(localBridgeWs, 'telemetry', message).catch(err => {
+            console.error("Failed to send telemetry chunked:", err);
+        });
     }
 }
 
