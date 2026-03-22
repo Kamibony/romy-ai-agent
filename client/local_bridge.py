@@ -42,9 +42,12 @@ class LocalBridgeManager:
             async for message in websocket:
                 try:
                     data = json.loads(message)
-                    if 'type' in data and data['type'] == 'result':
+                    if 'type' in data and data['type'] == 'ping':
+                        await websocket.send(json.dumps({"type": "pong"}))
+                    elif 'type' in data and data['type'] == 'result':
                         self.receive_result(data.get('payload', {}))
                     elif 'type' in data and data['type'] == 'telemetry':
+                        # Log extension telemetry, don't spam if it's just a keep-alive
                         logging.info(f"Extension Telemetry: {data.get('payload')}")
                     else:
                         logging.warning(f"Unknown WebSocket message received: {data}")
@@ -61,7 +64,14 @@ class LocalBridgeManager:
 
     async def _run_server(self):
         self.loop = asyncio.get_running_loop()
-        self.server = await websockets.serve(self._handle_client, '127.0.0.1', self.port, max_size=16 * 1024 * 1024) # 16MB max_size buffer restored to prevent dropping connection on large base64 screenshots
+        self.server = await websockets.serve(
+            self._handle_client,
+            '127.0.0.1',
+            self.port,
+            max_size=32 * 1024 * 1024, # Increased to 32MB for high-res uncompressed frames
+            ping_interval=None,        # Disable default pings to avoid timeout during long vision captures
+            ping_timeout=None
+        )
         self.stop_event = asyncio.Event()
         logging.info(f"WebSocket local bridge server started on ws://127.0.0.1:{self.port}")
 

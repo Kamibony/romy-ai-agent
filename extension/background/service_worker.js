@@ -22,29 +22,44 @@ async function setupOffscreenDocument(path) {
 let localBridgeWs = null;
 let reconnectTimeout = null;
 let reconnectAttempts = 0;
+let isConnecting = false;
+let heartbeatInterval = null;
 
 function connectLocalBridge() {
-    if (localBridgeWs) {
+    if (localBridgeWs || isConnecting) {
         return;
     }
 
+    isConnecting = true;
     console.log(`Connecting to local bridge via WebSocket... (Attempt ${reconnectAttempts + 1})`);
     try {
         localBridgeWs = new WebSocket('ws://127.0.0.1:8765');
 
         localBridgeWs.onopen = () => {
+            isConnecting = false;
             console.log("WebSocket connected to local bridge.");
             reconnectAttempts = 0; // Reset counter on successful connection
             if (reconnectTimeout) {
                 clearTimeout(reconnectTimeout);
                 reconnectTimeout = null;
             }
+
+            // Start heartbeat to keep connection alive
+            if (heartbeatInterval) clearInterval(heartbeatInterval);
+            heartbeatInterval = setInterval(() => {
+                if (localBridgeWs && localBridgeWs.readyState === WebSocket.OPEN) {
+                    localBridgeWs.send(JSON.stringify({ type: 'ping' }));
+                }
+            }, 10000); // 10 seconds
         };
 
         localBridgeWs.onmessage = async (event) => {
             try {
                 const msg = JSON.parse(event.data);
-                if (msg.type === 'command') {
+                if (msg.type === 'pong') {
+                    // Definitively keep Service Worker V3 alive
+                    chrome.runtime.getPlatformInfo(() => { /* dummy callback */ });
+                } else if (msg.type === 'command') {
                     const cmd = msg.payload;
                     console.log("Received command from Python Agent:", cmd);
                     let result;
@@ -74,7 +89,9 @@ function connectLocalBridge() {
         };
 
         localBridgeWs.onclose = () => {
+            isConnecting = false;
             localBridgeWs = null;
+            if (heartbeatInterval) clearInterval(heartbeatInterval);
             reconnectAttempts++;
             // Exponential backoff, max 30 seconds
             const backoff = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
@@ -84,12 +101,13 @@ function connectLocalBridge() {
 
         localBridgeWs.onerror = (error) => {
             // Silence network errors to avoid spamming the console when Python agent is down
-            // console.error("WebSocket error:", error);
+            isConnecting = false;
             if (localBridgeWs) {
                 localBridgeWs.close(); // Force close to trigger reconnect
             }
         };
     } catch (e) {
+        isConnecting = false;
         console.error("Error setting up WebSocket:", e);
         reconnectAttempts++;
         const backoff = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
@@ -122,6 +140,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         case MESSAGE_TYPES.GET_STATE:
             sendResponse({ isRecording, isProcessing });
+            return false;
+
+        case MESSAGE_TYPES.TELEMETRY_LOG:
+            // Explicitly handle TELEMETRY_LOG sent from background script itself or other contexts
+            // so we don't trigger the "Unknown message type" warning
             return false;
 
         // Future OS actions handler (Phase 2)
@@ -177,12 +200,16 @@ async function handleStopRecording(sendResponse) {
     }
 }
 
-// Helper to send telemetry logs to the popup
+// Helper to send telemetry logs to the popup and local bridge
 function sendTelemetryLog(message) {
     console.log(`[Telemetry] ${message}`);
     chrome.runtime.sendMessage({ type: MESSAGE_TYPES.TELEMETRY_LOG, payload: message }).catch(() => {
         // Popup might be closed, ignore
     });
+    // Send to local Python agent to aid debugging and maintain active connection
+    if (localBridgeWs && localBridgeWs.readyState === WebSocket.OPEN) {
+        localBridgeWs.send(JSON.stringify({ type: 'telemetry', payload: message }));
+    }
 }
 
 async function handleGetState(payload) {
