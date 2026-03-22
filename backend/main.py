@@ -6,6 +6,7 @@ from typing import Optional, List, Dict, Any
 from auth import verify_firebase_token
 from db import check_user_license, get_task_session, update_task_session, create_task_session
 from ai_service import process_with_gemini, transcribe_audio_with_gemini, classify_intent_with_gemini, pre_flight_check_with_gemini, supervisor_plan_with_gemini, critic_verify_with_gemini, synthesize_playbook_rule_with_gemini
+from memory import get_playbook_rules
 from firebase_admin import firestore
 
 app = FastAPI(title="ROMY AI Agent Backend")
@@ -103,6 +104,19 @@ def supervisor_plan(request: SupervisorPlanRequest, uid: str = Depends(verify_fi
 
     sub_tasks = supervisor_plan_with_gemini(request.command_text)
     return {"sub_tasks": sub_tasks}
+
+@app.get("/api/playbook_rules")
+def fetch_playbook_rules(domain: str, client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token)):
+    """
+    Endpoint to retrieve playbook rules for a specific domain and client_id from ChromaDB.
+    """
+    if not check_user_license(uid):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User license is not active.",
+        )
+    rules = get_playbook_rules(domain=domain, client_id=client_id)
+    return {"status": "ok", "rules": rules}
 
 @app.post("/api/synthesize_playbook")
 def synthesize_playbook(request: SynthesizePlaybookRequest, uid: str = Depends(verify_firebase_token)):
