@@ -908,7 +908,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "") -
                                 logging.info(f"Agent requested WAIT for {wait_seconds} seconds.")
                                 time.sleep(wait_seconds)
                                 # No need to delegate to extension, just sleep locally and loop will get fresh state next
-                                continue
+                                break
                             elif action_upper == "ASK_HUMAN":
                                 reason = act.get("reason", "No reason provided")
                                 logging.info(f"Agent asking human for help: {reason}")
@@ -1606,7 +1606,7 @@ def execute_voice_agent_loop() -> None:
                                 logging.info(f"Agent requested WAIT for {wait_seconds} seconds.")
                                 time.sleep(wait_seconds)
                                 # No need to delegate to extension, just sleep locally and loop will get fresh state next
-                                continue
+                                break
                             elif action_upper == "ASK_HUMAN":
                                 reason = act.get("reason", "No reason provided")
                                 logging.info(f"Agent asking human for help: {reason}")
