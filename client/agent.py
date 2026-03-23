@@ -2013,6 +2013,16 @@ import urllib.parse
 from http import HTTPStatus
 
 class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
+    def end_headers(self):
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        super().end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(HTTPStatus.OK)
+        self.end_headers()
+
     def do_POST(self):
         if self.path == '/api/run_command':
             content_length = int(self.headers['Content-Length'])
@@ -2074,7 +2084,9 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
         else:
             self.send_response(HTTPStatus.NOT_FOUND)
+            self.send_header('Content-type', 'application/json')
             self.end_headers()
+            self.wfile.write(json.dumps({"error": "Not found"}).encode())
 
     def do_GET(self):
         parsed_path = urllib.parse.urlparse(self.path)
@@ -2086,9 +2098,110 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
             self.send_header('Content-type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps({"doc_id": doc_id, "status": status}).encode())
-        else:
-            self.send_response(HTTPStatus.NOT_FOUND)
+        elif parsed_path.path == '/api/ping':
+            self.send_response(HTTPStatus.OK)
+            self.send_header('Content-type', 'application/json')
             self.end_headers()
+            self.wfile.write(json.dumps({"status": "ok"}).encode())
+        elif parsed_path.path == '/api/playbook_rules':
+            # Extract domain and client_id from query params
+            query_params = urllib.parse.parse_qs(parsed_path.query)
+            domain = query_params.get('domain', [''])[0]
+            client_id = query_params.get('client_id', [''])[0]
+
+            if not domain:
+                self.send_response(HTTPStatus.BAD_REQUEST)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Missing domain parameter"}).encode())
+                return
+
+            if not CURRENT_TOKEN:
+                self.send_response(HTTPStatus.UNAUTHORIZED)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Not authenticated"}).encode())
+                return
+
+            base_url = BACKEND_URL.split("/api/v1")[0] if "/api/v1" in BACKEND_URL else BACKEND_URL.rsplit('/', 1)[0]
+            if not base_url.endswith("/"):
+                base_url += "/"
+
+            backend_url = f"{base_url.rstrip('/')}/api/playbook_rules?domain={urllib.parse.quote(domain)}"
+            if client_id:
+                backend_url += f"&client_id={urllib.parse.quote(client_id)}"
+
+            headers = {
+                "Authorization": f"Bearer {CURRENT_TOKEN}",
+                "Content-Type": "application/json"
+            }
+
+            try:
+                with get_resilient_session() as session:
+                    response = session.get(backend_url, headers=headers, timeout=10)
+                response.raise_for_status()
+
+                self.send_response(HTTPStatus.OK)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(response.content)
+            except Exception as e:
+                logging.error(f"Error fetching playbook rules from backend: {e}")
+                self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode())
+        else:
+            # Try to serve static files from web/public
+            import mimetypes
+
+            # Map paths
+            filepath = parsed_path.path
+            if filepath == '/':
+                filepath = '/index.html'
+
+            # Construct absolute path to web/public directory
+            # Assuming agent.py is in client/
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            public_dir = os.path.join(base_dir, 'web', 'public')
+
+            # Remove leading slash for os.path.join
+            if filepath.startswith('/'):
+                filepath = filepath[1:]
+
+            full_path = os.path.abspath(os.path.join(public_dir, filepath))
+
+            # Security check to prevent path traversal
+            if not full_path.startswith(os.path.abspath(public_dir)):
+                self.send_response(HTTPStatus.FORBIDDEN)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Forbidden"}).encode())
+                return
+
+            if os.path.exists(full_path) and os.path.isfile(full_path):
+                try:
+                    with open(full_path, 'rb') as f:
+                        content = f.read()
+
+                    content_type, _ = mimetypes.guess_type(full_path)
+                    if not content_type:
+                        content_type = 'application/octet-stream'
+
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header('Content-type', content_type)
+                    self.end_headers()
+                    self.wfile.write(content)
+                except Exception as e:
+                    self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": str(e)}).encode())
+            else:
+                self.send_response(HTTPStatus.NOT_FOUND)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Not found"}).encode())
 
 def start_local_api(port=8764):
     """Starts the local API server in a daemon thread."""
