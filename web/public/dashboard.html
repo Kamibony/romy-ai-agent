@@ -72,8 +72,8 @@
                 </div>
 
                 <div>
-                    <label for="client-business-rules" class="block text-sm font-medium text-gray-700">Business Rules & Guidelines</label>
-                    <textarea id="client-business-rules" rows="6" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2 font-mono text-sm" placeholder='e.g., {"client_id": "sreality", "rules": ["Always accept cookies", "Filter by Prague"]}'></textarea>
+                    <label for="client-business-rules" class="block text-sm font-medium text-gray-700">Business Rules & Guidelines (One per line)</label>
+                    <textarea id="client-business-rules" rows="6" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2 font-sans text-sm" placeholder='e.g.&#10;Always accept cookies&#10;Filter by Prague'></textarea>
                 </div>
                 <div>
                     <button id="save-client-profile-btn" class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
@@ -197,8 +197,8 @@
         <section class="bg-white rounded-lg shadow-md p-6 border border-gray-200 mt-8">
             <h2 class="text-2xl font-semibold mb-4 text-gray-800 border-b pb-2">MVP Tester Control Panel</h2>
 
-            <!-- Dual Status Indicators -->
-            <div class="flex space-x-8 mb-6">
+            <!-- Status Indicators -->
+            <div class="flex space-x-8 mb-6 flex-wrap gap-y-4">
                 <div class="flex items-center space-x-2">
                     <div id="os-agent-status-dot" class="w-4 h-4 rounded-full bg-red-500"></div>
                     <span class="text-sm font-medium text-gray-700">OS Agent Status</span>
@@ -206,6 +206,10 @@
                 <div class="flex items-center space-x-2">
                     <div id="ext-status-dot" class="w-4 h-4 rounded-full bg-green-500"></div>
                     <span class="text-sm font-medium text-gray-700">Extension Status</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <div id="local-agent-status-dot" class="w-4 h-4 rounded-full bg-red-500 transition-colors duration-300"></div>
+                    <span class="text-sm font-medium text-gray-700">Connected to Local Agent</span>
                 </div>
             </div>
 
@@ -302,6 +306,31 @@
         let unsubscribeActivity = null;
         let unsubscribeStatus = null;
         let currentUserId = null;
+
+        const localAgentStatusDot = document.getElementById('local-agent-status-dot');
+        let localAgentPingInterval = null;
+
+        function startLocalAgentPing() {
+            if (localAgentPingInterval) clearInterval(localAgentPingInterval);
+
+            const pingLocalAgent = async () => {
+                try {
+                    const response = await fetch('http://127.0.0.1:8764/api/ping');
+                    if (response.ok) {
+                        localAgentStatusDot.classList.replace('bg-red-500', 'bg-green-500');
+                    } else {
+                        localAgentStatusDot.classList.replace('bg-green-500', 'bg-red-500');
+                    }
+                } catch (error) {
+                    localAgentStatusDot.classList.replace('bg-green-500', 'bg-red-500');
+                }
+            };
+
+            // Initial ping
+            pingLocalAgent();
+            // Ping every 5 seconds
+            localAgentPingInterval = setInterval(pingLocalAgent, 5000);
+        }
 
         function startActivityListener(uid) {
             if (unsubscribeActivity) unsubscribeActivity();
@@ -617,10 +646,17 @@
                 unsubscribeStatus();
                 unsubscribeStatus = null;
             }
+            if (localAgentPingInterval) {
+                clearInterval(localAgentPingInterval);
+                localAgentPingInterval = null;
+            }
             activityFeed.innerHTML = '<p class="text-gray-400 italic">Waiting for activity...</p>';
             osAgentStatusDot.classList.replace('bg-green-500', 'bg-red-500');
+            localAgentStatusDot.classList.replace('bg-green-500', 'bg-red-500');
             currentUserId = null;
         }
+
+        let isLocalAgentConnected = false;
 
         async function handleEmergencyStop() {
             if (!currentUserId) return;
@@ -630,6 +666,26 @@
             stopStatus.classList.add('hidden');
 
             try {
+                if (isLocalAgentConnected) {
+                    // Send directly to local agent if connected
+                    try {
+                        const response = await fetch('http://127.0.0.1:8764/api/stop', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            }
+                        });
+                        if (!response.ok) {
+                            throw new Error('Local API returned ' + response.status);
+                        }
+                        stopStatus.textContent = "Emergency stop sent to local agent!";
+                    } catch (e) {
+                        console.warn("Failed to stop local agent, falling back to Firebase", e);
+                        // Fall back to firebase below
+                    }
+                }
+
+                // Always update Firebase to keep it in sync and catch any non-local agents
                 // Find any pending or in_progress commands and mark them as failed
                 const q = query(
                     collection(db, "remote_commands"),
@@ -650,7 +706,9 @@
                     await Promise.all(updatePromises);
                 }
 
-                stopStatus.textContent = "Emergency stop flag sent!";
+                if (!isLocalAgentConnected) {
+                    stopStatus.textContent = "Emergency stop flag sent!";
+                }
                 stopStatus.classList.remove('hidden');
 
                 setTimeout(() => {
@@ -673,28 +731,25 @@
             try {
                 const docRef = doc(db, "client_profiles", clientId);
                 const docSnap = await getDoc(docRef);
+                let rules = [];
                 if (docSnap.exists()) {
-                    clientBusinessRules.value = JSON.stringify(docSnap.data(), null, 2);
+                    const data = docSnap.data();
+                    if (data.rules && Array.isArray(data.rules)) {
+                        rules = data.rules;
+                    }
                 } else {
                     // Default templates if not found
                     if (clientId === 'sreality') {
-                        clientBusinessRules.value = JSON.stringify({
-                            "client_id": "sreality",
-                            "name": "Sreality Pilot",
-                            "rules": [
-                                "Always click 'Souhlasím' on cookie consent banners.",
-                                "When searching for rentals, always select 'Pronájem' button.",
-                                "Ensure Prague ('Praha') is correctly selected in the locality autocomplete dropdown."
-                            ]
-                        }, null, 2);
+                        rules = [
+                            "Always click 'Souhlasím' on cookie consent banners.",
+                            "When searching for rentals, always select 'Pronájem' button.",
+                            "Ensure Prague ('Praha') is correctly selected in the locality autocomplete dropdown."
+                        ];
                     } else {
-                        clientBusinessRules.value = JSON.stringify({
-                            "client_id": "default",
-                            "name": "Default Settings",
-                            "rules": []
-                        }, null, 2);
+                        rules = [];
                     }
                 }
+                clientBusinessRules.value = rules.join('\n');
             } catch (error) {
                 console.error("Error loading client profile:", error);
             }
@@ -714,18 +769,16 @@
             errorClientStatus.classList.add('hidden');
 
             try {
-                let parsedRules;
-                try {
-                    parsedRules = JSON.parse(rulesText);
-                } catch (e) {
-                    throw new Error("Invalid JSON format");
-                }
+                const rulesArray = rulesText.split('\n').map(r => r.trim()).filter(r => r.length > 0);
 
-                // Ensure client_id matches the selection
-                parsedRules.client_id = clientId;
+                const profileData = {
+                    client_id: clientId,
+                    name: clientId === 'sreality' ? "Sreality Pilot" : "Default Settings",
+                    rules: rulesArray
+                };
 
                 await setDoc(doc(db, "client_profiles", clientId), {
-                    ...parsedRules,
+                    ...profileData,
                     updatedAt: new Date()
                 });
 
@@ -838,6 +891,7 @@
                             loadSettings();
                             startActivityListener(user.uid);
                             startStatusListener(user.uid);
+                            startLocalAgentPing();
                         } else {
                             await signOut(auth);
                             loginError.textContent = "Access denied: Requires Admin or Partner role.";
