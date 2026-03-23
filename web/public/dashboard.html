@@ -535,16 +535,30 @@
                 askHumanNoScreenshot.classList.add('hidden');
                 askHumanImgLink.href = cmdData.last_screenshot;
                 askHumanImgLink.style.display = 'inline';
+
+                askHumanImgLink.onclick = null; // reset
             } else if (cmdData && cmdData.screenshot_b64) {
-                askHumanScreenshot.src = `data:image/png;base64,${cmdData.screenshot_b64}`;
+                const b64Data = `data:image/png;base64,${cmdData.screenshot_b64}`;
+                askHumanScreenshot.src = b64Data;
                 askHumanScreenshot.classList.remove('hidden');
                 askHumanNoScreenshot.classList.add('hidden');
-                askHumanImgLink.href = `data:image/png;base64,${cmdData.screenshot_b64}`;
+                askHumanImgLink.href = "#";
                 askHumanImgLink.style.display = 'inline';
+
+                // Fix: Open base64 in a new window with an img tag to bypass Chrome navigation blocking
+                askHumanImgLink.onclick = (e) => {
+                    e.preventDefault();
+                    const newWindow = window.open();
+                    if (newWindow) {
+                        newWindow.document.write(`<html><head><title>Full Size Screenshot</title></head><body style="margin:0; display:flex; justify-content:center; align-items:flex-start; background-color:#0e1111;"><img src="${b64Data}" style="max-width:100%; height:auto;" /></body></html>`);
+                        newWindow.document.close();
+                    }
+                };
             } else {
                 askHumanScreenshot.classList.add('hidden');
                 askHumanNoScreenshot.classList.remove('hidden');
                 askHumanImgLink.style.display = 'none';
+                askHumanImgLink.onclick = null; // reset
             }
 
             // Scroll to the section

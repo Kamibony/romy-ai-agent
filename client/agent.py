@@ -32,6 +32,7 @@ CURRENT_TOKEN = None
 COMMAND_QUEUE = queue.Queue()
 ABORT_AGENT = False
 PAUSE_AGENT = False
+ACTIVE_DOC_ID = None
 
 LOCAL_STATUS = {} # Dictionary to store local task statuses mapping doc_id to status
 
@@ -670,6 +671,9 @@ def load_client_profile() -> Dict[str, Any]:
 
 def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "", client_context: dict = None) -> None:
     """Runs the agent loop triggered by a remote text command."""
+    global ACTIVE_DOC_ID
+    ACTIVE_DOC_ID = doc_id
+
     if not CURRENT_TOKEN:
         logging.error("Error: Missing Firebase Token. Cannot execute remote command.")
         return
@@ -890,7 +894,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "", c
                                     # Check if visual state (ui_elements) remains identical for 3 consecutive iterations
                                     if u1 == u2 == u3:
                                         logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
-                                        reason = "I seem to be stuck repeating the same action without state change. I need human assistance."
+                                        reason = f"I am stuck trying to execute: [{current_sub_task}]. Please assist."
                                         try:
                                             firestore_update_document("remote_commands", doc_id, {
                                                 "status": "AWAITING_HUMAN_INPUT",
@@ -1127,7 +1131,7 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "", c
                             u1, u2, u3 = history
                             if u1 == u2 == u3:
                                 logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
-                                reason = "I seem to be stuck repeating the same OS action without state change. I need human assistance."
+                                reason = f"I am stuck trying to execute: [{current_sub_task if 'current_sub_task' in locals() else 'OS command'}]. Please assist."
                                 try:
                                     firestore_update_document("remote_commands", doc_id, {
                                         "status": "AWAITING_HUMAN_INPUT",
@@ -1594,7 +1598,7 @@ def execute_voice_agent_loop() -> None:
                                     u1, u2, u3 = history
                                     if u1 == u2 == u3:
                                         logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
-                                        reason = "I seem to be stuck repeating the same web action without state change. I need human assistance."
+                                        reason = f"I am stuck trying to execute: [{current_sub_task}]. Please assist."
                                         try:
                                             firestore_update_document("remote_commands", doc_id, {
                                                 "status": "AWAITING_HUMAN_INPUT",
@@ -1874,7 +1878,7 @@ def execute_voice_agent_loop() -> None:
                             u1, u2, u3 = history
                             if u1 == u2 == u3:
                                 logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
-                                reason = "I seem to be stuck repeating the same OS action without state change. I need human assistance."
+                                reason = f"I am stuck trying to execute: [{current_sub_task if 'current_sub_task' in locals() else 'OS command'}]. Please assist."
                                 try:
                                     firestore_update_document("remote_commands", doc_id, {
                                         "status": "AWAITING_HUMAN_INPUT",
@@ -2084,6 +2088,59 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
+        elif self.path == '/api/human_guidance':
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+
+            try:
+                data = json.loads(post_data.decode('utf-8'))
+                global ACTIVE_DOC_ID
+
+                if ACTIVE_DOC_ID:
+                    # Verify we are actually waiting for human input to avoid accidental overwrites
+                    current_doc = firestore_get_document("remote_commands", ACTIVE_DOC_ID)
+                    if current_doc and current_doc.get("status") in ["AWAITING_HUMAN_INPUT", "help_needed"]:
+                        xpath = data.get("xpath", "Unknown element")
+                        guidance = f"Click the element with XPath: {xpath}"
+
+                        firestore_update_document("remote_commands", ACTIVE_DOC_ID, {
+                            "status": "in_progress",
+                            "human_response": guidance
+                        })
+                        logging.info(f"Teleoperation ghost click registered for doc {ACTIVE_DOC_ID}: {guidance}")
+
+                        self.send_response(HTTPStatus.OK)
+                        self.send_header('Content-type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"status": "ok"}).encode())
+                        return
+                    else:
+                        logging.info("Ignored ghost click: Agent not in AWAITING_HUMAN_INPUT state.")
+                        self.send_response(HTTPStatus.OK)
+                        self.send_header('Content-type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"status": "ignored"}).encode())
+                        return
+                else:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.send_header('Content-type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "No active task"}).encode())
+            except json.JSONDecodeError:
+                self.send_response(HTTPStatus.BAD_REQUEST)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
+            except Exception as e:
+                logging.error(f"Error processing human guidance: {e}")
+                self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode())
+
         elif self.path == '/api/focus_tab':
             try:
                 from local_bridge import bridge
