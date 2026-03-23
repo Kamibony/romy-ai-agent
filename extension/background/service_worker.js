@@ -45,6 +45,7 @@ async function sendChunkedMessage(ws, type, payload) {
 
 let isRecording = false;
 let isProcessing = false;
+let activeSessionTabId = null;
 
 async function setupOffscreenDocument(path) {
     if (await chrome.offscreen.hasDocument()) return;
@@ -275,19 +276,9 @@ function sendTelemetryLog(message) {
 }
 
 async function handleGetState(payload) {
-    const { commandText } = payload;
-    sendTelemetryLog(`Requesting WEB State (Vision-First)...`);
+    const { commandText, iteration } = payload;
+    sendTelemetryLog(`Requesting WEB State (Vision-First)... Iteration: ${iteration}`);
 
-    // 1. Get Active Tab
-    let [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (!tab) {
-        [tab] = await chrome.tabs.query({ active: true });
-    }
-    if (!tab) {
-        throw new Error("No active tab found");
-    }
-
-    // Extract target URL from command text if available
     let targetUrl = null;
     if (commandText) {
         const urlRegex = /(?:https?:\/\/)?(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{2,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)/i;
@@ -300,37 +291,14 @@ async function handleGetState(payload) {
         }
     }
 
-    const isEmptyOrNewTab = (url) => {
-        return !url || url === 'about:blank' || url.startsWith('chrome://newtab') || url.startsWith('edge://newtab');
-    };
+    let tab = null;
 
-    const isRestrictedUrl = (url) => {
-        if (!url) return true;
-        return (url.startsWith('chrome://') && !url.startsWith('chrome://newtab')) ||
-               (url.startsWith('edge://') && !url.startsWith('edge://newtab')) ||
-               (url.startsWith('about:') && url !== 'about:blank') ||
-               url.startsWith('chrome-extension://');
-    };
-
-    if (targetUrl && isEmptyOrNewTab(tab.url)) {
-        sendTelemetryLog(`Navigating empty/new tab to extracted URL: ${targetUrl}`);
+    if (iteration === 0) {
+        // Start of a new session: always create a new tab
+        const urlToOpen = targetUrl || 'https://www.google.com';
+        sendTelemetryLog(`New session. Creating new tab: ${urlToOpen}`);
         tab = await new Promise((resolve, reject) => {
-            chrome.tabs.update(tab.id, { url: targetUrl }, (updatedTab) => {
-                if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-                const listener = (tabId, info) => {
-                    if (tabId === updatedTab.id && info.status === 'complete') {
-                        chrome.tabs.onUpdated.removeListener(listener);
-                        resolve(updatedTab);
-                    }
-                };
-                chrome.tabs.onUpdated.addListener(listener);
-            });
-        });
-        await new Promise(r => setTimeout(r, 1000));
-    } else if (isRestrictedUrl(tab.url)) {
-        sendTelemetryLog(`Restricted tab detected. Opening new tab: ${targetUrl || 'https://www.google.com'}`);
-        tab = await new Promise((resolve, reject) => {
-            chrome.tabs.create({ url: targetUrl || 'https://www.google.com' }, (newTab) => {
+            chrome.tabs.create({ url: urlToOpen }, (newTab) => {
                 if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
                 const listener = (tabId, info) => {
                     if (tabId === newTab.id && info.status === 'complete') {
@@ -341,11 +309,78 @@ async function handleGetState(payload) {
                 chrome.tabs.onUpdated.addListener(listener);
             });
         });
+        activeSessionTabId = tab.id;
         await new Promise(r => setTimeout(r, 1000));
+    } else {
+        // Ongoing session: use tracked tab if it exists
+        if (activeSessionTabId) {
+            try {
+                tab = await chrome.tabs.get(activeSessionTabId);
+            } catch (e) {
+                // Tab was closed
+                sendTelemetryLog(`Tracked tab ${activeSessionTabId} closed. Falling back to active tab.`);
+                tab = null;
+            }
+        }
+
+        if (!tab) {
+            let [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+            if (!activeTab) {
+                [activeTab] = await chrome.tabs.query({ active: true });
+            }
+            if (!activeTab) throw new Error("No active tab found");
+            tab = activeTab;
+            activeSessionTabId = tab.id;
+        }
+
+        const isEmptyOrNewTab = (url) => {
+            return !url || url === 'about:blank' || url.startsWith('chrome://newtab') || url.startsWith('edge://newtab');
+        };
+
+        const isRestrictedUrl = (url) => {
+            if (!url) return true;
+            return (url.startsWith('chrome://') && !url.startsWith('chrome://newtab')) ||
+                   (url.startsWith('edge://') && !url.startsWith('edge://newtab')) ||
+                   (url.startsWith('about:') && url !== 'about:blank') ||
+                   url.startsWith('chrome-extension://');
+        };
+
+        if (targetUrl && isEmptyOrNewTab(tab.url)) {
+            sendTelemetryLog(`Navigating empty/new tab to extracted URL: ${targetUrl}`);
+            tab = await new Promise((resolve, reject) => {
+                chrome.tabs.update(tab.id, { url: targetUrl }, (updatedTab) => {
+                    if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+                    const listener = (tabId, info) => {
+                        if (tabId === updatedTab.id && info.status === 'complete') {
+                            chrome.tabs.onUpdated.removeListener(listener);
+                            resolve(updatedTab);
+                        }
+                    };
+                    chrome.tabs.onUpdated.addListener(listener);
+                });
+            });
+            await new Promise(r => setTimeout(r, 1000));
+        } else if (isRestrictedUrl(tab.url)) {
+            sendTelemetryLog(`Restricted tab detected. Opening new tab: ${targetUrl || 'https://www.google.com'}`);
+            tab = await new Promise((resolve, reject) => {
+                chrome.tabs.create({ url: targetUrl || 'https://www.google.com' }, (newTab) => {
+                    if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+                    const listener = (tabId, info) => {
+                        if (tabId === newTab.id && info.status === 'complete') {
+                            chrome.tabs.onUpdated.removeListener(listener);
+                            resolve(newTab);
+                        }
+                    };
+                    chrome.tabs.onUpdated.addListener(listener);
+                });
+            });
+            activeSessionTabId = tab.id;
+            await new Promise(r => setTimeout(r, 1000));
+        }
     }
 
     // 2. Capture Clean Screenshot Natively via CDP
-    sendTelemetryLog(`Capturing pure screenshot via CDP...`);
+    sendTelemetryLog(`Capturing pure screenshot via CDP for tab ${tab.id}...`);
     let screenshotBase64 = null;
 
     try {
@@ -390,13 +425,36 @@ async function handleExecuteNativeAction(payload) {
     const action = payload.action;
     sendTelemetryLog(`Executing Native Action: ${action.action}`);
 
-    let [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (!tab) {
-        [tab] = await chrome.tabs.query({ active: true });
-    }
-    if (!tab) throw new Error("No active tab found");
+    let tab = null;
 
-    if (action.action === "NAVIGATE") {
+    if (activeSessionTabId) {
+        try {
+            tab = await chrome.tabs.get(activeSessionTabId);
+        } catch (e) {
+            tab = null;
+        }
+    }
+
+    if (!tab) {
+        let [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        if (!activeTab) {
+            [activeTab] = await chrome.tabs.query({ active: true });
+        }
+        if (!activeTab) throw new Error("No active tab found");
+        tab = activeTab;
+        activeSessionTabId = tab.id;
+    }
+
+    if (action.action === "FOCUS_TAB") {
+        try {
+            await chrome.tabs.update(tab.id, { active: true });
+            await chrome.windows.update(tab.windowId, { focused: true });
+            sendTelemetryLog(`Focused tab ${tab.id} and its window.`);
+        } catch (e) {
+            sendTelemetryLog(`Failed to focus tab: ${e.message}`);
+        }
+        return { success: true };
+    } else if (action.action === "NAVIGATE") {
         await new Promise((resolve, reject) => {
             chrome.tabs.update(tab.id, { url: action.url }, (updatedTab) => {
                 if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
