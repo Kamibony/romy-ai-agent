@@ -111,13 +111,16 @@ def test_harness():
 
         # Wait for the task to finish by polling status
         status = "pending"
-        while status in ["pending", "in_progress", "unknown"]:
+        while status not in ["completed", "failed"]:
             time.sleep(2)
             try:
                 status_req = urllib.request.Request(f"{LOCAL_API_URL}/status/{doc_id}")
                 status_response = urllib.request.urlopen(status_req)
                 status_data = json.loads(status_response.read().decode())
                 status = status_data.get("status", "unknown")
+                if status == "AWAITING_HUMAN_INPUT":
+                    print("Agent is stuck awaiting human input. Failing test to prevent indefinite hang.")
+                    status = "failed"
             except Exception as e:
                 print(f"Failed to get status. Error: {e}")
                 break
