@@ -29,37 +29,47 @@ def check_local_api_running():
 def test_harness():
     """
     E2E Test Harness:
-    Automatically feeds 5 distinct commands targeting generic websites to the agent queue via local API.
+    Automatically feeds commands targeting generic websites to the agent queue via local API.
     Logs success/failure and execution time of each.
     """
     commands = [
         {
-            "command_text": "Navigate to alza.cz, search for 'MacBook Air M2', filter by 'Skladem', click on the first result, and add it to the cart."
-        },
-        {
-            "command_text": "Navigate to sreality.cz, select 'Pronájem', select 'Byty', set disposition to '2+kk', enter location 'Praha', and click 'Zobrazit'.",
+            "command_text": "Navigate to sreality.cz, select 'Pronájem', select 'Byty', set disposition to '2+kk', enter location 'Praha', and sort by price.",
             "client_context": {
                 "client_id": "sreality",
                 "rules": [
-                    "Always accept cookies",
-                    "Filter by Prague",
-                    "Only ground floor"
+                    "Always click 'Souhlasím' on cookie consent banners.",
+                    "When searching for rentals, always select 'Pronájem' button.",
+                    "Ensure Prague ('Praha') is correctly selected in the locality autocomplete dropdown."
                 ]
             }
         },
         {
-            "command_text": "Navigate to czu.cz, open the 'Studium' menu, search for information regarding student internships ('praxe studentů'), and click on the first relevant article or portal link."
+            "command_text": "On sreality.cz, apply filters for 'Balkón' and 'Terasa' for apartments.",
+            "client_context": {
+                "client_id": "sreality",
+                "rules": [
+                    "Always click 'Souhlasím' on cookie consent banners.",
+                    "When searching for rentals, always select 'Pronájem' button.",
+                    "Ensure Prague ('Praha') is correctly selected in the locality autocomplete dropdown."
+                ]
+            }
         },
         {
-            "command_text": "Navigate to jobs.cz, search for job title 'Python Developer', set location to 'Brno', check the 'Remote' filter if available, and search."
-        },
-        {
-            "command_text": "Navigate to pelikan.cz, set origin to 'Prague', set destination to 'London', select departure date '10/05/2026', and search."
+            "command_text": "Open the first apartment listing on sreality.cz and check if the description contains 'suterén'. If so, report it as rejected.",
+            "client_context": {
+                "client_id": "sreality",
+                "rules": [
+                    "Always click 'Souhlasím' on cookie consent banners.",
+                    "When searching for rentals, always select 'Pronájem' button.",
+                    "Ensure Prague ('Praha') is correctly selected in the locality autocomplete dropdown."
+                ]
+            }
         }
     ]
 
     print("=" * 60)
-    print("STARTING E2E TEST HARNESS FOR UNIVERSAL CAPABILITY")
+    print("STARTING E2E SREALITY MASTER SUITE")
     print("=" * 60)
 
     if not check_local_api_running():
