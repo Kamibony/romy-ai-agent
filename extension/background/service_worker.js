@@ -208,6 +208,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             // so we don't trigger the "Unknown message type" warning
             return false;
 
+        case MESSAGE_TYPES.HUMAN_CLICK_INTERCEPTED:
+            handleGhostClick(request.payload);
+            return false;
+
         // Future OS actions handler (Phase 2)
         // case MESSAGE_TYPES.OS_NATIVE_ACTION:
         //     chrome.runtime.sendNativeMessage('com.romy.nativehost', request.payload, ...);
@@ -217,6 +221,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             console.warn(`Unknown message type: ${request.type}`);
     }
 });
+
+function handleGhostClick(payload) {
+    sendTelemetryLog(`Forwarding ghost click to local agent: ${payload.xpath}`);
+    fetch('http://127.0.0.1:8764/api/human_guidance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    }).catch(err => {
+        console.error("Failed to forward ghost click to local agent:", err);
+    });
+}
 
 async function handleStartRecording(sendResponse) {
     if (isRecording) {

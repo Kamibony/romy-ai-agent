@@ -13,7 +13,10 @@ const CONTENT_MESSAGE_TYPES = {
     GET_TOKEN: 'GET_TOKEN',
 
     // Future (Phase 2): Background -> Native Host
-    OS_NATIVE_ACTION: 'OS_NATIVE_ACTION'
+    OS_NATIVE_ACTION: 'OS_NATIVE_ACTION',
+
+    // Ghost click
+    HUMAN_CLICK_INTERCEPTED: 'HUMAN_CLICK_INTERCEPTED'
 };
 
 // Available globally in the content script context
