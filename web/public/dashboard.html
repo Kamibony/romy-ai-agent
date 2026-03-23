@@ -106,11 +106,17 @@
         <!-- Interactive ASK_HUMAN Interface Section (Inbox Style) -->
         <section id="ask-human-section" class="bg-gray-900 rounded-lg shadow-xl p-6 border border-gray-800 mt-8 hidden text-gray-200">
             <div class="flex items-center justify-between border-b border-gray-700 pb-3 mb-6">
-                <h2 class="text-2xl font-semibold text-white flex items-center">
-                    <svg class="w-6 h-6 mr-3 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
-                    Intervention Inbox
-                </h2>
-                <span class="bg-red-600 text-white text-xs font-bold px-3 py-1 rounded-full animate-pulse shadow-md">ACTION NEEDED</span>
+                <div class="flex items-center">
+                    <h2 class="text-2xl font-semibold text-white flex items-center mr-4">
+                        <svg class="w-6 h-6 mr-3 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                        Intervention Inbox
+                    </h2>
+                    <span class="bg-red-600 text-white text-xs font-bold px-3 py-1 rounded-full animate-pulse shadow-md">ACTION NEEDED</span>
+                </div>
+                <button id="btn-jump-to-task" class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                    Jump to Active Task
+                </button>
             </div>
 
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -280,6 +286,7 @@
         const btnResolveHuman = document.getElementById('btn-resolve-human');
         const btnAbortTask = document.getElementById('btn-abort-task');
         const resolveStatus = document.getElementById('resolve-status');
+        const btnJumpToTask = document.getElementById('btn-jump-to-task');
 
         // Playbook Elements
         const playbookDomainInput = document.getElementById('playbook-domain-input');
@@ -377,24 +384,6 @@
                             // Even if command isn't help_needed, show session info
                             showAskHumanInterface(sessionData, null);
                         }
-                    } else {
-                        // Check if there are any commands needing help
-                        const cmdQ = query(
-                            collection(db, "remote_commands"),
-                            where("uid", "==", uid),
-                            where("status", "in", ["help_needed", "AWAITING_HUMAN_INPUT"]),
-                            limit(1)
-                        );
-
-                        const cmdSnap = await getDocs(cmdQ);
-                        if (!cmdSnap.empty) {
-                            const cmdDoc = cmdSnap.docs[0];
-                            activeTaskId = cmdDoc.id;
-                            activeTaskSessionId = cmdDoc.data().session_id;
-                            showAskHumanInterface(null, cmdDoc.data());
-                        } else {
-                            hideAskHumanInterface();
-                        }
                     }
                 }, (error) => {
                     console.warn("Firestore error on sessions: ", error);
@@ -411,8 +400,20 @@
                     }
 
                     let html = '';
+                    let foundActionNeeded = false;
+                    let firstActionNeededData = null;
+                    let firstActionNeededId = null;
+
                     snapshot.forEach((doc) => {
                         const data = doc.data();
+
+                        if (data.status === "help_needed" || data.status === "AWAITING_HUMAN_INPUT") {
+                            foundActionNeeded = true;
+                            if (!firstActionNeededData) {
+                                firstActionNeededData = data;
+                                firstActionNeededId = doc.id;
+                            }
+                        }
                         let time = "Unknown time";
                         if (data.created_at) {
                             if (typeof data.created_at.toDate === 'function') {
@@ -437,6 +438,14 @@
                         html += `<div class="border-b border-gray-100 pb-2 mb-2"><span class="font-semibold text-gray-500">${time}</span> - Command: "${command}" | Status: <span class="${statusColor} font-semibold">${status}</span></div>`;
                     });
                     activityFeed.innerHTML = html;
+
+                    if (foundActionNeeded && !activeTaskSessionId) {
+                        activeTaskId = firstActionNeededId;
+                        activeTaskSessionId = firstActionNeededData.session_id;
+                        showAskHumanInterface(null, firstActionNeededData);
+                    } else if (!foundActionNeeded && activeTaskId && !activeTaskSessionId) {
+                         hideAskHumanInterface();
+                    }
                 }, (error) => {
                     console.warn("Firestore read error (activity):", error);
                     activityFeed.innerHTML = `<p class="text-red-500">Error loading activity. Check console.</p>`;
@@ -636,6 +645,31 @@
                 btnAbortTask.disabled = false;
             }
         });
+
+        if (btnJumpToTask) {
+            btnJumpToTask.addEventListener('click', async () => {
+                try {
+                    btnJumpToTask.disabled = true;
+                    btnJumpToTask.innerHTML = 'Jumping...';
+                    const response = await fetch('http://127.0.0.1:8764/api/focus_tab', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    console.log('Successfully jumped to task');
+                } catch (error) {
+                    console.error("Error jumping to task:", error);
+                    alert("Failed to jump to active task: Make sure the local agent is running.");
+                } finally {
+                    btnJumpToTask.disabled = false;
+                    btnJumpToTask.innerHTML = '<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg> Jump to Active Task';
+                }
+            });
+        }
 
         function stopListeners() {
             if (unsubscribeActivity) {

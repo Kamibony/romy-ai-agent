@@ -761,7 +761,8 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "", c
                     state_payload = {
                         "action_type": "GET_STATE",
                         "commandText": command_text,
-                        "audioBase64": audio_b64 if iteration == 0 else ""
+                        "audioBase64": audio_b64 if iteration == 0 else "",
+                        "iteration": iteration
                     }
                     logging.info(f"Requesting WEB state from extension (iteration {iteration})...")
                     state_result = bridge.delegate_command(state_payload)
@@ -1467,7 +1468,8 @@ def execute_voice_agent_loop() -> None:
                     state_payload = {
                         "action_type": "GET_STATE",
                         "commandText": command_text,
-                        "audioBase64": audio_b64 if iteration == 0 else ""
+                        "audioBase64": audio_b64 if iteration == 0 else "",
+                        "iteration": iteration
                     }
                     logging.info(f"Requesting WEB state from extension (iteration {iteration})...")
                     state_result = bridge.delegate_command(state_payload)
@@ -2082,6 +2084,24 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
+        elif self.path == '/api/focus_tab':
+            try:
+                from local_bridge import bridge
+                exec_payload = {
+                    "action_type": "EXECUTE_ACTION",
+                    "action": {"action": "FOCUS_TAB"}
+                }
+                bridge.delegate_command(exec_payload)
+                self.send_response(HTTPStatus.OK)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "ok"}).encode())
+            except Exception as e:
+                logging.error(f"Error focusing tab: {e}")
+                self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode())
         else:
             self.send_response(HTTPStatus.NOT_FOUND)
             self.send_header('Content-type', 'application/json')
