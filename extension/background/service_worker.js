@@ -580,24 +580,79 @@ async function handleExecuteNativeAction(payload) {
                     });
                 });
             } else {
-                // Native Click using coordinates
-                await new Promise((resolve, reject) => {
-                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
-                        type: 'mousePressed', x: x, y: y, button: 'left', clickCount: 1
+                // Deep Piercing Click using JS injection
+                const jsClickResult = await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Runtime.evaluate', {
+                        expression: `
+                            (function(x, y) {
+                                let target = null;
+                                const elements = document.elementsFromPoint(x, y);
+                                for (let el of elements) {
+                                    // Skip purely structural/invisible overlays
+                                    const style = window.getComputedStyle(el);
+                                    if (style.pointerEvents === 'none') continue;
+
+                                    // Check if it's semantically interactive or styled as clickable
+                                    const tagName = el.tagName.toLowerCase();
+                                    const role = el.getAttribute('role');
+                                    const isInteractiveTag = ['button', 'a', 'input', 'select', 'textarea', 'label'].includes(tagName);
+                                    const hasClickableRole = ['button', 'link', 'menuitem', 'option', 'tab', 'switch', 'checkbox'].includes(role);
+                                    const hasPointer = style.cursor === 'pointer';
+                                    const hasTabIndex = el.hasAttribute('tabindex');
+
+                                    if (isInteractiveTag || hasClickableRole || hasPointer || hasTabIndex) {
+                                        target = el;
+                                        break;
+                                    }
+                                }
+
+                                // Fallback to topmost element if no explicit interactive element found
+                                if (!target && elements.length > 0) {
+                                    target = elements[0];
+                                }
+
+                                if (target) {
+                                    target.focus();
+
+                                    const mousedownEvent = new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y });
+                                    target.dispatchEvent(mousedownEvent);
+
+                                    const mouseupEvent = new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y });
+                                    target.dispatchEvent(mouseupEvent);
+
+                                    const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y });
+                                    target.dispatchEvent(clickEvent);
+
+                                    // Visual Confirmation (Red Dot)
+                                    const dot = document.createElement('div');
+                                    dot.style.position = 'fixed';
+                                    dot.style.left = (x - 4) + 'px';
+                                    dot.style.top = (y - 4) + 'px';
+                                    dot.style.width = '8px';
+                                    dot.style.height = '8px';
+                                    dot.style.backgroundColor = 'red';
+                                    dot.style.borderRadius = '50%';
+                                    dot.style.zIndex = '2147483647';
+                                    dot.style.pointerEvents = 'none';
+                                    dot.style.boxShadow = '0 0 4px rgba(0,0,0,0.5)';
+                                    document.body.appendChild(dot);
+
+                                    // Remove the dot after 3 seconds so it doesn't persist forever
+                                    setTimeout(() => { if (dot.parentNode) dot.parentNode.removeChild(dot); }, 3000);
+
+                                    return true;
+                                }
+                                return false;
+                            })(${x}, ${y});
+                        `,
+                        returnByValue: true
                     }, (result) => {
                         if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
                         else resolve(result);
                     });
                 });
+
                 await new Promise(r => setTimeout(r, 50));
-                await new Promise((resolve, reject) => {
-                    chrome.debugger.sendCommand({ tabId: tab.id }, 'Input.dispatchMouseEvent', {
-                        type: 'mouseReleased', x: x, y: y, button: 'left', clickCount: 1
-                    }, (result) => {
-                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                        else resolve(result);
-                    });
-                });
             }
 
             if (action.action === "TYPE") {
