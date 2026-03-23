@@ -10,6 +10,12 @@ document.addEventListener('click', (e) => {
         return;
     }
 
+    // MANDATORY FIX: strictly ignore clicks on localhost or firebaseapp.com dashboards
+    const hostname = window.location.hostname;
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.endsWith('firebaseapp.com')) {
+        return;
+    }
+
     try {
         const xpath = getXPathForElement(e.target);
         if (xpath) {

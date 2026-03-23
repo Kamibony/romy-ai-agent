@@ -886,14 +886,14 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "", c
                             # We only append to history on the first action of the batch to avoid triggering false positives
                             if action_idx == 0:
                                 history.append(payload.get("ui_elements", []))
-                                if len(history) > 3:
+                                if len(history) > 5:
                                     history.pop(0)
 
-                                if len(history) == 3:
-                                    u1, u2, u3 = history
-                                    # Check if visual state (ui_elements) remains identical for 3 consecutive iterations
-                                    if u1 == u2 == u3:
-                                        logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
+                                if len(history) == 5:
+                                    u1, u2, u3, u4, u5 = history
+                                    # Check if visual state (ui_elements) remains identical for 5 consecutive iterations
+                                    if u1 == u2 == u3 == u4 == u5:
+                                        logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 5 consecutive iterations.")
                                         reason = f"I am stuck trying to execute: [{current_sub_task}]. Please assist."
                                         try:
                                             firestore_update_document("remote_commands", doc_id, {
@@ -1124,13 +1124,13 @@ def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "", c
                     # Stuck Detector Logic
                     if act == actions[0]:
                         history.append(payload.get("ui_elements", []))
-                        if len(history) > 3:
+                        if len(history) > 5:
                             history.pop(0)
 
-                        if len(history) == 3:
-                            u1, u2, u3 = history
-                            if u1 == u2 == u3:
-                                logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
+                        if len(history) == 5:
+                            u1, u2, u3, u4, u5 = history
+                            if u1 == u2 == u3 == u4 == u5:
+                                logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 5 consecutive iterations.")
                                 reason = f"I am stuck trying to execute: [{current_sub_task if 'current_sub_task' in locals() else 'OS command'}]. Please assist."
                                 try:
                                     firestore_update_document("remote_commands", doc_id, {
@@ -1591,13 +1591,13 @@ def execute_voice_agent_loop() -> None:
                             # We only append to history on the first action of the batch to avoid triggering false positives
                             if action_idx == 0:
                                 history.append(payload.get("ui_elements", []))
-                                if len(history) > 3:
+                                if len(history) > 5:
                                     history.pop(0)
 
-                                if len(history) == 3:
-                                    u1, u2, u3 = history
-                                    if u1 == u2 == u3:
-                                        logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
+                                if len(history) == 5:
+                                    u1, u2, u3, u4, u5 = history
+                                    if u1 == u2 == u3 == u4 == u5:
+                                        logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 5 consecutive iterations.")
                                         reason = f"I am stuck trying to execute: [{current_sub_task}]. Please assist."
                                         try:
                                             firestore_update_document("remote_commands", doc_id, {
@@ -1871,13 +1871,13 @@ def execute_voice_agent_loop() -> None:
                     # Stuck Detector Logic
                     if act == actions[0]:
                         history.append(payload.get("ui_elements", []))
-                        if len(history) > 3:
+                        if len(history) > 5:
                             history.pop(0)
 
-                        if len(history) == 3:
-                            u1, u2, u3 = history
-                            if u1 == u2 == u3:
-                                logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 3 consecutive iterations.")
+                        if len(history) == 5:
+                            u1, u2, u3, u4, u5 = history
+                            if u1 == u2 == u3 == u4 == u5:
+                                logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 5 consecutive iterations.")
                                 reason = f"I am stuck trying to execute: [{current_sub_task if 'current_sub_task' in locals() else 'OS command'}]. Please assist."
                                 try:
                                     firestore_update_document("remote_commands", doc_id, {
