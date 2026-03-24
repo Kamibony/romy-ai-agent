@@ -542,7 +542,6 @@ def annotate_image_with_crosshair(base64_img: str, x: int, y: int) -> str:
         logging.error(f"Failed to apply crosshair annotation: {e}")
         return base64_img
 
-
 def annotate_image_with_som(base64_img: str, ui_elements: list) -> str:
     """Draws Set-of-Mark numbered bounding boxes over interactive elements."""
     try:
