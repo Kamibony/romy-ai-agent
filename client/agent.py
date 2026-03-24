@@ -12,10 +12,19 @@ import json
 import threading
 from datetime import datetime
 
-import uiautomation as auto
-import sounddevice as sd
+try:
+    import uiautomation as auto
+except:
+    pass
+try:
+    import sounddevice as sd
+except:
+    pass
 from scipy.io.wavfile import write as wav_write
-import pyautogui
+try:
+    import pyautogui
+except:
+    pass
 from plyer import notification
 try:
     import winsound
@@ -23,7 +32,10 @@ except ImportError:
     winsound = None
 from typing import Dict, Any, Tuple
 
-pyautogui.FAILSAFE = False
+try:
+    pyautogui.FAILSAFE = False
+except:
+    pass
 
 BACKEND_URL = os.environ.get("BACKEND_URL", "https://romy-backend-1049976869239.europe-west1.run.app/api/v1/agent/command")
 
@@ -481,6 +493,33 @@ def scan_ui_elements() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]
         logging.error(f"Error scanning UI tree: {e}")
 
     return ui_elements, memory_map
+
+
+def annotate_image_with_crosshair(base64_img: str, x: int, y: int) -> str:
+    """Draws a green crosshair on the raw un-tagged coordinate."""
+    try:
+        if base64_img.startswith('data:image'):
+            img_data = base64.b64decode(base64_img.split(',')[1])
+            prefix = base64_img.split(',')[0] + ','
+        else:
+            img_data = base64.b64decode(base64_img)
+            prefix = "data:image/png;base64,"
+
+        image = Image.open(io.BytesIO(img_data)).convert("RGBA")
+        draw = ImageDraw.Draw(image)
+
+        # Draw crosshair
+        r = 15
+        draw.ellipse((x-r, y-r, x+r, y+r), outline=(0, 255, 0, 255), width=3)
+        draw.line((x-r-5, y, x+r+5, y), fill=(0, 255, 0, 255), width=3)
+        draw.line((x, y-r-5, x, y+r+5), fill=(0, 255, 0, 255), width=3)
+
+        buffered = io.BytesIO()
+        image.save(buffered, format="PNG")
+        return prefix + base64.b64encode(buffered.getvalue()).decode("utf-8")
+    except Exception as e:
+        logging.error(f"Failed to apply crosshair annotation: {e}")
+        return base64_img
 
 def pre_flight_check(command_text: str) -> dict:
     if not CURRENT_TOKEN:
@@ -2101,7 +2140,14 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                     current_doc = firestore_get_document("remote_commands", ACTIVE_DOC_ID)
                     if current_doc and current_doc.get("status") in ["AWAITING_HUMAN_INPUT", "help_needed"]:
                         xpath = data.get("xpath", "Unknown element")
-                        guidance = f"Click the element with XPath: {xpath}"
+                        x = data.get("x")
+                        y = data.get("y")
+                        dpr = data.get("dpr", 1.0)
+
+                        if x is not None and y is not None:
+                            guidance = f"Click at (X: {x}, Y: {y})"
+                        else:
+                            guidance = f"Click the element with XPath: {xpath}"
 
                         firestore_update_document("remote_commands", ACTIVE_DOC_ID, {
                             "status": "in_progress",
