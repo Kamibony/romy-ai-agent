@@ -16,7 +16,6 @@ import io
 import base64
 from PIL import Image, ImageDraw, ImageFont
 import asyncio
-from playwright.async_api import async_playwright
 import traceback
 from enum import Enum
 
@@ -817,106 +816,6 @@ class AgentStateMachine:
         self.previous_state_metadata = None
         self.previous_state_ui = None
         self.max_sub_task_iterations = 5
-        self.playwright = None
-        self.browser = None
-        self.page = None
-
-    async def connect_playwright(self):
-        if not getattr(self, "playwright", None):
-            self.playwright = await async_playwright().start()
-        if not getattr(self, "browser", None):
-            try:
-                self.browser = await self.playwright.chromium.connect_over_cdp("http://127.0.0.1:9222")
-                contexts = self.browser.contexts
-                if contexts:
-                    self.page = contexts[0].pages[0] if contexts[0].pages else await contexts[0].new_page()
-                else:
-                    self.page = await self.browser.new_page()
-                logging.info("Successfully connected to browser via Playwright CDP.")
-            except Exception as e:
-                logging.warning(f"Failed to connect Playwright over CDP: {e}. Attempting to launch persistent context...")
-                try:
-                    user_data_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "User Data")
-                    self.browser = await self.playwright.chromium.launch_persistent_context(
-                        user_data_dir=user_data_dir,
-                        channel="chrome",
-                        headless=False,
-                        args=["--remote-debugging-port=9222"]
-                    )
-                    if self.browser.pages:
-                        self.page = self.browser.pages[0]
-                    else:
-                        self.page = await self.browser.new_page()
-                    logging.info("Successfully launched persistent Chrome context with remote debugging.")
-                except Exception as launch_e:
-                    logging.error(f"Failed to launch persistent Chrome context: {launch_e}")
-                    self.browser = None
-                    self.page = None
-
-    async def disconnect_playwright(self):
-        if self.browser:
-            await self.browser.close()
-            self.browser = None
-        if self.playwright:
-            await self.playwright.stop()
-            self.playwright = None
-
-    async def get_playwright_som_state(self):
-        """Uses Playwright CDP to fetch the AOM tree and screenshot, returning SoM elements."""
-        if not self.page or not self.browser:
-            return None
-
-        try:
-            screenshot_bytes = await self.page.screenshot(type="png", full_page=False)
-            clean_screenshot_b64 = "data:image/png;base64," + base64.b64encode(screenshot_bytes).decode("utf-8")
-
-            cdp = await self.page.context.new_cdp_session(self.page)
-            ax_tree = await cdp.send("Accessibility.getFullAXTree")
-            nodes = ax_tree.get("nodes", [])
-
-            dom_doc = await cdp.send("DOM.getDocument")
-
-            ui_elements = []
-            target_id = 1
-
-            for node in nodes:
-                role = node.get("role", {}).get("value")
-                actionable_roles = {"button", "link", "textbox", "searchbox", "combobox", "menuitem", "checkbox", "radio"}
-
-                if role in actionable_roles:
-                    backend_id = node.get("backendDOMNodeId")
-                    if backend_id:
-                        try:
-                            resolved = await cdp.send("DOM.resolveNode", {"backendNodeId": backend_id})
-                            object_id = resolved.get("object", {}).get("objectId")
-                            if object_id:
-                                box_model = await cdp.send("DOM.getBoxModel", {"objectId": object_id})
-                                content_quad = box_model.get("model", {}).get("content", [])
-                                if len(content_quad) == 8:
-                                    x = content_quad[0]
-                                    y = content_quad[1]
-                                    width = content_quad[2] - x
-                                    height = content_quad[5] - y
-                                    if width > 0 and height > 0:
-                                        ui_elements.append({
-                                            "target_id": target_id,
-                                            "bounds": [x, y, width, height],
-                                            "coordinates": [x + width/2, y + height/2]
-                                        })
-                                        target_id += 1
-                        except Exception:
-                            pass
-
-            url = self.page.url
-            return {
-                "success": True,
-                "clean_screenshot_base64": clean_screenshot_b64,
-                "ui_elements": ui_elements,
-                "url": url
-            }
-        except Exception as e:
-            logging.error(f"Playwright SoM capture failed: {e}")
-            return None
 
     async def run(self, doc_id, command_text, audio_b64="", client_context=None):
         global ACTIVE_DOC_ID
@@ -934,8 +833,6 @@ class AgentStateMachine:
 
         logging.info(f"=== Remote Agent Activated for Document: {doc_id} ===")
         from local_bridge import bridge
-
-        await self.connect_playwright()
 
         while self.state != AgentState.TERMINATED:
             if ABORT_AGENT:
@@ -960,8 +857,6 @@ class AgentStateMachine:
                 await self.state_learning_routine()
 
             await asyncio.sleep(0.1)
-
-        await self.disconnect_playwright()
 
     async def state_initializing(self):
         intent, cmd_text = classify_intent(self.command_text, self.audio_b64)
@@ -1014,25 +909,20 @@ class AgentStateMachine:
         current_sub_task = self.sub_tasks[self.current_sub_task_index]
         logging.info(f"--- Executing Sub-Task {self.current_sub_task_index + 1}/{len(self.sub_tasks)}: {current_sub_task} ---")
 
-        state_result = await self.get_playwright_som_state()
+        logging.info("Requesting GET_STATE from bridge...")
+        state_payload = {
+            "action_type": "GET_STATE",
+            "commandText": self.command_text,
+            "audioBase64": self.audio_b64 if self.iteration == 0 else "",
+            "iteration": self.iteration
+        }
+        state_result = bridge.delegate_command(state_payload)
+        if not state_result.get("success"):
+            logging.error(f"Failed to get state from extension: {state_result.get('error')}")
+            self.state = AgentState.TERMINATED
+            return
 
-        if not state_result:
-            logging.info("Falling back to bridge GET_STATE...")
-            state_payload = {
-                "action_type": "GET_STATE",
-                "commandText": self.command_text,
-                "audioBase64": self.audio_b64 if self.iteration == 0 else "",
-                "iteration": self.iteration
-            }
-            state_result = bridge.delegate_command(state_payload)
-            if not state_result.get("success"):
-                logging.error(f"Failed to get state from extension: {state_result.get('error')}")
-                self.state = AgentState.TERMINATED
-                return
-            self.current_clean_screenshot = state_result.get("screenshot_base64", "")
-        else:
-            self.current_clean_screenshot = state_result.get("clean_screenshot_base64", "")
-
+        self.current_clean_screenshot = state_result.get("screenshot_base64", "")
         self.current_ui_elements = state_result.get("ui_elements", [])
         self.current_url = state_result.get("url", "")
 
@@ -1154,59 +1044,12 @@ class AgentStateMachine:
 
              logging.info(f"Executing Macro-Action {action_idx + 1}/{len(self.actions_to_execute)}: {action_to_take.get('action')}")
              action_type = action_to_take.get("action")
-             exec_result = {"success": False, "error": "Playwright action failed"}
 
-             if not self.page:
-                 logging.error("Playwright page not connected. Falling back to bridge execution.")
-                 exec_payload = {"action_type": "EXECUTE_ACTION", "action": action_to_take, "iteration": self.iteration}
-                 exec_result = bridge.delegate_command(exec_payload)
-             else:
-                 try:
-                     if action_type == "CLICK":
-                         coordinates = action_to_take.get("coordinates", [None, None])
-                         x, y = coordinates[0], coordinates[1]
-                         if x is not None and y is not None:
-                             await self.page.mouse.click(x, y)
-                             exec_result = {"success": True}
-                         else:
-                             exec_payload = {"action_type": "EXECUTE_ACTION", "action": action_to_take, "iteration": self.iteration}
-                             exec_result = bridge.delegate_command(exec_payload)
-                     elif action_type == "TYPE":
-                         coordinates = action_to_take.get("coordinates", [None, None])
-                         x, y = coordinates[0], coordinates[1]
-                         text = action_to_take.get("text", "")
-                         if x is not None and y is not None:
-                             await self.page.mouse.click(x, y)
-                             await self.page.keyboard.type(text)
-                             exec_result = {"success": True}
-                         else:
-                             exec_payload = {"action_type": "EXECUTE_ACTION", "action": action_to_take, "iteration": self.iteration}
-                             exec_result = bridge.delegate_command(exec_payload)
-                     elif action_type == "NAVIGATE":
-                         url = action_to_take.get("url", "")
-                         if url:
-                             await self.page.goto(url, wait_until="networkidle")
-                             exec_result = {"success": True}
-                         else:
-                             exec_result["error"] = "No URL provided for NAVIGATE."
-                     elif action_type == "OPEN_TAB":
-                         url = action_to_take.get("url", "")
-                         if url:
-                             new_page = await self.page.context.new_page()
-                             await new_page.goto(url, wait_until="networkidle")
-                             self.page = new_page
-                             exec_result = {"success": True}
-                         else:
-                             exec_result["error"] = "No URL provided for OPEN_TAB."
-                     else:
-                         exec_payload = {"action_type": "EXECUTE_ACTION", "action": action_to_take, "iteration": self.iteration}
-                         exec_result = bridge.delegate_command(exec_payload)
-                 except Exception as e:
-                     logging.error(f"Playwright Execution Error: {e}")
-                     exec_result["error"] = str(e)
+             exec_payload = {"action_type": "EXECUTE_ACTION", "action": action_to_take, "iteration": self.iteration}
+             exec_result = bridge.delegate_command(exec_payload)
 
              if not exec_result.get("success"):
-                 logging.warning(f"Macro-action execution failed: {exec_result.get('error')}. Bailing out of batch.")
+                 logging.warning(f"Macro-action execution failed via bridge: {exec_result.get('error')}. Bailing out of batch.")
                  bail_out = True
                  break
 
@@ -1239,8 +1082,9 @@ class AgentStateMachine:
 
     async def state_learning_routine(self):
         logging.info(f"LEARNING_ROUTINE: Processing human guidance action: {self.hitl_action}")
+        from local_bridge import bridge
 
-        if self.hitl_action and self.page:
+        if self.hitl_action:
             x = self.hitl_action.get("x")
             y = self.hitl_action.get("y")
 
@@ -1304,10 +1148,20 @@ class AgentStateMachine:
                     logging.error(f"Error calling Synthesizer API: {e}")
 
                 try:
-                    logging.info(f"Executing HITL Ghost Click natively via Playwright at ({css_x}, {css_y})")
-                    await self.page.mouse.click(css_x, css_y)
+                    logging.info(f"Executing HITL Ghost Click natively via Bridge at ({css_x}, {css_y})")
+                    exec_payload = {
+                        "action_type": "EXECUTE_ACTION",
+                        "action": {
+                            "action": "CLICK",
+                            "coordinates": [css_x, css_y]
+                        },
+                        "iteration": self.iteration
+                    }
+                    exec_result = bridge.delegate_command(exec_payload)
+                    if not exec_result.get("success"):
+                        logging.error(f"Failed to execute Bridge click for HITL: {exec_result.get('error')}")
                 except Exception as e:
-                    logging.error(f"Failed to execute Playwright click for HITL: {e}")
+                    logging.error(f"Failed to execute Bridge click for HITL: {e}")
 
             try:
                 firestore_update_document("remote_commands", self.doc_id, {
