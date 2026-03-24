@@ -964,13 +964,14 @@ class AgentStateMachine:
         try:
             session = get_resilient_session()
             headers = {"Authorization": f"Bearer {CURRENT_TOKEN}"}
-            backend_url = f"{BACKEND_URL}/process"
+            backend_url = BACKEND_URL
             response = session.post(backend_url, json=payload, headers=headers)
             response.raise_for_status()
             self.ai_response = response.json()
         except requests.exceptions.RequestException as e:
             logging.error(f"Backend API call failed: {e}")
-            self.state = AgentState.TERMINATED
+            self.actions_to_execute = [{"action": "ERROR", "error": f"Backend API failed: {str(e)}"}]
+            self.state = AgentState.ACTING
             return
 
         actions = self.ai_response.get("actions", [])
