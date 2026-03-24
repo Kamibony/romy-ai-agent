@@ -4,8 +4,38 @@ import logging
 import threading
 import time
 import websockets
+import os
+import subprocess
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import urllib.parse
+
+def _kill_process_using_port(port: int):
+    """Kills any process currently listening on the specified port to prevent 'Address already in use' errors."""
+    try:
+        current_pid = os.getpid()
+        if os.name == 'nt':
+            result = subprocess.run(['netstat', '-ano'], capture_output=True, text=True)
+            for line in result.stdout.splitlines():
+                if f":{port}" in line and "LISTENING" in line:
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        pid_str = parts[-1]
+                        if pid_str.isdigit():
+                            pid = int(pid_str)
+                            if pid != current_pid and pid > 0:
+                                logging.warning(f"Port {port} is in use by PID {pid}. Attempting to kill it...")
+                                subprocess.run(['taskkill', '/F', '/PID', str(pid)], capture_output=True)
+        else:
+            result = subprocess.run(['lsof', '-t', f'-i:{port}'], capture_output=True, text=True)
+            pids = result.stdout.strip().split('\n')
+            for pid_str in pids:
+                if pid_str.isdigit():
+                    pid = int(pid_str)
+                    if pid != current_pid and pid > 0:
+                        logging.warning(f"Port {port} is in use by PID {pid}. Attempting to kill it...")
+                        subprocess.run(['kill', '-9', str(pid)], capture_output=True)
+    except Exception as e:
+        logging.warning(f"Failed to check/kill process on port {port}: {e}")
 
 
 class StateAPIHandler(BaseHTTPRequestHandler):
@@ -156,6 +186,13 @@ class LocalBridgeManager:
 
     async def _run_server(self):
         self.loop = asyncio.get_running_loop()
+
+        # Ensure the port is free before binding
+        _kill_process_using_port(self.port)
+
+        # Small delay to ensure OS has fully released the port
+        await asyncio.sleep(0.5)
+
         self.server = await websockets.serve(
             self._handle_client,
             '127.0.0.1',
@@ -193,7 +230,15 @@ class LocalBridgeManager:
 
     def _start_http_server(self):
         try:
+            # Ensure the port is free before binding
+            _kill_process_using_port(self.http_port)
+            time.sleep(0.5)
+
             self.http_server = HTTPServer(('127.0.0.1', self.http_port), StateAPIHandler)
+
+            # Allow address reuse
+            self.http_server.allow_reuse_address = True
+
             logging.info(f"HTTP local bridge server started on http://127.0.0.1:{self.http_port}")
             self.http_server.serve_forever()
         except Exception as e:

@@ -63,8 +63,21 @@ let reconnectAttempts = 0;
 let isConnecting = false;
 let heartbeatInterval = null;
 
+// Keep service worker alive dynamically
+chrome.alarms.create("keepAlive", { periodInMinutes: 0.5 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === "keepAlive") {
+        if (!localBridgeWs || localBridgeWs.readyState !== WebSocket.OPEN) {
+            connectLocalBridge();
+        }
+    }
+});
+
 function connectLocalBridge() {
-    if (localBridgeWs || isConnecting) {
+    if (localBridgeWs && localBridgeWs.readyState === WebSocket.OPEN) {
+        return;
+    }
+    if (isConnecting) {
         return;
     }
 
@@ -154,8 +167,9 @@ function connectLocalBridge() {
             localBridgeWs = null;
             if (heartbeatInterval) clearInterval(heartbeatInterval);
             reconnectAttempts++;
-            // Exponential backoff, max 30 seconds
-            const backoff = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+
+            // Adjust backoff: initially fast retries, maxing out at 15 seconds to catch Python agent restarts quickly
+            const backoff = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 15000);
             console.log(`WebSocket connection closed. Reconnecting in ${backoff}ms...`);
             reconnectTimeout = setTimeout(connectLocalBridge, backoff);
         };
@@ -163,8 +177,12 @@ function connectLocalBridge() {
         localBridgeWs.onerror = (error) => {
             // Silence network errors to avoid spamming the console when Python agent is down
             isConnecting = false;
-            if (localBridgeWs) {
-                localBridgeWs.close(); // Force close to trigger reconnect
+            if (localBridgeWs && localBridgeWs.readyState === WebSocket.CONNECTING) {
+                // If we get an error while connecting (e.g. connection refused), close it
+                // so the onclose handler can trigger a reconnect attempt.
+                try {
+                    localBridgeWs.close();
+                } catch(e) {}
             }
         };
     } catch (e) {
