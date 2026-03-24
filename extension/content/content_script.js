@@ -17,46 +17,24 @@ document.addEventListener('click', (e) => {
     }
 
     try {
-        const xpath = getXPathForElement(e.target);
-        if (xpath) {
-            console.log("Ghost Click Intercepted:", xpath);
-            const dpr = window.devicePixelRatio || 1;
-            // Send to background script which passes it to orchestrator
-            chrome.runtime.sendMessage({
-                type: window.MESSAGE_TYPES.HUMAN_CLICK_INTERCEPTED,
-                payload: {
-                    type: "CLICK",
-                    xpath: xpath,
-                    x: e.clientX,
-                    y: e.clientY,
-                    dpr: dpr
-                }
-            }).catch(err => {
-                console.warn("Failed to send ghost click to background (maybe disconnected):", err);
-            });
-        }
+        const dpr = window.devicePixelRatio || 1;
+        console.log("Ghost Click Intercepted at", e.clientX, e.clientY);
+        // Send to background script which passes it to orchestrator
+        chrome.runtime.sendMessage({
+            type: window.MESSAGE_TYPES.HUMAN_CLICK_INTERCEPTED,
+            payload: {
+                type: "CLICK",
+                x: e.clientX,
+                y: e.clientY,
+                dpr: dpr
+            }
+        }).catch(err => {
+            console.warn("Failed to send ghost click to background (maybe disconnected):", err);
+        });
     } catch (err) {
-        console.error("Error computing XPath for ghost click:", err);
+        console.error("Error computing coordinates for ghost click:", err);
     }
 }, true); // use capture phase so we get it before frameworks might eat it
-
-function getXPathForElement(element) {
-    if (element.id !== '')
-        return 'id("' + element.id + '")';
-    if (element === document.body)
-        return element.tagName.toLowerCase();
-
-    var ix = 0;
-    var siblings = element.parentNode ? element.parentNode.childNodes : [];
-    for (var i = 0; i < siblings.length; i++) {
-        var sibling = siblings[i];
-        if (sibling === element)
-            return getXPathForElement(element.parentNode) + '/' + element.tagName.toLowerCase() + '[' + (ix + 1) + ']';
-        if (sibling.nodeType === 1 && sibling.tagName === element.tagName)
-            ix++;
-    }
-    return null;
-}
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     switch (request.type) {
