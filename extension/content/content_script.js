@@ -20,10 +20,17 @@ document.addEventListener('click', (e) => {
         const xpath = getXPathForElement(e.target);
         if (xpath) {
             console.log("Ghost Click Intercepted:", xpath);
+            const dpr = window.devicePixelRatio || 1;
             // Send to background script which passes it to orchestrator
             chrome.runtime.sendMessage({
                 type: window.MESSAGE_TYPES.HUMAN_CLICK_INTERCEPTED,
-                payload: { xpath: xpath, x: e.clientX, y: e.clientY }
+                payload: {
+                    type: "CLICK",
+                    xpath: xpath,
+                    x: e.clientX,
+                    y: e.clientY,
+                    dpr: dpr
+                }
             }).catch(err => {
                 console.warn("Failed to send ghost click to background (maybe disconnected):", err);
             });
