@@ -9,7 +9,8 @@
     "storage",
     "nativeMessaging",
     "offscreen",
-    "debugger"
+    "debugger",
+    "alarms"
   ],
   "host_permissions": [
     "<all_urls>",
