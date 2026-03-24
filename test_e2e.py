@@ -119,8 +119,7 @@ def test_harness():
                 status_data = json.loads(status_response.read().decode())
                 status = status_data.get("status", "unknown")
                 if status == "AWAITING_HUMAN_INPUT":
-                    print("Agent is stuck awaiting human input. Failing test to prevent indefinite hang.")
-                    status = "failed"
+                    print("Waiting for human Ghost Click...")
             except Exception as e:
                 print(f"Failed to get status. Error: {e}")
                 break
