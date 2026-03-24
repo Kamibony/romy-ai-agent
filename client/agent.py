@@ -974,14 +974,18 @@ class AgentStateMachine:
             self.state = AgentState.ACTING
             return
 
-        actions = self.ai_response.get("actions", [])
+        if isinstance(self.ai_response, list):
+            actions = self.ai_response
+        elif isinstance(self.ai_response, dict):
+            actions = self.ai_response.get("actions", [])
+            if not actions and "action" in self.ai_response:
+                actions = [self.ai_response]
+        else:
+            actions = []
         if not actions:
-             if "action" in self.ai_response:
-                 actions = [self.ai_response]
-             else:
-                 logging.error("No actions returned by AI.")
-                 self.state = AgentState.TERMINATED
-                 return
+             logging.error("No actions returned by AI.")
+             self.state = AgentState.TERMINATED
+             return
 
         for act in actions:
              if act.get("action") == "ASK_HUMAN":
