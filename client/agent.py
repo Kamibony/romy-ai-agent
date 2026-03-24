@@ -12,6 +12,14 @@ import json
 import threading
 from datetime import datetime
 
+import io
+import base64
+from PIL import Image, ImageDraw, ImageFont
+import asyncio
+from playwright.async_api import async_playwright
+import traceback
+from enum import Enum
+
 try:
     import uiautomation as auto
 except:
@@ -42,6 +50,19 @@ BACKEND_URL = os.environ.get("BACKEND_URL", "https://romy-backend-1049976869239.
 CURRENT_TOKEN = None
 
 COMMAND_QUEUE = queue.Queue()
+global_state_machine = None
+global_asyncio_loop = None
+
+
+class AgentState(Enum):
+    INITIALIZING = "INITIALIZING"
+    EVALUATING = "EVALUATING"
+    THINKING = "THINKING"
+    ACTING = "ACTING"
+    SUSPENDED_HITL = "SUSPENDED_HITL"
+    LEARNING_ROUTINE = "LEARNING_ROUTINE"
+    TERMINATED = "TERMINATED"
+
 ABORT_AGENT = False
 PAUSE_AGENT = False
 ACTIVE_DOC_ID = None
@@ -521,6 +542,75 @@ def annotate_image_with_crosshair(base64_img: str, x: int, y: int) -> str:
         logging.error(f"Failed to apply crosshair annotation: {e}")
         return base64_img
 
+def annotate_image_with_som(base64_img: str, ui_elements: list) -> str:
+    """Draws Set-of-Mark numbered bounding boxes over interactive elements."""
+    try:
+        if base64_img.startswith('data:image'):
+            img_data = base64.b64decode(base64_img.split(',')[1])
+            prefix = base64_img.split(',')[0] + ','
+        else:
+            img_data = base64.b64decode(base64_img)
+            prefix = "data:image/png;base64,"
+
+        image = Image.open(io.BytesIO(img_data)).convert("RGBA")
+        draw = ImageDraw.Draw(image)
+
+        try:
+            font = ImageFont.load_default()
+        except:
+            font = None
+
+        for el in ui_elements:
+            box = el.get("bounds")
+            target_id = el.get("target_id")
+
+            if box and target_id is not None:
+                try:
+                    x, y, width, height = map(int, box)
+                    draw.rectangle([x, y, x + width, y + height], outline=(255, 0, 0, 255), width=2)
+                    text = f" [{target_id}] "
+                    if hasattr(font, 'getbbox'):
+                        bbox = font.getbbox(text)
+                        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+                    else:
+                        tw, th = len(text) * 6, 12
+                    draw.rectangle([x, max(0, y - th), x + tw, y], fill=(255, 0, 0, 255))
+                    draw.text((x, max(0, y - th)), text, fill=(255, 255, 255, 255), font=font)
+                except Exception as e:
+                    logging.warning(f"Error drawing SoM box for ID {target_id}: {e}")
+
+        buffered = io.BytesIO()
+        image.save(buffered, format="PNG")
+        return prefix + base64.b64encode(buffered.getvalue()).decode("utf-8")
+    except Exception as e:
+        logging.error(f"Failed to apply SoM annotation: {e}")
+        return base64_img
+
+def annotate_image_with_crosshair(base64_img: str, x: int, y: int) -> str:
+    """Draws a green crosshair on the raw un-tagged coordinate."""
+    try:
+        if base64_img.startswith('data:image'):
+            img_data = base64.b64decode(base64_img.split(',')[1])
+            prefix = base64_img.split(',')[0] + ','
+        else:
+            img_data = base64.b64decode(base64_img)
+            prefix = "data:image/png;base64,"
+
+        image = Image.open(io.BytesIO(img_data)).convert("RGBA")
+        draw = ImageDraw.Draw(image)
+
+        r = 15
+        draw.ellipse((x-r, y-r, x+r, y+r), outline=(0, 255, 0, 255), width=3)
+        draw.line((x-r-5, y, x+r+5, y), fill=(0, 255, 0, 255), width=3)
+        draw.line((x, y-r-5, x, y+r+5), fill=(0, 255, 0, 255), width=3)
+
+        buffered = io.BytesIO()
+        image.save(buffered, format="PNG")
+        return prefix + base64.b64encode(buffered.getvalue()).decode("utf-8")
+    except Exception as e:
+        logging.error(f"Failed to apply crosshair annotation: {e}")
+        return base64_img
+
 def pre_flight_check(command_text: str) -> dict:
     if not CURRENT_TOKEN:
         return {"status": "ok"}
@@ -708,618 +798,530 @@ def load_client_profile() -> Dict[str, Any]:
             logging.error(f"Failed to load client_profile.json: {e}")
     return {}
 
-def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "", client_context: dict = None) -> None:
-    """Runs the agent loop triggered by a remote text command."""
-    global ACTIVE_DOC_ID
-    ACTIVE_DOC_ID = doc_id
 
-    if not CURRENT_TOKEN:
-        logging.error("Error: Missing Firebase Token. Cannot execute remote command.")
-        return
+class AgentStateMachine:
+    def __init__(self):
+        self.state = AgentState.INITIALIZING
+        self.hitl_event = asyncio.Event()
+        self.hitl_action = None
+        self.doc_id = None
+        self.command_text = None
+        self.audio_b64 = None
+        self.client_context = None
+        self.sub_tasks = []
+        self.current_sub_task_index = 0
+        self.iteration = 0
+        self.sub_task_iteration = 0
+        self.history = []
+        self.previous_action = None
+        self.previous_state_metadata = None
+        self.previous_state_ui = None
+        self.max_sub_task_iterations = 5
+        self.playwright = None
+        self.browser = None
+        self.page = None
 
-    if client_context is None:
-        client_context = load_client_profile()
-
-    try:
-        logging.info(f"=== Remote Agent Activated for Document: {doc_id} ===")
-        try:
-            msg_text = f"Remote command received: {command_text}" if command_text else "Remote audio command received."
-            notification.notify(title="ROMY AI", message=msg_text, app_name="ROMY", timeout=2)
-            if winsound: winsound.Beep(800, 200)
-        except Exception:
-            if winsound: winsound.Beep(800, 200)
-
-        # Command Routing via AI
-        intent, command_text = classify_intent(command_text, audio_b64)
-
-        # If command is web-related, orchestrate the ReAct loop with the Chrome extension
-        if intent == "WEB":
-            logging.info("Command routed to Web (Chrome Extension). Starting ReAct loop.")
-            from local_bridge import bridge
-
-            iteration = 0
-            final_status = "completed"
-
-            # Pre-flight Check
-            logging.info("Running Pre-Flight check...")
-            pre_flight = pre_flight_check(command_text)
-            if pre_flight.get("status") == "ASK_HUMAN":
-                reason = pre_flight.get("reason", "Missing required information.")
-                logging.info(f"Pre-flight failed: {reason}")
-                try:
-                    firestore_update_document("remote_commands", doc_id, {
-                        "status": "AWAITING_HUMAN_INPUT",
-                        "help_reason": reason
-                    })
-                except Exception as img_e:
-                    logging.error(f"Error saving pre-flight help request: {img_e}")
-                return
-
-            # Supervisor Plan
-            logging.info("Requesting Supervisor Plan...")
-            sub_tasks = supervisor_plan(command_text)
-            if not sub_tasks:
-                sub_tasks = [command_text]  # fallback
-
-            logging.info(f"Supervisor plan generated: {sub_tasks}")
-
-            # Stuck detector state
-            history = []
-
-            for sub_task_idx, current_sub_task in enumerate(sub_tasks):
-                logging.info(f"--- Executing Sub-Task {sub_task_idx + 1}/{len(sub_tasks)}: {current_sub_task} ---")
-
-                sub_task_iteration = 0
-                max_sub_task_iterations = 5
-
-                # Keep track of previous action state to verify in next iteration
-                previous_action = None
-                previous_state_metadata = None
-                previous_state_ui = None
-
-                while sub_task_iteration < max_sub_task_iterations:
-                    break_outer = False
-                    if ABORT_AGENT:
-                        logging.info("Emergency abort triggered. Stopping remote agent loop.")
-                        final_status = "failed"
-                        break
-
-                    if PAUSE_AGENT:
-                        time.sleep(1)
-                        continue
-
-                    # Check for human response
-                    data = firestore_get_document("remote_commands", doc_id)
-                    if data:
-                        if data.get("status") in ["help_needed", "AWAITING_HUMAN_INPUT"]:
-                            logging.info("Agent paused, waiting for human input...")
-                            time.sleep(2)
-                            continue
-
-                        if data.get("human_response"):
-                            command_text += "\nHuman instruction: " + data.get("human_response")
-                            firestore_update_document("remote_commands", doc_id, {}, delete_fields=["human_response"])
-
-                    # 1. Ask extension for the current state
-                    state_payload = {
-                        "action_type": "GET_STATE",
-                        "commandText": command_text,
-                        "audioBase64": audio_b64 if iteration == 0 else "",
-                        "iteration": iteration
-                    }
-                    logging.info(f"Requesting WEB state from extension (iteration {iteration})...")
-                    state_result = bridge.delegate_command(state_payload)
-
-                    if not state_result.get("success"):
-                        logging.error(f"Failed to get state from extension: {state_result.get('error')}")
-                        final_status = "failed"
-                        error_msg = state_result.get("error", "Failed to get web state.")
-                        break
-
-                    ui_elements = state_result.get("ui_elements", [])
-                    screenshot_base64 = state_result.get("screenshot_base64", "")
-                    current_url = state_result.get("url", "")
-
-                    # Native Verification of Previous Action
-                    if previous_action:
-                        logging.info("Attempting Orchestrator-Level Native Verification of previous action...")
-                        native_res = verify_action_natively(
-                            previous_action,
-                            {"metadata": previous_state_metadata, "ui_elements": previous_state_ui},
-                            {"metadata": {"current_url": current_url}, "ui_elements": ui_elements}
-                        )
-
-                        if native_res.get("success"):
-                            logging.info(f"Native verification succeeded: {native_res.get('reason')}")
-                            command_text += f"\n[System Note: Action {previous_action.get('action', 'UNKNOWN')} verified successfully natively: {native_res.get('reason')}]"
-                        else:
-                            logging.info(f"Native verification didn't match: {native_res.get('reason')}")
-
-                    # 2. Send state to backend to receive ONE OR MORE actions
-                    payload = {
-                        "ui_elements": ui_elements, # No longer strictly needed for WEB, but we can pass it if it's there
-                        "session_id": doc_id,
-                        "command_text": command_text,
-                        "current_sub_task": current_sub_task,
-                        "screenshot_base64": screenshot_base64,
-                        "current_url": current_url,
-                        "client_context": client_context
-                    }
-                    if sub_task_iteration == 0 and sub_task_idx == 0 and audio_b64:
-                        payload["audio_base64"] = audio_b64
-                    else:
-                        payload["audio_base64"] = ""
-
-                    headers = {
-                        "Authorization": f"Bearer {CURRENT_TOKEN}",
-                        "Content-Type": "application/json"
-                    }
-
-                    logging.info("Sending WEB state payload to backend...")
-                    try:
-                        max_retries = 3
-                        retry_delay = 5
-                        for attempt in range(max_retries):
-                            try:
-                                with get_resilient_session() as session:
-                                    response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=(15, 60))
-                                response.raise_for_status()
-                                backend_data = response.json()
-                                break
-                            except requests.exceptions.RequestException as req_err:
-                                logging.warning(f"Network error on attempt {attempt + 1}/{max_retries}: {req_err}")
-                                if attempt < max_retries - 1:
-                                    time.sleep(retry_delay)
-                                    retry_delay *= 2
-                                else:
-                                    raise
-
-                        if isinstance(backend_data, list):
-                            actions = backend_data
-                        elif isinstance(backend_data, dict):
-                            actions = backend_data.get("actions", [])
-                            if not actions and "action" in backend_data:
-                                actions = [backend_data]
-                        else:
-                            logging.warning(f"Unexpected response type from backend: {type(backend_data)}")
-                            actions = []
-
-                        if not actions:
-                            logging.info("No actions returned from backend. Considering task completed.")
-                            break
-
-                        has_typed_in_batch = False
-                        for action_idx, act in enumerate(actions):
-                            if ABORT_AGENT:
-                                logging.info("Emergency abort triggered. Stopping remote agent loop.")
-                                final_status = "failed"
-                                break_outer = True
-                                break
-
-                            # Pre-check for target ID dynamically changing during batch
-                            if action_idx > 0 and "target_id" in act:
-                                # We need to fetch the state to ensure the target_id is still valid.
-                                # But getting the full state is slow, so we rely on the extension execution
-                                # to fail if the ID is missing. But let's verify if we need to bailout
-                                pass
-
-                            save_flight_record(doc_id, iteration, payload, backend_data, act, screenshot_base64)
-                            if not isinstance(act, dict):
-                                logging.warning(f"Skipping invalid action type: {type(act)}")
-                                continue
-
-                            action_type = act.get("action", "")
-                            action_upper = str(action_type).upper()
-
-                            if action_upper == "TYPE":
-                                has_typed_in_batch = True
-
-                            # Intercept premature sub-task completions to enforce Stable State Law
-                            if action_upper == "SUB_TASK_COMPLETE" and has_typed_in_batch:
-                                logging.warning("Systemic Safety Intercept: Dropping SUB_TASK_COMPLETE because a TYPE action occurred in this batch. Forcing a state check for dynamic overlays.")
-                                break
-
-                            logging.info(f"Backend returned action [{action_idx+1}/{len(actions)}]: {action_upper}")
-
-                            # Stuck Detector Logic
-                            # We only append to history on the first action of the batch to avoid triggering false positives
-                            if action_idx == 0:
-                                history.append(payload.get("ui_elements", []))
-                                if len(history) > 5:
-                                    history.pop(0)
-
-                                if len(history) == 5:
-                                    u1, u2, u3, u4, u5 = history
-                                    # Check if visual state (ui_elements) remains identical for 5 consecutive iterations
-                                    if u1 == u2 == u3 == u4 == u5:
-                                        logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 5 consecutive iterations.")
-                                        reason = f"I am stuck trying to execute: [{current_sub_task}]. Please assist."
-                                        try:
-                                            firestore_update_document("remote_commands", doc_id, {
-                                                "status": "AWAITING_HUMAN_INPUT",
-                                                "help_reason": reason,
-                                                "screenshot_b64": screenshot_base64
-                                            })
-                                        except Exception as img_e:
-                                            logging.error(f"Error saving stuck detector help request: {img_e}")
-                                        final_status = "AWAITING_HUMAN_INPUT"
-                                        break_outer = True
-                                        break
-
-                            if action_upper == "SUB_TASK_COMPLETE":
-                                logging.info(f"Sub-task completed: {current_sub_task}")
-                                break_outer = True
-                                break
-                            elif action_upper == "DONE":
-                                logging.info("Web task finished successfully.")
-                                # Even if it says DONE early, we'll mark this sub-task complete
-                                # and potentially break out entirely. For now, mark sub-task done.
-                                break_outer = True
-                                break
-                            elif "ERROR" in action_upper:
-                                raw_response = act.get("raw_response", "No raw response provided")
-                                error_msg = act.get("error", "No error message provided")
-                                logging.error(f"Web agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
-                                final_status = "failed"
-                                break_outer = True
-                                break
-                            elif action_upper == "WAIT":
-                                wait_seconds = float(act.get("seconds", 2))
-                                logging.info(f"Agent requested WAIT for {wait_seconds} seconds.")
-                                time.sleep(wait_seconds)
-                                # No need to delegate to extension, just sleep locally and loop will get fresh state next
-                                break
-                            elif action_upper == "ASK_HUMAN":
-                                reason = act.get("reason", "No reason provided")
-                                logging.info(f"Agent asking human for help: {reason}")
-                                try:
-                                    firestore_update_document("remote_commands", doc_id, {
-                                        "status": "AWAITING_HUMAN_INPUT",
-                                        "help_reason": reason,
-                                        "screenshot_b64": screenshot_base64
-                                    })
-                                except Exception as img_e:
-                                    logging.error(f"Error saving help request: {img_e}")
-
-                                final_status = "AWAITING_HUMAN_INPUT"
-                                break_outer = True
-                                break
-
-                            # 3. Delegate action to the extension
-                            exec_payload = {
-                                "action_type": "EXECUTE_ACTION",
-                                "action": act
-                            }
-                            logging.info("Delegating action to extension...")
-                            exec_result = bridge.delegate_command(exec_payload)
-
-                            if not exec_result.get("success"):
-                                logging.error(f"Failed to execute action in extension: {exec_result.get('error')}")
-                                # Safety Bailout: Abort the rest of the batch and trigger a fresh GET_STATE
-                                logging.info("Safety Bailout: Action failed. Aborting remaining batch actions and fetching new state.")
-                                break
-
-                            if action_upper == "EXECUTE_JS":
-                                # Feed the result back to the LLM via command text or as a system note
-                                js_result = exec_result.get("result")
-                                logging.info(f"JS Execution Result: {js_result}")
-                                command_text += f"\n[System Note: Last EXECUTE_JS returned: {js_result}]"
-
-                            # Save state for verification in next iteration
-                            previous_action = act
-                            previous_state_metadata = {"current_url": current_url}
-                            previous_state_ui = ui_elements
-
-                            if action_idx < len(actions) - 1:
-                                # Micro-sleep between sequential actions
-                                time.sleep(0.5)
-
-                    except requests.exceptions.RequestException as req_e:
-                        if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
-                            handle_token_expiry()
-                            final_status = "failed"
-                            error_msg = "Token expired"
-                            break_outer = True
-                            break
-                        logging.info(f"Request failed: {req_e}")
-                        final_status = "failed"
-                        error_msg = f"Network request failed: {req_e}"
-                        break_outer = True
-                        break
-
-                    if break_outer:
-                        break
-
-                    time.sleep(1)
-                    iteration += 1
-                    sub_task_iteration += 1
-
-                # Subtask retry limit reached
-                if sub_task_iteration >= max_sub_task_iterations:
-                    logging.error(f"Max retries reached for sub-task: {current_sub_task}")
-                    final_status = "failed"
-                    break
-
-                if final_status != "completed":
-                    break
-
-            # Update final document status
+    async def connect_playwright(self):
+        if not self.playwright:
+            self.playwright = await async_playwright().start()
+        if not self.browser:
             try:
-                if final_status != "AWAITING_HUMAN_INPUT":
-                    update_payload = {"status": final_status}
-                    if final_status == "failed" and "error_msg" in locals():
-                        update_payload["error"] = error_msg
-                    firestore_update_document("remote_commands", doc_id, update_payload)
-                    logging.info(f"Remote command {doc_id} marked as {final_status} from Web execution.")
+                self.browser = await self.playwright.chromium.connect_over_cdp("http://127.0.0.1:9222")
+                contexts = self.browser.contexts
+                if contexts:
+                    self.page = contexts[0].pages[0] if contexts[0].pages else await contexts[0].new_page()
+                else:
+                    self.page = await self.browser.new_page()
+                logging.info("Successfully connected to browser via Playwright CDP.")
             except Exception as e:
-                pass
-            return
+                logging.error(f"Failed to connect Playwright over CDP: {e}")
+                self.browser = None
+                self.page = None
 
-        logging.info("Command routed to OS (Native).")
-        iteration = 0
-        final_status = "completed"
+    async def disconnect_playwright(self):
+        if self.browser:
+            await self.browser.close()
+            self.browser = None
+        if self.playwright:
+            await self.playwright.stop()
+            self.playwright = None
 
-        # Stuck detector state
-        history = []
+    async def get_playwright_som_state(self):
+        """Uses Playwright CDP to fetch the AOM tree and screenshot, returning SoM elements."""
+        if not self.page or not self.browser:
+            return None
 
-        while True:
+        try:
+            screenshot_bytes = await self.page.screenshot(type="png", full_page=False)
+            clean_screenshot_b64 = "data:image/png;base64," + base64.b64encode(screenshot_bytes).decode("utf-8")
+
+            cdp = await self.page.context.new_cdp_session(self.page)
+            ax_tree = await cdp.send("Accessibility.getFullAXTree")
+            nodes = ax_tree.get("nodes", [])
+
+            dom_doc = await cdp.send("DOM.getDocument")
+
+            ui_elements = []
+            target_id = 1
+
+            for node in nodes:
+                role = node.get("role", {}).get("value")
+                actionable_roles = {"button", "link", "textbox", "searchbox", "combobox", "menuitem", "checkbox", "radio"}
+
+                if role in actionable_roles:
+                    backend_id = node.get("backendDOMNodeId")
+                    if backend_id:
+                        try:
+                            resolved = await cdp.send("DOM.resolveNode", {"backendNodeId": backend_id})
+                            object_id = resolved.get("object", {}).get("objectId")
+                            if object_id:
+                                box_model = await cdp.send("DOM.getBoxModel", {"objectId": object_id})
+                                content_quad = box_model.get("model", {}).get("content", [])
+                                if len(content_quad) == 8:
+                                    x = content_quad[0]
+                                    y = content_quad[1]
+                                    width = content_quad[2] - x
+                                    height = content_quad[5] - y
+                                    if width > 0 and height > 0:
+                                        ui_elements.append({
+                                            "target_id": target_id,
+                                            "bounds": [x, y, width, height],
+                                            "coordinates": [x + width/2, y + height/2]
+                                        })
+                                        target_id += 1
+                        except Exception:
+                            pass
+
+            url = self.page.url
+            return {
+                "success": True,
+                "clean_screenshot_base64": clean_screenshot_b64,
+                "ui_elements": ui_elements,
+                "url": url
+            }
+        except Exception as e:
+            logging.error(f"Playwright SoM capture failed: {e}")
+            return None
+
+    async def run(self, doc_id, command_text, audio_b64="", client_context=None):
+        global ACTIVE_DOC_ID
+        ACTIVE_DOC_ID = doc_id
+
+        self.doc_id = doc_id
+        self.command_text = command_text
+        self.audio_b64 = audio_b64
+        self.client_context = client_context or load_client_profile()
+        self.state = AgentState.INITIALIZING
+        self.iteration = 0
+        self.sub_tasks = []
+        self.current_sub_task_index = 0
+        self.sub_task_iteration = 0
+
+        logging.info(f"=== Remote Agent Activated for Document: {doc_id} ===")
+        from local_bridge import bridge
+
+        await self.connect_playwright()
+
+        while self.state != AgentState.TERMINATED:
             if ABORT_AGENT:
-                logging.info("Emergency abort triggered. Stopping remote agent loop.")
-                final_status = "failed"
+                logging.info("Emergency abort triggered. Stopping state machine.")
+                self.state = AgentState.TERMINATED
                 break
-
             if PAUSE_AGENT:
-                time.sleep(1)
+                await asyncio.sleep(1)
                 continue
 
-            # Check for human response
-            fs_doc = firestore_get_document("remote_commands", doc_id)
-            if fs_doc:
-                if fs_doc.get("status") in ["help_needed", "AWAITING_HUMAN_INPUT"]:
-                    logging.info("Agent paused, waiting for human input...")
-                    time.sleep(2)
-                    continue
+            if self.state == AgentState.INITIALIZING:
+                await self.state_initializing()
+            elif self.state == AgentState.EVALUATING:
+                await self.state_evaluating(bridge)
+            elif self.state == AgentState.THINKING:
+                await self.state_thinking(bridge)
+            elif self.state == AgentState.ACTING:
+                await self.state_acting(bridge)
+            elif self.state == AgentState.SUSPENDED_HITL:
+                await self.state_suspended_hitl()
+            elif self.state == AgentState.LEARNING_ROUTINE:
+                await self.state_learning_routine()
 
-                if fs_doc.get("human_response"):
-                    command_text += "\nHuman instruction: " + fs_doc.get("human_response")
-                    firestore_update_document("remote_commands", doc_id, {}, delete_fields=["human_response"])
+            await asyncio.sleep(0.1)
 
-            ui_elements, memory_map = scan_ui_elements()
+        await self.disconnect_playwright()
 
-            payload = {
-                "ui_elements": ui_elements,
-                "session_id": doc_id,
-                "client_context": client_context
-            }
-            if iteration == 0 and audio_b64:
-                payload["audio_base64"] = audio_b64
-            else:
-                payload["audio_base64"] = ""
+    async def state_initializing(self):
+        intent, cmd_text = classify_intent(self.command_text, self.audio_b64)
+        self.command_text = cmd_text
 
-            payload["command_text"] = command_text
+        if intent != "WEB":
+            logging.info("Non-WEB commands not supported in Async State Machine yet.")
+            self.state = AgentState.TERMINATED
+            return
 
-            headers = {
-                "Authorization": f"Bearer {CURRENT_TOKEN}",
-                "Content-Type": "application/json"
-            }
-
-            logging.info(f"Sending remote payload to backend (iteration {iteration})...")
+        logging.info("Running Pre-Flight check...")
+        pre_flight = pre_flight_check(self.command_text)
+        if pre_flight.get("status") == "ASK_HUMAN":
+            reason = pre_flight.get("reason", "Missing required information.")
+            logging.info(f"Pre-flight failed: {reason}")
             try:
-                max_retries = 3
-                retry_delay = 5
-                for attempt in range(max_retries):
-                    try:
-                        with get_resilient_session() as session:
-                            response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=(15, 60))
-                        response.raise_for_status()
-                        backend_data = response.json()
-                        break
-                    except requests.exceptions.RequestException as req_err:
-                        logging.warning(f"Network error on attempt {attempt + 1}/{max_retries}: {req_err}")
-                        if attempt < max_retries - 1:
-                            time.sleep(retry_delay)
-                            retry_delay *= 2
-                        else:
-                            raise
+                firestore_update_document("remote_commands", self.doc_id, {
+                    "status": "AWAITING_HUMAN_INPUT",
+                    "help_reason": reason
+                })
+            except Exception as e:
+                logging.error(f"Error saving pre-flight help request: {e}")
+            self.state = AgentState.TERMINATED
+            return
 
-                if isinstance(backend_data, list):
-                    actions = backend_data
-                elif isinstance(backend_data, dict):
-                    actions = backend_data.get("actions", [])
-                    # If backend returned older single-action format, wrap it
-                    if not actions and "action" in backend_data:
-                        actions = [backend_data]
+        logging.info("Requesting Supervisor Plan...")
+        self.sub_tasks = supervisor_plan(self.command_text)
+        if not self.sub_tasks:
+            self.sub_tasks = [self.command_text]
+
+        logging.info(f"Supervisor plan generated: {self.sub_tasks}")
+        self.current_sub_task_index = 0
+        self.history = []
+        self.state = AgentState.EVALUATING
+
+    async def state_evaluating(self, bridge):
+        if self.current_sub_task_index >= len(self.sub_tasks):
+            logging.info("All sub-tasks completed.")
+            self.state = AgentState.TERMINATED
+            firestore_update_document("remote_commands", self.doc_id, {"status": "completed"})
+            return
+
+        if self.sub_task_iteration >= self.max_sub_task_iterations:
+            logging.info("Max iterations reached for sub-task.")
+            self.current_sub_task_index += 1
+            self.sub_task_iteration = 0
+            self.previous_action = None
+            return
+
+        current_sub_task = self.sub_tasks[self.current_sub_task_index]
+        logging.info(f"--- Executing Sub-Task {self.current_sub_task_index + 1}/{len(self.sub_tasks)}: {current_sub_task} ---")
+
+        state_result = await self.get_playwright_som_state()
+
+        if not state_result:
+            logging.info("Falling back to bridge GET_STATE...")
+            state_payload = {
+                "action_type": "GET_STATE",
+                "commandText": self.command_text,
+                "audioBase64": self.audio_b64 if self.iteration == 0 else "",
+                "iteration": self.iteration
+            }
+            state_result = bridge.delegate_command(state_payload)
+            if not state_result.get("success"):
+                logging.error(f"Failed to get state from extension: {state_result.get('error')}")
+                self.state = AgentState.TERMINATED
+                return
+            self.current_clean_screenshot = state_result.get("screenshot_base64", "")
+        else:
+            self.current_clean_screenshot = state_result.get("clean_screenshot_base64", "")
+
+        self.current_ui_elements = state_result.get("ui_elements", [])
+        self.current_url = state_result.get("url", "")
+
+        self.current_annotated_screenshot = annotate_image_with_som(
+            self.current_clean_screenshot,
+            self.current_ui_elements
+        )
+
+        if self.previous_action:
+            logging.info("Attempting Orchestrator-Level Native Verification of previous action...")
+            native_res = verify_action_natively(
+                self.previous_action,
+                {"metadata": self.previous_state_metadata, "ui_elements": self.previous_state_ui},
+                {"metadata": {"current_url": self.current_url}, "ui_elements": self.current_ui_elements}
+            )
+
+            if native_res.get("success"):
+                logging.info(f"Native verification succeeded: {native_res.get('reason')}")
+                self.command_text += f"\n[System Note: Action {self.previous_action.get('action', 'UNKNOWN')} verified successfully natively: {native_res.get('reason')}]"
+            else:
+                logging.info(f"Native verification didn't match: {native_res.get('reason')}")
+
+        self.state = AgentState.THINKING
+
+    async def state_thinking(self, bridge):
+        current_sub_task = self.sub_tasks[self.current_sub_task_index]
+        payload = {
+            "ui_elements": [], # Stripped out to enforce Vision-First SoM reasoning
+            "raw_ui_elements": self.current_ui_elements,
+            "command_text": self.command_text,
+            "current_sub_task": current_sub_task,
+            "history": self.history,
+            "iteration": self.iteration,
+            "screenshot_base64": getattr(self, "current_annotated_screenshot", self.current_clean_screenshot),
+            "client_context": self.client_context
+        }
+
+        logging.info("Sending state to backend for decision...")
+        try:
+            session = get_resilient_session()
+            headers = {"Authorization": f"Bearer {CURRENT_TOKEN}"}
+            backend_url = f"{BACKEND_URL}/process"
+            response = session.post(backend_url, json=payload, headers=headers)
+            response.raise_for_status()
+            self.ai_response = response.json()
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Backend API call failed: {e}")
+            self.state = AgentState.TERMINATED
+            return
+
+        actions = self.ai_response.get("actions", [])
+        if not actions:
+             if "action" in self.ai_response:
+                 actions = [self.ai_response]
+             else:
+                 logging.error("No actions returned by AI.")
+                 self.state = AgentState.TERMINATED
+                 return
+
+        for act in actions:
+             if act.get("action") == "ASK_HUMAN":
+                 help_reason = act.get("reason", "I am stuck and need help.")
+                 contextual_help_reason = f"{help_reason} | Stuck trying to execute: [{current_sub_task}]"
+                 logging.info(f"AI requested human help: {contextual_help_reason}")
+                 try:
+                     firestore_update_document("remote_commands", self.doc_id, {
+                         "status": "AWAITING_HUMAN_INPUT",
+                         "help_reason": contextual_help_reason
+                     })
+                 except Exception as e:
+                     logging.error(f"Error saving help request to Firestore: {e}")
+                 self.state = AgentState.SUSPENDED_HITL
+                 return
+
+        current_state_str = str([{"id": el.get("target_id", "N/A"), "text": el.get("text", "")[:20]} for el in self.current_ui_elements[:5]])
+        if self.history and self.history[-1] == current_state_str:
+            self.stuck_counter = getattr(self, 'stuck_counter', 0) + 1
+            if self.stuck_counter >= 5:
+                 logging.warning("Stuck detector triggered! Same visual state for 5 iterations.")
+                 try:
+                     firestore_update_document("remote_commands", self.doc_id, {
+                         "status": "AWAITING_HUMAN_INPUT",
+                         "help_reason": f"I am stuck in a loop trying to execute: [{current_sub_task}]"
+                     })
+                 except Exception as e:
+                     logging.error(f"Error saving stuck state to Firestore: {e}")
+                 self.state = AgentState.SUSPENDED_HITL
+                 return
+        else:
+            self.stuck_counter = 0
+
+        self.history.append(current_state_str)
+        if len(self.history) > 10:
+             self.history.pop(0)
+
+        self.actions_to_execute = actions
+        self.state = AgentState.ACTING
+
+    async def state_acting(self, bridge):
+        current_sub_task = self.sub_tasks[self.current_sub_task_index]
+        bail_out = False
+
+        for action_idx, action_to_take in enumerate(self.actions_to_execute):
+             if action_to_take.get("action") == "SUB_TASK_COMPLETE":
+                 logging.info(f"Sub-Task '{current_sub_task}' marked as complete by AI.")
+                 self.current_sub_task_index += 1
+                 self.sub_task_iteration = 0
+                 self.previous_action = None
+                 self.history.clear()
+                 bail_out = True
+                 break
+
+             if action_to_take.get("action") == "WAIT":
+                 wait_time = action_to_take.get("wait_time", 2)
+                 logging.info(f"Executing explicit WAIT for {wait_time} seconds...")
+                 await asyncio.sleep(wait_time)
+                 bail_out = True
+                 break
+
+             logging.info(f"Executing Macro-Action {action_idx + 1}/{len(self.actions_to_execute)}: {action_to_take.get('action')}")
+             action_type = action_to_take.get("action")
+             exec_result = {"success": False, "error": "Playwright action failed"}
+
+             if not self.page:
+                 logging.error("Playwright page not connected. Falling back to bridge execution.")
+                 exec_payload = {"action_type": "EXECUTE_ACTION", "action": action_to_take, "iteration": self.iteration}
+                 exec_result = bridge.delegate_command(exec_payload)
+             else:
+                 try:
+                     if action_type == "CLICK":
+                         coordinates = action_to_take.get("coordinates", [None, None])
+                         x, y = coordinates[0], coordinates[1]
+                         if x is not None and y is not None:
+                             await self.page.mouse.click(x, y)
+                             exec_result = {"success": True}
+                         else:
+                             exec_payload = {"action_type": "EXECUTE_ACTION", "action": action_to_take, "iteration": self.iteration}
+                             exec_result = bridge.delegate_command(exec_payload)
+                     elif action_type == "TYPE":
+                         coordinates = action_to_take.get("coordinates", [None, None])
+                         x, y = coordinates[0], coordinates[1]
+                         text = action_to_take.get("text", "")
+                         if x is not None and y is not None:
+                             await self.page.mouse.click(x, y)
+                             await self.page.keyboard.type(text)
+                             exec_result = {"success": True}
+                         else:
+                             exec_payload = {"action_type": "EXECUTE_ACTION", "action": action_to_take, "iteration": self.iteration}
+                             exec_result = bridge.delegate_command(exec_payload)
+                     elif action_type == "NAVIGATE":
+                         url = action_to_take.get("url", "")
+                         if url:
+                             await self.page.goto(url, wait_until="networkidle")
+                             exec_result = {"success": True}
+                         else:
+                             exec_result["error"] = "No URL provided for NAVIGATE."
+                     elif action_type == "OPEN_TAB":
+                         url = action_to_take.get("url", "")
+                         if url:
+                             new_page = await self.page.context.new_page()
+                             await new_page.goto(url, wait_until="networkidle")
+                             self.page = new_page
+                             exec_result = {"success": True}
+                         else:
+                             exec_result["error"] = "No URL provided for OPEN_TAB."
+                     else:
+                         exec_payload = {"action_type": "EXECUTE_ACTION", "action": action_to_take, "iteration": self.iteration}
+                         exec_result = bridge.delegate_command(exec_payload)
+                 except Exception as e:
+                     logging.error(f"Playwright Execution Error: {e}")
+                     exec_result["error"] = str(e)
+
+             if not exec_result.get("success"):
+                 logging.warning(f"Macro-action execution failed: {exec_result.get('error')}. Bailing out of batch.")
+                 bail_out = True
+                 break
+
+             self.previous_action = action_to_take
+             self.previous_state_metadata = {"current_url": self.current_url}
+             self.previous_state_ui = self.current_ui_elements
+
+        try:
+             save_flight_record(
+                 doc_id=self.doc_id,
+                 iteration=self.iteration,
+                 payload={"command_text": self.command_text, "sub_task": current_sub_task},
+                 response=self.ai_response,
+                 action_executed=self.actions_to_execute,
+                 screenshot_b64=self.current_clean_screenshot
+             )
+        except Exception as e:
+             logging.error(f"Failed to save flight record: {e}")
+
+        self.iteration += 1
+        self.sub_task_iteration += 1
+        self.state = AgentState.EVALUATING
+
+    async def state_suspended_hitl(self):
+        logging.info("Agent is SUSPENDED, awaiting HITL event (Ghost Click)...")
+        await self.hitl_event.wait()
+        logging.info("Agent WOKE UP from HITL suspension.")
+        self.hitl_event.clear()
+        self.state = AgentState.LEARNING_ROUTINE
+
+    async def state_learning_routine(self):
+        logging.info(f"LEARNING_ROUTINE: Processing human guidance action: {self.hitl_action}")
+
+        if self.hitl_action and self.page:
+            x = self.hitl_action.get("x")
+            y = self.hitl_action.get("y")
+
+            if x is not None and y is not None:
+                css_x, css_y = float(x), float(y)
+
+                intersecting_boxes = []
+                for el in getattr(self, 'current_ui_elements', []):
+                    box = el.get("bounds")
+                    if box and len(box) == 4:
+                        bx, by, bwidth, bheight = box
+                        if bx <= css_x <= bx + bwidth and by <= css_y <= by + bheight:
+                            area = bwidth * bheight
+                            intersecting_boxes.append({"el": el, "area": area})
+
+                target_box = None
+                prompt_text = ""
+                image_to_send = ""
+
+                if intersecting_boxes:
+                    intersecting_boxes.sort(key=lambda item: item["area"])
+                    target_box = intersecting_boxes[0]["el"]
+                    target_id = target_box.get("target_id")
+
+                    logging.info(f"HITL click at ({css_x}, {css_y}) intersected with SoM Box [{target_id}].")
+                    prompt_text = (f"The human operator intervened and clicked on SoM Box ID [{target_id}]. "
+                                   f"You failed to execute this step correctly in the previous iteration. "
+                                   f"Analyze the visual features and semantic context of Box [{target_id}] "
+                                   f"and generate a universal visual rule for the Playbook.")
+                    image_to_send = getattr(self, "current_annotated_screenshot", self.current_clean_screenshot)
                 else:
-                    logging.warning(f"Unexpected response type from backend: {type(backend_data)}")
-                    actions = []
+                    logging.info(f"HITL click at ({css_x}, {css_y}) did not intersect any SoM Box.")
+                    prompt_text = (f"The human operator intervened and clicked exactly at coordinates (X: {css_x}, Y: {css_y}). "
+                                   f"There was no numbered SoM box at this location (AOM failure). "
+                                   f"Analyze the raw visual area inside the green crosshair I have drawn at those coordinates "
+                                   f"and generate a universal visual rule for the Playbook.")
+                    image_to_send = annotate_image_with_crosshair(self.current_clean_screenshot, int(css_x), int(css_y))
 
-                break_outer = False
-                had_terminal_action = False
-                for act in actions:
-                    if not isinstance(act, dict):
-                        logging.warning(f"Skipping invalid action type: {type(act)}")
-                        continue
+                logging.info("Sending HITL learning package to Synthesizer Agent...")
+                try:
+                    session = get_resilient_session()
+                    headers = {"Authorization": f"Bearer {CURRENT_TOKEN}"}
+                    client_id = self.client_context.get("client_id", "default") if self.client_context else "default"
+                    domain = self.current_url.split('/')[2] if '//' in self.current_url else "unknown_domain"
 
-                    # Capture OS screenshot for flight record
-                    try:
-                        screenshot = pyautogui.screenshot()
-                        buffered = io.BytesIO()
-                        screenshot.save(buffered, format="PNG")
-                        os_screenshot_b64 = base64.b64encode(buffered.getvalue()).decode()
-                    except Exception:
-                        os_screenshot_b64 = ""
+                    synth_payload = {
+                        "prompt": prompt_text,
+                        "image_base64": image_to_send,
+                        "domain": domain,
+                        "client_id": client_id,
+                        "failed_sub_task": self.sub_tasks[self.current_sub_task_index]
+                    }
 
-                    save_flight_record(doc_id, iteration, payload, backend_data, act, os_screenshot_b64)
-
-                    if ABORT_AGENT:
-                        logging.info("Emergency abort triggered during action sequence.")
-                        final_status = "failed"
-                        break_outer = True
-                        break
-
-                    action_type = act.get("action", "")
-                    action_upper = str(action_type).upper()
-
-                    # Stuck Detector Logic
-                    if act == actions[0]:
-                        history.append(payload.get("ui_elements", []))
-                        if len(history) > 5:
-                            history.pop(0)
-
-                        if len(history) == 5:
-                            u1, u2, u3, u4, u5 = history
-                            if u1 == u2 == u3 == u4 == u5:
-                                logging.warning("Stuck Detector triggered! State (ui_elements) remained identical for 5 consecutive iterations.")
-                                reason = f"I am stuck trying to execute: [{current_sub_task if 'current_sub_task' in locals() else 'OS command'}]. Please assist."
-                                try:
-                                    firestore_update_document("remote_commands", doc_id, {
-                                        "status": "AWAITING_HUMAN_INPUT",
-                                        "help_reason": reason,
-                                        "screenshot_b64": os_screenshot_b64
-                                    })
-                                except Exception as img_e:
-                                    logging.error(f"Error saving stuck detector help request: {img_e}")
-                                final_status = "AWAITING_HUMAN_INPUT"
-                                had_terminal_action = True
-                                break_outer = True
-                                break
-
-                    if action_upper == "SUB_TASK_COMPLETE":
-                        logging.info("Sub-task completed.")
-                        break_outer = True
-                        break
-                    elif action_upper == "DONE":
-                        logging.info("Remote task finished successfully.")
-                        break_outer = True
-                        break
-                    elif "ERROR" in action_upper:
-                        raw_response = act.get("raw_response", "No raw response provided")
-                        error_msg = act.get("error", "No error message provided")
-                        logging.error(f"Remote agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
-                        final_status = "failed"
-                        break_outer = True
-                        break
-                    elif action_upper == "CLICK" and "target_id" in act:
-                        target_id = str(act["target_id"])
-                        if target_id in memory_map:
-                            logging.info(f"Clicking element with ID {target_id} using PyAutoGUI...")
-                            try:
-                                x = memory_map[target_id]["x"]
-                                y = memory_map[target_id]["y"]
-                                pyautogui.moveTo(x, y, duration=0.5)
-                                pyautogui.click()
-                            except Exception as click_e:
-                                logging.error(f"Error executing click via PyAutoGUI: {click_e}.")
-                        else:
-                            logging.error(f"Error: target_id {target_id} not found in memory map.")
-
-                    elif action_upper == "TYPE" and "target_id" in act and "text" in act:
-                        target_id = str(act["target_id"])
-                        text_to_type = act["text"]
-                        if target_id in memory_map:
-                            logging.info(f"Typing '{text_to_type}' at element {target_id} using PyAutoGUI...")
-                            try:
-                                x = memory_map[target_id]["x"]
-                                y = memory_map[target_id]["y"]
-                                pyautogui.moveTo(x, y, duration=0.5)
-                                pyautogui.click()
-                                pyautogui.hotkey('ctrl', 'a')
-                                pyautogui.press('backspace')
-                                time.sleep(0.2)
-                                pyautogui.write(text_to_type)
-                            except Exception as type_e:
-                                logging.error(f"Error executing type via PyAutoGUI: {type_e}.")
-                        else:
-                            logging.error(f"Error: target_id {target_id} not found in memory map.")
-
-                    elif action_upper == "SCROLL" and "direction" in act:
-                        direction = act["direction"].lower()
-                        logging.info(f"Scrolling {direction}...")
-                        try:
-                            amount = -500 if direction == "down" else 500
-                            pyautogui.scroll(amount)
-                        except Exception as scroll_e:
-                            logging.error(f"Error executing scroll via PyAutoGUI: {scroll_e}.")
-                        time.sleep(1) # Let the DOM settle
-
-                    elif action_upper == "REPLY" and "text" in act:
-                        reply_text = act["text"]
-                        logging.info(f"Agent replied: {reply_text}")
-                        try:
-                            notification.notify(title="ROMY AI Reply", message=reply_text, app_name="ROMY", timeout=5)
-                            if winsound: winsound.Beep(800, 200)
-                        except Exception as notif_e:
-                            logging.error(f"Error showing reply notification: {notif_e}")
-                            if winsound: winsound.Beep(800, 200)
-
-                    elif action_upper == "ASK_HUMAN":
-                        reason = act.get("reason", "No reason provided")
-                        logging.info(f"Agent asking human for help: {reason}")
-                        try:
-                            screenshot = pyautogui.screenshot()
-                            buffered = io.BytesIO()
-                            screenshot.save(buffered, format="PNG")
-                            img_str = base64.b64encode(buffered.getvalue()).decode()
-                            firestore_update_document("remote_commands", doc_id, {
-                                "status": "AWAITING_HUMAN_INPUT",
-                                "help_reason": reason,
-                                "screenshot_b64": img_str
-                            })
-                        except Exception as img_e:
-                            logging.error(f"Error capturing screenshot: {img_e}")
-                            firestore_update_document("remote_commands", doc_id, {
-                                "status": "AWAITING_HUMAN_INPUT",
-                                "help_reason": reason
-                            })
-                        had_terminal_action = True
-                        break_outer = True
-                        break
+                    synth_url = f"{BACKEND_URL}/synthesize_playbook"
+                    response = session.post(synth_url, json=synth_payload, headers=headers)
+                    if response.ok:
+                        logging.info("Synthesizer Agent successfully generated a new Playbook Rule!")
                     else:
-                        logging.info(f"Received action: {action_type}. Continuing loop...")
+                        logging.error(f"Synthesizer failed: {response.status_code} - {response.text}")
+                except Exception as e:
+                    logging.error(f"Error calling Synthesizer API: {e}")
 
-                    # Micro-sleep between sequential actions within the array
-                    time.sleep(0.5)
+                try:
+                    logging.info(f"Executing HITL Ghost Click natively via Playwright at ({css_x}, {css_y})")
+                    await self.page.mouse.click(css_x, css_y)
+                except Exception as e:
+                    logging.error(f"Failed to execute Playwright click for HITL: {e}")
 
-                if break_outer:
-                    break
+            try:
+                firestore_update_document("remote_commands", self.doc_id, {
+                    "status": "in_progress"
+                }, delete_fields=["human_response", "help_reason"])
+            except Exception as e:
+                logging.error(f"Failed to reset task status after HITL: {e}")
 
-                if iteration > 0 and not had_terminal_action:
-                    logging.error("Agentic Loop terminated to prevent infinite empty audio loop. No terminal action provided by backend.")
-                    break
-
-            except requests.exceptions.RequestException as req_e:
-                if isinstance(req_e, requests.exceptions.HTTPError) and req_e.response.status_code == 401:
-                    handle_token_expiry()
-                    final_status = "failed"
-                    error_msg = "Token expired"
-                    break
-                logging.info(f"Request failed: {req_e}")
-                final_status = "failed"
-                error_msg = f"Network request failed: {req_e}"
-                break
-
-            time.sleep(2)
-            iteration += 1
-
-        # Update final document status
-        try:
-            update_payload = {"status": final_status}
-            if final_status == "failed":
-                update_payload["error"] = error_msg if "error_msg" in locals() else "Unknown agent loop termination"
-            firestore_update_document("remote_commands", doc_id, update_payload)
-            logging.info(f"Remote command {doc_id} marked as {final_status}.")
-        except Exception:
-            pass
-
-    except Exception as e:
-        logging.error(f"Error executing remote command: {e}")
-        try:
-            firestore_update_document("remote_commands", doc_id, {"status": "failed", "error": str(e)})
-        except Exception:
-            pass
+        self.hitl_action = None
+        self.iteration += 1
+        self.sub_task_iteration += 1
+        self.state = AgentState.EVALUATING
 
 
-import numpy as np
+def run_remote_agent_loop(doc_id: str, command_text: str, audio_b64: str = "", client_context: dict = None) -> None:
+    global global_state_machine, global_asyncio_loop
+    global_state_machine = AgentStateMachine()
+
+    loop = asyncio.new_event_loop()
+    global_asyncio_loop = loop
+    asyncio.set_event_loop(loop)
+
+    try:
+        loop.run_until_complete(global_state_machine.run(doc_id, command_text, audio_b64, client_context))
+    finally:
+        loop.close()
+        global_state_machine = None
+        global_asyncio_loop = None
+
 
 def record_audio() -> str:
     """
@@ -2136,9 +2138,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 global ACTIVE_DOC_ID
 
                 if ACTIVE_DOC_ID:
-                    # Verify we are actually waiting for human input to avoid accidental overwrites
-                    current_doc = firestore_get_document("remote_commands", ACTIVE_DOC_ID)
-                    if current_doc and current_doc.get("status") in ["AWAITING_HUMAN_INPUT", "help_needed"]:
+                    if global_state_machine and global_state_machine.state == AgentState.SUSPENDED_HITL:
                         xpath = data.get("xpath", "Unknown element")
                         x = data.get("x")
                         y = data.get("y")
@@ -2155,6 +2155,13 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                         })
                         logging.info(f"Teleoperation ghost click registered for doc {ACTIVE_DOC_ID}: {guidance}")
 
+                        def set_event():
+                            global_state_machine.hitl_action = data
+                            global_state_machine.hitl_event.set()
+
+                        if global_asyncio_loop:
+                            global_asyncio_loop.call_soon_threadsafe(set_event)
+
                         self.send_response(HTTPStatus.OK)
                         self.send_header('Content-type', 'application/json')
                         self.send_header('Access-Control-Allow-Origin', '*')
@@ -2162,7 +2169,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                         self.wfile.write(json.dumps({"status": "ok"}).encode())
                         return
                     else:
-                        logging.info("Ignored ghost click: Agent not in AWAITING_HUMAN_INPUT state.")
+                        logging.info("Ignored ghost click: Agent not in SUSPENDED_HITL state.")
                         self.send_response(HTTPStatus.OK)
                         self.send_header('Content-type', 'application/json')
                         self.send_header('Access-Control-Allow-Origin', '*')
