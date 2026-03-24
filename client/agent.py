@@ -822,9 +822,9 @@ class AgentStateMachine:
         self.page = None
 
     async def connect_playwright(self):
-        if not self.playwright:
+        if not getattr(self, "playwright", None):
             self.playwright = await async_playwright().start()
-        if not self.browser:
+        if not getattr(self, "browser", None):
             try:
                 self.browser = await self.playwright.chromium.connect_over_cdp("http://127.0.0.1:9222")
                 contexts = self.browser.contexts
@@ -834,9 +834,24 @@ class AgentStateMachine:
                     self.page = await self.browser.new_page()
                 logging.info("Successfully connected to browser via Playwright CDP.")
             except Exception as e:
-                logging.error(f"Failed to connect Playwright over CDP: {e}")
-                self.browser = None
-                self.page = None
+                logging.warning(f"Failed to connect Playwright over CDP: {e}. Attempting to launch persistent context...")
+                try:
+                    user_data_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "User Data")
+                    self.browser = await self.playwright.chromium.launch_persistent_context(
+                        user_data_dir=user_data_dir,
+                        channel="chrome",
+                        headless=False,
+                        args=["--remote-debugging-port=9222"]
+                    )
+                    if self.browser.pages:
+                        self.page = self.browser.pages[0]
+                    else:
+                        self.page = await self.browser.new_page()
+                    logging.info("Successfully launched persistent Chrome context with remote debugging.")
+                except Exception as launch_e:
+                    logging.error(f"Failed to launch persistent Chrome context: {launch_e}")
+                    self.browser = None
+                    self.page = None
 
     async def disconnect_playwright(self):
         if self.browser:
