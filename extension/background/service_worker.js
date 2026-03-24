@@ -437,10 +437,187 @@ async function handleGetState(payload) {
 }
 
 async function handleExecuteNativeAction(payload) {
-    // Custom CDP actuation logic has been stripped out in Phase 2.
-    // Execution is now handled natively by Playwright in the Python orchestrator.
-    // We only retain minimal fallback support if needed, or simply return success.
-    const action = payload.action;
-    console.log(`Intercepted EXECUTE_ACTION request for ${action.action}. Action should be handled by Playwright.`);
-    return { success: false, error: "Actuation relegated to Playwright orchestrator." };
+    const actionData = payload.action;
+    const actionType = actionData.action.toUpperCase();
+    sendTelemetryLog(`Executing Native Action via CDP: ${actionType}`);
+
+    if (!activeSessionTabId) {
+        return { success: false, error: "No active session tab to execute action on." };
+    }
+
+    try {
+        await new Promise((resolve, reject) => {
+            chrome.debugger.attach({ tabId: activeSessionTabId }, "1.3", () => {
+                if (chrome.runtime.lastError && !chrome.runtime.lastError.message.includes("Cannot attach to this target")) {
+                    reject(new Error(chrome.runtime.lastError.message));
+                } else {
+                    resolve();
+                }
+            });
+        });
+
+        // 1. Get window.devicePixelRatio to scale physical pixels
+        const evalResult = await new Promise((resolve, reject) => {
+            chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Runtime.evaluate", {
+                expression: "window.devicePixelRatio"
+            }, (result) => {
+                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                else resolve(result);
+            });
+        });
+        const dpr = evalResult?.result?.value || 1;
+
+        if (actionType === 'CLICK' || actionType === 'TYPE') {
+            const coords = actionData.coordinates;
+            if (!coords || coords.length < 2) {
+                throw new Error(`Coordinates missing for action ${actionType}`);
+            }
+            const rawX = coords[0];
+            const rawY = coords[1];
+
+            // CDP expects coordinates in CSS pixels, not physical pixels. Wait, actually, Playwright uses CSS pixels.
+            // Let's assume the LLM outputs CSS pixels because the screenshot is scaled.
+            // But just in case, let's pass the raw values.
+            const x = Math.round(rawX);
+            const y = Math.round(rawY);
+
+            // Draw a red dot for HITL feedback before clicking
+            await new Promise((resolve) => {
+                 chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Runtime.evaluate", {
+                    expression: `
+                        (function() {
+                            const dot = document.createElement('div');
+                            dot.style.position = 'fixed';
+                            dot.style.left = '${x}px';
+                            dot.style.top = '${y}px';
+                            dot.style.width = '10px';
+                            dot.style.height = '10px';
+                            dot.style.backgroundColor = 'rgba(255, 0, 0, 0.7)';
+                            dot.style.borderRadius = '50%';
+                            dot.style.zIndex = '2147483647'; // Max z-index
+                            dot.style.pointerEvents = 'none'; // Don't block the actual click
+                            dot.style.transform = 'translate(-50%, -50%)';
+                            document.body.appendChild(dot);
+                            setTimeout(() => {
+                                if(dot.parentNode) dot.parentNode.removeChild(dot);
+                            }, 1000);
+                        })();
+                    `
+                }, resolve);
+            });
+
+            // Dispatch MouseEvent (Click)
+            await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchMouseEvent", {
+                    type: "mousePressed",
+                    x: x,
+                    y: y,
+                    button: "left",
+                    clickCount: 1
+                }, (res) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(res);
+                });
+            });
+
+            await new Promise(r => setTimeout(r, 50)); // Small delay between press and release
+
+            await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchMouseEvent", {
+                    type: "mouseReleased",
+                    x: x,
+                    y: y,
+                    button: "left",
+                    clickCount: 1
+                }, (res) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(res);
+                });
+            });
+
+            if (actionType === 'TYPE') {
+                const text = actionData.text || "";
+                sendTelemetryLog(`Typing text: ${text}`);
+
+                // Wait a moment for focus to settle
+                await new Promise(r => setTimeout(r, 100));
+
+                for (let i = 0; i < text.length; i++) {
+                    const char = text[i];
+                    await new Promise((resolve, reject) => {
+                        chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchKeyEvent", {
+                            type: "char",
+                            text: char
+                        }, (res) => {
+                            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                            else resolve(res);
+                        });
+                    });
+                    await new Promise(r => setTimeout(r, 10)); // Typematic delay
+                }
+
+                 // Press Enter optionally if needed, but usually LLM specifies it or it's implicitly needed.
+                // We'll stick to just typing the text for now as Playwright did.
+            }
+
+            sendTelemetryLog(`Action ${actionType} at (${x}, ${y}) executed successfully.`);
+
+        } else if (actionType === 'NAVIGATE' || actionType === 'OPEN_TAB') {
+            const url = actionData.url;
+            if (!url) throw new Error("URL missing for NAVIGATE/OPEN_TAB");
+
+            if (actionType === 'OPEN_TAB') {
+                 await new Promise((resolve, reject) => {
+                    chrome.tabs.create({ url: url }, (newTab) => {
+                        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+                        activeSessionTabId = newTab.id; // Switch tracking to new tab
+                        const listener = (tabId, info) => {
+                            if (tabId === newTab.id && info.status === 'complete') {
+                                chrome.tabs.onUpdated.removeListener(listener);
+                                resolve(newTab);
+                            }
+                        };
+                        chrome.tabs.onUpdated.addListener(listener);
+                    });
+                });
+            } else {
+                 await new Promise((resolve, reject) => {
+                    chrome.tabs.update(activeSessionTabId, { url: url }, (updatedTab) => {
+                        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+                        const listener = (tabId, info) => {
+                            if (tabId === updatedTab.id && info.status === 'complete') {
+                                chrome.tabs.onUpdated.removeListener(listener);
+                                resolve(updatedTab);
+                            }
+                        };
+                        chrome.tabs.onUpdated.addListener(listener);
+                    });
+                });
+            }
+             sendTelemetryLog(`${actionType} to ${url} executed successfully.`);
+        } else if (actionType === 'FOCUS_TAB') {
+            if (activeSessionTabId) {
+                chrome.tabs.update(activeSessionTabId, { active: true });
+                chrome.tabs.get(activeSessionTabId, (tab) => {
+                    if (tab && tab.windowId) {
+                        chrome.windows.update(tab.windowId, { focused: true });
+                    }
+                });
+            }
+        }
+        else {
+             sendTelemetryLog(`Unsupported native action type: ${actionType}`);
+             return { success: false, error: `Unsupported action type: ${actionType}` };
+        }
+
+        return { success: true };
+
+    } catch (e) {
+        sendTelemetryLog(`Native Execution Error: ${e.message}`);
+        return { success: false, error: e.message };
+    } finally {
+        chrome.debugger.detach({ tabId: activeSessionTabId }, () => {
+             const err = chrome.runtime.lastError; // Ignore detach errors
+        });
+    }
 }
