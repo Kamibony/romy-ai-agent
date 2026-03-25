@@ -990,11 +990,14 @@ class AgentStateMachine:
             if not actions:
                  raise ValueError("No valid actions returned by AI.")
         except Exception as e:
-            logging.error(f"Data validation error for API payload: {e}. Raw response: {self.ai_response}")
+            resp_str = str(self.ai_response)
+            if len(resp_str) > 200:
+                resp_str = resp_str[:200] + "... [TRUNCATED]"
+            logging.error(f"Data validation error for API payload: {e}. Raw response: {resp_str}")
             try:
                 firestore_update_document("remote_commands", self.doc_id, {
                     "status": "AWAITING_HUMAN_INPUT",
-                    "help_reason": f"System error parsing AI response. Payload: {str(self.ai_response)[:200]}"
+                    "help_reason": f"System error parsing AI response. Payload: {resp_str}"
                 })
             except Exception as fs_e:
                 logging.error(f"Error saving help request to Firestore: {fs_e}")
@@ -1950,6 +1953,16 @@ import urllib.parse
 from http import HTTPStatus
 
 class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        # Truncate long URLs and payloads to prevent terminal flooding and hanging
+        msg = format % args
+        if len(msg) > 200:
+            msg = msg[:200] + "... [TRUNCATED]"
+        logging.info("%s - - [%s] %s\n" %
+                         (self.client_address[0],
+                          self.log_date_time_string(),
+                          msg))
+
     def end_headers(self):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
