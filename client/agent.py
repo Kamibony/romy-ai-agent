@@ -44,7 +44,7 @@ try:
 except:
     pass
 
-BACKEND_URL = os.environ.get("BACKEND_URL", "https://romy-backend-1049976869239.europe-west1.run.app/api/v1/agent/command")
+import config
 
 CURRENT_TOKEN = None
 
@@ -613,10 +613,8 @@ def annotate_image_with_crosshair(base64_img: str, x: int, y: int) -> str:
 def pre_flight_check(command_text: str) -> dict:
     if not CURRENT_TOKEN:
         return {"status": "ok"}
-    base_url = BACKEND_URL.split("/api/v1")[0] if "/api/v1" in BACKEND_URL else BACKEND_URL.rsplit('/', 1)[0]
-    if not base_url.endswith("/"):
-        base_url += "/"
-    url = f"{base_url.rstrip('/')}/api/pre_flight"
+
+    url = config.PRE_FLIGHT_ENDPOINT
 
     payload = {"command_text": command_text}
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
@@ -632,10 +630,8 @@ def pre_flight_check(command_text: str) -> dict:
 def supervisor_plan(command_text: str) -> list:
     if not CURRENT_TOKEN:
         return []
-    base_url = BACKEND_URL.split("/api/v1")[0] if "/api/v1" in BACKEND_URL else BACKEND_URL.rsplit('/', 1)[0]
-    if not base_url.endswith("/"):
-        base_url += "/"
-    url = f"{base_url.rstrip('/')}/api/supervisor_plan"
+
+    url = config.SUPERVISOR_PLAN_ENDPOINT
 
     payload = {"command_text": command_text}
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
@@ -721,10 +717,8 @@ def verify_action_natively(action, before_state, after_state):
 def critic_verify(sub_task: str, action_taken: dict, before_state: dict, after_state: dict) -> dict:
     if not CURRENT_TOKEN:
         return {"success": True, "reason": "No token"}
-    base_url = BACKEND_URL.split("/api/v1")[0] if "/api/v1" in BACKEND_URL else BACKEND_URL.rsplit('/', 1)[0]
-    if not base_url.endswith("/"):
-        base_url += "/"
-    url = f"{base_url.rstrip('/')}/api/critic_verify"
+
+    url = config.CRITIC_VERIFY_ENDPOINT
 
     payload = {
         "sub_task": sub_task,
@@ -752,14 +746,7 @@ def classify_intent(command_text: str, audio_b64: str) -> Tuple[str, str]:
         logging.error("Missing token, cannot classify intent.")
         return "OS", command_text
 
-    # Derive base URL from BACKEND_URL, replacing the path
-    # Default is https://romy-backend-1049976869239.europe-west1.run.app/api/v1/agent/command
-    # We want https://romy-backend-1049976869239.europe-west1.run.app/api/classify_intent
-    base_url = BACKEND_URL.split("/api/v1")[0] if "/api/v1" in BACKEND_URL else BACKEND_URL.rsplit('/', 1)[0]
-    # Handle local cases where it might just be the base URL
-    if not base_url.endswith("/"):
-        base_url += "/"
-    url = f"{base_url.rstrip('/')}/api/classify_intent"
+    url = config.CLASSIFY_INTENT_ENDPOINT
 
     payload = {
         "command_text": command_text,
@@ -964,7 +951,7 @@ class AgentStateMachine:
         try:
             session = get_resilient_session()
             headers = {"Authorization": f"Bearer {CURRENT_TOKEN}"}
-            backend_url = BACKEND_URL
+            backend_url = config.GET_COMMAND_ENDPOINT
             response = session.post(backend_url, json=payload, headers=headers)
             response.raise_for_status()
             self.ai_response = response.json()
@@ -1170,7 +1157,7 @@ class AgentStateMachine:
                         "failed_sub_task": self.sub_tasks[self.current_sub_task_index]
                     }
 
-                    synth_url = f"{BACKEND_URL}/synthesize_playbook"
+                    synth_url = config.SYNTHESIZE_PLAYBOOK_ENDPOINT
                     response = session.post(synth_url, json=synth_payload, headers=headers)
                     if response.ok:
                         logging.info("Synthesizer Agent successfully generated a new Playbook Rule!")
@@ -1470,7 +1457,7 @@ def execute_voice_agent_loop() -> None:
                         for attempt in range(max_retries):
                             try:
                                 with get_resilient_session() as session:
-                                    response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=(15, 60))
+                                    response = session.post(config.GET_COMMAND_ENDPOINT, json=payload, headers=headers, timeout=(15, 60))
                                 response.raise_for_status()
                                 backend_data = response.json()
                                 break
@@ -1761,7 +1748,7 @@ def execute_voice_agent_loop() -> None:
                 for attempt in range(max_retries):
                     try:
                         with get_resilient_session() as session:
-                            response = session.post(BACKEND_URL, json=payload, headers=headers, timeout=(15, 60))
+                            response = session.post(config.GET_COMMAND_ENDPOINT, json=payload, headers=headers, timeout=(15, 60))
                         response.raise_for_status()
                         backend_data = response.json()
                         break
@@ -2154,11 +2141,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": "Not authenticated"}).encode())
                 return
 
-            base_url = BACKEND_URL.split("/api/v1")[0] if "/api/v1" in BACKEND_URL else BACKEND_URL.rsplit('/', 1)[0]
-            if not base_url.endswith("/"):
-                base_url += "/"
-
-            backend_url = f"{base_url.rstrip('/')}/api/playbook_rules?domain={urllib.parse.quote(domain)}"
+            backend_url = f"{config.PLAYBOOK_RULES_ENDPOINT}?domain={urllib.parse.quote(domain)}"
             if client_id:
                 backend_url += f"&client_id={urllib.parse.quote(client_id)}"
 
