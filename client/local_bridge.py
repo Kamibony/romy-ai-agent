@@ -161,7 +161,10 @@ class LocalBridgeManager:
                                 elif 'type' in reconstructed_data and reconstructed_data['type'] == 'telemetry':
                                     logging.info(f"Extension Telemetry: {reconstructed_data.get('payload')}")
                                 else:
-                                    logging.warning(f"Unknown reconstructed WebSocket message received: {reconstructed_data}")
+                                    reconstructed_str = str(reconstructed_data)
+                                    if len(reconstructed_str) > 200:
+                                        reconstructed_str = reconstructed_str[:200] + "... [TRUNCATED]"
+                                    logging.warning(f"Unknown reconstructed WebSocket message received: {reconstructed_str}")
                             except json.JSONDecodeError:
                                 logging.error("Failed to decode reconstructed WebSocket message.")
                     elif 'type' in data and data['type'] == 'ping':
@@ -172,9 +175,15 @@ class LocalBridgeManager:
                         # Log extension telemetry, don't spam if it's just a keep-alive
                         logging.info(f"Extension Telemetry: {data.get('payload')}")
                     else:
-                        logging.warning(f"Unknown WebSocket message received: {data}")
+                        data_str = str(data)
+                        if len(data_str) > 200:
+                            data_str = data_str[:200] + "... [TRUNCATED]"
+                        logging.warning(f"Unknown WebSocket message received: {data_str}")
                 except json.JSONDecodeError:
-                    logging.error(f"Failed to decode WebSocket message: {message}")
+                    msg_str = str(message)
+                    if len(msg_str) > 200:
+                        msg_str = msg_str[:200] + "... [TRUNCATED]"
+                    logging.error(f"Failed to decode WebSocket message: {msg_str}")
         except websockets.exceptions.ConnectionClosed:
             logging.info(f"WebSocket client disconnected: {websocket.remote_address}")
         except Exception as e:
