@@ -33,3 +33,22 @@ We are moving away from fragile content script injections for simulating clicks.
 * **Stuck Detector:** If the visual hash or A11y tree does not change after 2-3 action attempts, the agent automatically halts and triggers an `ASK_HUMAN` state.
 * **Human-in-the-Loop (HITL):** The agent gracefully pauses, pushing a notification to the mobile/web dashboard, and waits for explicit user intervention before resuming.
 * **Local Blackbox (Flight Recorder):** Every closed-loop cycle logs the `[Screenshot Before]`, `[LLM Prompt]`, `[LLM Response]`, and `[Action Taken]` locally for trivial debugging.
+
+## 6. Proactive Threat Modeling & Actuation Guardrails
+To transition successfully to a closed-loop execution model, the following architectural traps must be addressed at the actuation layer (`service_worker.js` and `agent.py`) to prevent infinite hangs, misfires, and DOM race conditions:
+
+### Trap A: DOM Race Conditions (Premature Vision)
+* **The Trap:** Natively executed actions (CLICK, TYPE, SCROLL) trigger asynchronous SPA animations or data fetching. Requesting the next `GET_STATE` immediately captures a mid-transition or pre-loaded frame, blinding the LLM.
+* **The Guardrail (Post-Action Stabilization):** The Python orchestrator (`agent.py`) must enforce a strict, asynchronous "cooldown" (e.g., 1.5 seconds) immediately after dispatching any native action. This guarantees the SPA DOM settles before the next visual state is captured, ensuring the ReAct loop operates on a stable UI.
+
+### Trap B: The "Blind Typist"
+* **The Trap:** OS-level or CDP `TYPE` commands require an active cursor focus. If the LLM dispatches `TYPE` without a preceding `CLICK` on the input field, the keystrokes are sent into the void.
+* **The Guardrail:** The Chrome Extension (`service_worker.js`) must automatically synthesize a native `mousePressed` and `mouseReleased` sequence at the provided `[x, y]` coordinates immediately before dispatching keyboard events (`Input.dispatchKeyEvent`). The orchestrator must ensure coordinates are extracted and passed for all `TYPE` actions.
+
+### Trap C: Device Pixel Ratio (DPR) Misses
+* **The Trap:** Vision models and extracted bounding boxes operate in CSS pixels, but CDP often requires physical pixels (or vice-versa depending on the scaling context). If a user's Windows display scaling is set to 150%, the native clicks will miss their intended targets.
+* **The Guardrail:** Before executing native mouse events via CDP, the extension must actively query `window.devicePixelRatio`. The incoming `[x, y]` CSS coordinates from the AI orchestrator must be explicitly multiplied by the DPR to map correctly to the browser's physical viewport scaling.
+
+### Trap D: HITL Resume Loop (The Zombie Suspension)
+* **The Trap:** When the agent detects it is stuck (e.g., repeating the same state), it transitions to `SUSPENDED_HITL` and awaits human intervention. If a human provides a "Ghost Click", the agent processes it but abruptly shuts down if its internal iteration counters max out, breaking the continuous ReAct cycle.
+* **The Guardrail:** The state machine (`AgentStateMachine`) must correctly suspend execution while waiting for the `hitl_event`. Crucially, upon waking up and delegating the human's Ghost Click, the orchestrator must enforce a post-action stabilization wait (Trap A) and actively **reset the sub-task iteration counter to 0**. This ensures the agent is granted a fresh set of attempts to evaluate the new, human-guided DOM state.
