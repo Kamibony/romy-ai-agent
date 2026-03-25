@@ -974,18 +974,45 @@ class AgentStateMachine:
             self.state = AgentState.ACTING
             return
 
-        if isinstance(self.ai_response, list):
-            actions = self.ai_response
-        elif isinstance(self.ai_response, dict):
-            actions = self.ai_response.get("actions", [])
-            if not actions and "action" in self.ai_response:
-                actions = [self.ai_response]
-        else:
-            actions = []
-        if not actions:
-             logging.error("No actions returned by AI.")
-             self.state = AgentState.TERMINATED
-             return
+        try:
+            if isinstance(self.ai_response, list):
+                actions = self.ai_response
+            elif isinstance(self.ai_response, dict):
+                actions = self.ai_response.get("actions", [])
+                if not actions and "action" in self.ai_response:
+                    actions = [self.ai_response]
+            else:
+                actions = []
+
+            # Strict Data Validation Layer
+            validated_actions = []
+            if not isinstance(actions, list):
+                raise ValueError(f"Expected list of actions, got {type(actions)}")
+
+            for act in actions:
+                if not isinstance(act, dict):
+                    logging.warning(f"Discarding invalid action (not a dict): {act}")
+                    continue
+                if "action" not in act:
+                    logging.warning(f"Discarding action missing 'action' key: {act}")
+                    continue
+                validated_actions.append(act)
+
+            actions = validated_actions
+
+            if not actions:
+                 raise ValueError("No valid actions returned by AI.")
+        except Exception as e:
+            logging.error(f"Data validation error for API payload: {e}. Raw response: {self.ai_response}")
+            try:
+                firestore_update_document("remote_commands", self.doc_id, {
+                    "status": "AWAITING_HUMAN_INPUT",
+                    "help_reason": f"System error parsing AI response. Payload: {str(self.ai_response)[:200]}"
+                })
+            except Exception as fs_e:
+                logging.error(f"Error saving help request to Firestore: {fs_e}")
+            self.state = AgentState.SUSPENDED_HITL
+            return
 
         for act in actions:
              if act.get("action") == "ASK_HUMAN":
