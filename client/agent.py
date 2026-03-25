@@ -1069,6 +1069,7 @@ class AgentStateMachine:
 
              if not exec_result.get("success"):
                  logging.warning(f"Macro-action execution failed via bridge: {exec_result.get('error')}. Bailing out of batch.")
+                 self.command_text += f"\n[System Note: Last action {action_type} failed: {exec_result.get('error')}]"
                  bail_out = True
                  break
 
@@ -1588,6 +1589,7 @@ def execute_voice_agent_loop() -> None:
 
                             if not exec_result.get("success"):
                                 logging.error(f"Failed to execute action in extension: {exec_result.get('error')}")
+                                command_text += f"\n[System Note: Last action {action_upper} failed: {exec_result.get('error')}]"
                                 # Safety Bailout: Abort the rest of the batch and trigger a fresh GET_STATE
                                 logging.info("Safety Bailout: Action failed. Aborting remaining batch actions and fetching new state.")
                                 break

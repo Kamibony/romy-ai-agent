@@ -197,7 +197,7 @@ class LocalBridgeManager:
             self._handle_client,
             '127.0.0.1',
             self.port,
-            max_size=32 * 1024 * 1024, # Increased to 32MB for high-res uncompressed frames
+            max_size=None, # Explicitly remove max_size to accommodate massive base64 uncompressed payloads
             ping_interval=None,        # Disable default pings to avoid timeout during long vision captures
             ping_timeout=None
         )

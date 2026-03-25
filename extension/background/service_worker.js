@@ -485,17 +485,14 @@ async function handleExecuteNativeAction(payload) {
         });
         const dpr = evalResult?.result?.value || 1;
 
-        if (actionType === 'CLICK' || actionType === 'TYPE') {
+        if (actionType === 'CLICK') {
             const coords = actionData.coordinates;
             if (!coords || coords.length < 2) {
-                throw new Error(`Coordinates missing for action ${actionType}`);
+                throw new Error(`Coordinates missing for action CLICK`);
             }
             const rawX = coords[0];
             const rawY = coords[1];
 
-            // CDP expects coordinates in CSS pixels, not physical pixels. Wait, actually, Playwright uses CSS pixels.
-            // Let's assume the LLM outputs CSS pixels because the screenshot is scaled.
-            // But just in case, let's pass the raw values.
             const x = Math.round(rawX);
             const y = Math.round(rawY);
 
@@ -553,32 +550,42 @@ async function handleExecuteNativeAction(payload) {
                 });
             });
 
-            if (actionType === 'TYPE') {
-                const text = actionData.text || "";
-                sendTelemetryLog(`Typing text: ${text}`);
+            sendTelemetryLog(`Action CLICK at (${x}, ${y}) executed successfully.`);
 
-                // Wait a moment for focus to settle
+        } else if (actionType === 'TYPE') {
+            const text = actionData.text || "";
+            if (!text) throw new Error("Text missing for action TYPE");
+
+            sendTelemetryLog(`Typing text: ${text}`);
+
+            // If coordinates are provided, click first
+            if (actionData.coordinates && actionData.coordinates.length >= 2) {
+                const x = Math.round(actionData.coordinates[0]);
+                const y = Math.round(actionData.coordinates[1]);
+                await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchMouseEvent", { type: "mousePressed", x: x, y: y, button: "left", clickCount: 1 }, (res) => { if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message)); else resolve(res); });
+                });
+                await new Promise(r => setTimeout(r, 50));
+                await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchMouseEvent", { type: "mouseReleased", x: x, y: y, button: "left", clickCount: 1 }, (res) => { if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message)); else resolve(res); });
+                });
                 await new Promise(r => setTimeout(r, 100));
-
-                for (let i = 0; i < text.length; i++) {
-                    const char = text[i];
-                    await new Promise((resolve, reject) => {
-                        chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchKeyEvent", {
-                            type: "char",
-                            text: char
-                        }, (res) => {
-                            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                            else resolve(res);
-                        });
-                    });
-                    await new Promise(r => setTimeout(r, 10)); // Typematic delay
-                }
-
-                 // Press Enter optionally if needed, but usually LLM specifies it or it's implicitly needed.
-                // We'll stick to just typing the text for now as Playwright did.
             }
 
-            sendTelemetryLog(`Action ${actionType} at (${x}, ${y}) executed successfully.`);
+            for (let i = 0; i < text.length; i++) {
+                const char = text[i];
+                await new Promise((resolve, reject) => {
+                    chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchKeyEvent", {
+                        type: "char",
+                        text: char
+                    }, (res) => {
+                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve(res);
+                    });
+                });
+                await new Promise(r => setTimeout(r, 10)); // Typematic delay
+            }
+            sendTelemetryLog(`Action TYPE executed successfully.`);
 
         } else if (actionType === 'NAVIGATE' || actionType === 'OPEN_TAB') {
             const url = actionData.url;
@@ -622,6 +629,73 @@ async function handleExecuteNativeAction(payload) {
                     }
                 });
             }
+        } else if (actionType === 'SCROLL') {
+            const direction = actionData.direction || 'down';
+            sendTelemetryLog(`Scrolling ${direction}`);
+
+            // Typical scroll amounts
+            const amount = direction.toLowerCase() === 'up' ? -500 : 500;
+
+            await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchMouseEvent", {
+                    type: "mouseWheel",
+                    x: 0,
+                    y: 0,
+                    deltaX: 0,
+                    deltaY: amount
+                }, (res) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(res);
+                });
+            });
+            sendTelemetryLog(`SCROLL ${direction} executed successfully.`);
+        } else if (actionType === 'PRESS') {
+            const key = actionData.key;
+            if (!key) throw new Error("Key missing for action PRESS");
+
+            sendTelemetryLog(`Pressing key: ${key}`);
+
+            // Map common names to CDP key names if necessary. Playwright often sends 'Enter', 'Escape', 'Tab', etc.
+            const keyToCode = {
+                'Enter': { text: '\r', unmodifiedText: '\r', keyIdentifier: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 },
+                'Escape': { text: '', unmodifiedText: '', keyIdentifier: 'U+001B', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 },
+                'Tab': { text: '\t', unmodifiedText: '\t', keyIdentifier: 'U+0009', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 },
+                'Backspace': { text: '', unmodifiedText: '', keyIdentifier: 'U+0008', code: 'Backspace', windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8 }
+            };
+
+            const keyData = keyToCode[key] || { text: key, unmodifiedText: key, keyIdentifier: key, code: key, windowsVirtualKeyCode: 0, nativeVirtualKeyCode: 0 };
+
+            await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchKeyEvent", {
+                    type: "keyDown",
+                    text: keyData.text,
+                    unmodifiedText: keyData.unmodifiedText,
+                    keyIdentifier: keyData.keyIdentifier,
+                    code: keyData.code,
+                    windowsVirtualKeyCode: keyData.windowsVirtualKeyCode,
+                    nativeVirtualKeyCode: keyData.nativeVirtualKeyCode
+                }, (res) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(res);
+                });
+            });
+
+            await new Promise(r => setTimeout(r, 50));
+
+            await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchKeyEvent", {
+                    type: "keyUp",
+                    keyIdentifier: keyData.keyIdentifier,
+                    code: keyData.code,
+                    windowsVirtualKeyCode: keyData.windowsVirtualKeyCode,
+                    nativeVirtualKeyCode: keyData.nativeVirtualKeyCode
+                }, (res) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(res);
+                });
+            });
+
+            sendTelemetryLog(`PRESS ${key} executed successfully.`);
         }
         else {
              sendTelemetryLog(`Unsupported native action type: ${actionType}`);
