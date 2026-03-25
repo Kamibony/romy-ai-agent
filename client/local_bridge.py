@@ -161,7 +161,7 @@ class LocalBridgeManager:
                                 elif 'type' in reconstructed_data and reconstructed_data['type'] == 'telemetry':
                                     logging.info(f"Extension Telemetry: {reconstructed_data.get('payload')}")
                                 else:
-                                    logging.warning(f"Unknown reconstructed WebSocket message received: {reconstructed_data}")
+                                    logging.warning(f"Unknown reconstructed WebSocket message received: {str(reconstructed_data)[:200]}...")
                             except json.JSONDecodeError:
                                 logging.error("Failed to decode reconstructed WebSocket message.")
                     elif 'type' in data and data['type'] == 'ping':
@@ -172,9 +172,9 @@ class LocalBridgeManager:
                         # Log extension telemetry, don't spam if it's just a keep-alive
                         logging.info(f"Extension Telemetry: {data.get('payload')}")
                     else:
-                        logging.warning(f"Unknown WebSocket message received: {data}")
+                        logging.warning(f"Unknown WebSocket message received: {str(data)[:200]}...")
                 except json.JSONDecodeError:
-                    logging.error(f"Failed to decode WebSocket message: {message}")
+                    logging.error(f"Failed to decode WebSocket message: {str(message)[:200]}...")
         except websockets.exceptions.ConnectionClosed:
             logging.info(f"WebSocket client disconnected: {websocket.remote_address}")
         except Exception as e:

@@ -990,7 +990,7 @@ class AgentStateMachine:
             if not actions:
                  raise ValueError("No valid actions returned by AI.")
         except Exception as e:
-            logging.error(f"Data validation error for API payload: {e}. Raw response: {self.ai_response}")
+            logging.error(f"Data validation error for API payload: {e}. Raw response: {str(self.ai_response)[:200]}...")
             try:
                 firestore_update_document("remote_commands", self.doc_id, {
                     "status": "AWAITING_HUMAN_INPUT",
@@ -1553,7 +1553,7 @@ def execute_voice_agent_loop() -> None:
                             elif "ERROR" in action_upper:
                                 raw_response = act.get("raw_response", "No raw response provided")
                                 error_msg = act.get("error", "No error message provided")
-                                logging.error(f"Web agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
+                                logging.error(f"Web agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {str(raw_response)[:200]}...")
                                 final_status = "failed"
                                 break_outer = True
                                 break
@@ -1836,7 +1836,7 @@ def execute_voice_agent_loop() -> None:
                     elif "ERROR" in action_upper:
                         raw_response = act.get("raw_response", "No raw response provided")
                         error_msg = act.get("error", "No error message provided")
-                        logging.error(f"Agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {raw_response}")
+                        logging.error(f"Agent stopped due to {action_upper}. Error: {error_msg} | Raw response: {str(raw_response)[:200]}...")
                         had_terminal_action = True
                         break_outer = True
                         break
@@ -1950,6 +1950,9 @@ import urllib.parse
 from http import HTTPStatus
 
 class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+
     def end_headers(self):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
