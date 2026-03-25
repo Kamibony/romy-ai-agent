@@ -493,18 +493,19 @@ async function handleExecuteNativeAction(payload) {
             const rawX = coords[0];
             const rawY = coords[1];
 
-            const x = Math.round(rawX);
-            const y = Math.round(rawY);
+            // Trap C: Device Pixel Ratio Scaling
+            const x = Math.round(rawX * dpr);
+            const y = Math.round(rawY * dpr);
 
-            // Draw a red dot for HITL feedback before clicking
+            // Draw a red dot for HITL feedback before clicking (using CSS pixels)
             await new Promise((resolve) => {
                  chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Runtime.evaluate", {
                     expression: `
                         (function() {
                             const dot = document.createElement('div');
                             dot.style.position = 'fixed';
-                            dot.style.left = '${x}px';
-                            dot.style.top = '${y}px';
+                            dot.style.left = '${rawX}px';
+                            dot.style.top = '${rawY}px';
                             dot.style.width = '10px';
                             dot.style.height = '10px';
                             dot.style.backgroundColor = 'rgba(255, 0, 0, 0.7)';
@@ -558,10 +559,39 @@ async function handleExecuteNativeAction(payload) {
 
             sendTelemetryLog(`Typing text: ${text}`);
 
-            // If coordinates are provided, click first
+            // Trap B: The "Blind Typist". If coordinates are provided, click first to gain focus.
             if (actionData.coordinates && actionData.coordinates.length >= 2) {
-                const x = Math.round(actionData.coordinates[0]);
-                const y = Math.round(actionData.coordinates[1]);
+                // Trap C: Device Pixel Ratio Scaling
+                const rawX = actionData.coordinates[0];
+                const rawY = actionData.coordinates[1];
+                const x = Math.round(rawX * dpr);
+                const y = Math.round(rawY * dpr);
+
+                // Draw a red dot for HITL feedback before typing focus click (using CSS pixels)
+                await new Promise((resolve) => {
+                     chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Runtime.evaluate", {
+                        expression: `
+                            (function() {
+                                const dot = document.createElement('div');
+                                dot.style.position = 'fixed';
+                                dot.style.left = '${rawX}px';
+                                dot.style.top = '${rawY}px';
+                                dot.style.width = '10px';
+                                dot.style.height = '10px';
+                                dot.style.backgroundColor = 'rgba(0, 0, 255, 0.7)'; // Blue for type focus
+                                dot.style.borderRadius = '50%';
+                                dot.style.zIndex = '2147483647';
+                                dot.style.pointerEvents = 'none';
+                                dot.style.transform = 'translate(-50%, -50%)';
+                                document.body.appendChild(dot);
+                                setTimeout(() => {
+                                    if(dot.parentNode) dot.parentNode.removeChild(dot);
+                                }, 1000);
+                            })();
+                        `
+                    }, resolve);
+                });
+
                 await new Promise((resolve, reject) => {
                     chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchMouseEvent", { type: "mousePressed", x: x, y: y, button: "left", clickCount: 1 }, (res) => { if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message)); else resolve(res); });
                 });
@@ -569,7 +599,7 @@ async function handleExecuteNativeAction(payload) {
                 await new Promise((resolve, reject) => {
                     chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchMouseEvent", { type: "mouseReleased", x: x, y: y, button: "left", clickCount: 1 }, (res) => { if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message)); else resolve(res); });
                 });
-                await new Promise(r => setTimeout(r, 100));
+                await new Promise(r => setTimeout(r, 100)); // Allow focus to settle
             }
 
             for (let i = 0; i < text.length; i++) {

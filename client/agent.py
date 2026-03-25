@@ -990,11 +990,14 @@ class AgentStateMachine:
             if not actions:
                  raise ValueError("No valid actions returned by AI.")
         except Exception as e:
-            logging.error(f"Data validation error for API payload: {e}. Raw response: {self.ai_response}")
+            resp_str = str(self.ai_response)
+            if len(resp_str) > 200:
+                resp_str = resp_str[:200] + "... [TRUNCATED]"
+            logging.error(f"Data validation error for API payload: {e}. Raw response: {resp_str}")
             try:
                 firestore_update_document("remote_commands", self.doc_id, {
                     "status": "AWAITING_HUMAN_INPUT",
-                    "help_reason": f"System error parsing AI response. Payload: {str(self.ai_response)[:200]}"
+                    "help_reason": f"System error parsing AI response. Payload: {resp_str}"
                 })
             except Exception as fs_e:
                 logging.error(f"Error saving help request to Firestore: {fs_e}")
@@ -1076,6 +1079,11 @@ class AgentStateMachine:
              self.previous_action = action_to_take
              self.previous_state_metadata = {"current_url": self.current_url}
              self.previous_state_ui = self.current_ui_elements
+
+             # Trap A: Enforce Post-Action Stabilization (1.5s) to allow SPA DOM to settle
+             if action_type in ["CLICK", "TYPE", "SCROLL", "PRESS", "NAVIGATE", "OPEN_TAB"]:
+                 logging.info(f"Enforcing 1.5s Post-Action Stabilization Wait after {action_type}...")
+                 await asyncio.sleep(1.5)
 
         try:
              save_flight_record(
@@ -1180,6 +1188,10 @@ class AgentStateMachine:
                     exec_result = bridge.delegate_command(exec_payload)
                     if not exec_result.get("success"):
                         logging.error(f"Failed to execute Bridge click for HITL: {exec_result.get('error')}")
+
+                    # Trap A & D: Enforce Post-Action Stabilization (1.5s) after Ghost Click
+                    logging.info("Enforcing 1.5s Post-Action Stabilization Wait after HITL Ghost Click...")
+                    await asyncio.sleep(1.5)
                 except Exception as e:
                     logging.error(f"Failed to execute Bridge click for HITL: {e}")
 
@@ -1192,7 +1204,8 @@ class AgentStateMachine:
 
         self.hitl_action = None
         self.iteration += 1
-        self.sub_task_iteration += 1
+        # Trap D: Reset sub_task_iteration to 0 so the agent gets a fresh set of attempts after human guidance
+        self.sub_task_iteration = 0
         self.state = AgentState.EVALUATING
 
 
@@ -1604,7 +1617,11 @@ def execute_voice_agent_loop() -> None:
                             previous_state_metadata = {"current_url": current_url}
                             previous_state_ui = ui_elements
 
-                            if action_idx < len(actions) - 1:
+                            # Trap A: Enforce Post-Action Stabilization (1.5s) to allow SPA DOM to settle
+                            if action_upper in ["CLICK", "TYPE", "SCROLL", "PRESS", "NAVIGATE", "OPEN_TAB"]:
+                                logging.info(f"Enforcing 1.5s Post-Action Stabilization Wait after {action_upper}...")
+                                time.sleep(1.5)
+                            elif action_idx < len(actions) - 1:
                                 # Micro-sleep between sequential actions
                                 time.sleep(0.5)
 
@@ -1950,6 +1967,16 @@ import urllib.parse
 from http import HTTPStatus
 
 class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        # Truncate long URLs and payloads to prevent terminal flooding and hanging
+        msg = format % args
+        if len(msg) > 200:
+            msg = msg[:200] + "... [TRUNCATED]"
+        logging.info("%s - - [%s] %s\n" %
+                         (self.client_address[0],
+                          self.log_date_time_string(),
+                          msg))
+
     def end_headers(self):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
