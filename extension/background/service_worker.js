@@ -10,38 +10,6 @@ function generateId() {
     return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 }
 
-async function sendChunkedMessage(ws, type, payload) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-        console.error("WebSocket not open. Cannot send chunked message.");
-        return;
-    }
-
-    const messageStr = JSON.stringify({ type, payload });
-    const chunkSize = 128 * 1024; // 128KB chunks
-    const totalChunks = Math.ceil(messageStr.length / chunkSize);
-    const messageId = generateId();
-
-    for (let i = 0; i < totalChunks; i++) {
-        const start = i * chunkSize;
-        const end = Math.min(start + chunkSize, messageStr.length);
-        const chunk = messageStr.substring(start, end);
-
-        const chunkMsg = JSON.stringify({
-            type: 'chunk',
-            message_id: messageId,
-            chunk_index: i,
-            total_chunks: totalChunks,
-            data: chunk
-        });
-
-        ws.send(chunkMsg);
-
-        // Yield to the event loop occasionally to avoid blocking the thread or flooding the socket buffer
-        if (i % 10 === 0) {
-            await new Promise(resolve => setTimeout(resolve, 1));
-        }
-    }
-}
 
 let isRecording = false;
 let isProcessing = false;
@@ -119,7 +87,7 @@ function connectLocalBridge() {
                             result = await handleGetState(cmd);
                             // Send via HTTP POST
                             try {
-                                const response = await fetch('http://127.0.0.1:8766/api/state', {
+                                const response = await fetch('http://127.0.0.1:8766/api/vision_state', {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify(result)
@@ -128,15 +96,16 @@ function connectLocalBridge() {
                                     throw new Error(`HTTP Error: ${response.status}`);
                                 }
                             } catch (httpErr) {
-                                console.error("HTTP State Transfer failed, falling back to WebSocket chunking:", httpErr);
-                                await sendChunkedMessage(localBridgeWs, 'result', result);
+                                console.error("HTTP State Transfer failed:", httpErr);
+                                // Tell python bridge about the failure via WS to prevent hang
+                                localBridgeWs.send(JSON.stringify({ type: 'result', payload: { success: false, error: httpErr.message } }));
                             }
                         } else if (cmd.action_type === 'EXECUTE_ACTION') {
                             result = await handleExecuteNativeAction(cmd);
-                            await sendChunkedMessage(localBridgeWs, 'result', result);
+                            localBridgeWs.send(JSON.stringify({ type: 'result', payload: result }));
                         } else {
                             result = { success: false, error: "Unknown action_type." };
-                            await sendChunkedMessage(localBridgeWs, 'result', result);
+                            localBridgeWs.send(JSON.stringify({ type: 'result', payload: result }));
                         }
                     } catch (err) {
                         console.error("Error processing command internally:", err);
@@ -144,16 +113,16 @@ function connectLocalBridge() {
                         // Even if it failed, we must return the result via WebSocket or HTTP so Python doesn't hang
                         if (cmd.action_type === 'GET_STATE') {
                              try {
-                                await fetch('http://127.0.0.1:8766/api/state', {
+                                await fetch('http://127.0.0.1:8766/api/vision_state', {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify(result)
                                 });
                              } catch(e) {
-                                await sendChunkedMessage(localBridgeWs, 'result', result);
+                                localBridgeWs.send(JSON.stringify({ type: 'result', payload: result }));
                              }
                         } else {
-                            await sendChunkedMessage(localBridgeWs, 'result', result);
+                            localBridgeWs.send(JSON.stringify({ type: 'result', payload: result }));
                         }
                     }
                 }
@@ -302,9 +271,11 @@ function sendTelemetryLog(message) {
     });
     // Send to local Python agent to aid debugging and maintain active connection
     if (localBridgeWs && localBridgeWs.readyState === WebSocket.OPEN) {
-        sendChunkedMessage(localBridgeWs, 'telemetry', message).catch(err => {
-            console.error("Failed to send telemetry chunked:", err);
-        });
+        try {
+            localBridgeWs.send(JSON.stringify({ type: 'telemetry', payload: message }));
+        } catch (err) {
+            console.error("Failed to send telemetry:", err);
+        }
     }
 }
 
@@ -428,7 +399,7 @@ async function handleGetState(payload) {
         });
 
         const captureResult = await new Promise((resolve, reject) => {
-            chrome.debugger.sendCommand({ tabId: tab.id }, "Page.captureScreenshot", { format: "webp", quality: 80 }, (result) => {
+            chrome.debugger.sendCommand({ tabId: tab.id }, "Page.captureScreenshot", { format: "jpeg", quality: 60 }, (result) => {
                 if (chrome.runtime.lastError) {
                     reject(new Error(chrome.runtime.lastError.message));
                 } else {

@@ -80,6 +80,51 @@ class StateAPIHandler(BaseHTTPRequestHandler):
                 self.send_header('Access-Control-Allow-Origin', '*')
 
                 self.end_headers()
+                self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
+            except Exception as e:
+                logging.error(f"Error handling HTTP POST payload: {e}")
+                self.send_response(500)
+                self.send_header('Content-type', 'application/json')
+
+                # Enable CORS
+                self.send_header('Access-Control-Allow-Origin', '*')
+
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode())
+        elif self.path == '/api/vision_state':
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+
+            try:
+                data = json.loads(post_data.decode('utf-8'))
+
+                # Send the result to the global bridge instance
+                bridge.receive_result(data)
+
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+
+                # Enable CORS for the extension
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
+                self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            except json.JSONDecodeError:
+                logging.error("Failed to decode JSON from HTTP POST payload")
+                self.send_response(400)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
+            except Exception as e:
+                logging.error(f"Error handling HTTP POST payload: {e}")
+                self.send_response(500)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}).encode())
         else:
             self.send_response(404)
@@ -114,9 +159,6 @@ class LocalBridgeManager:
         self.condition = threading.Condition(self.lock)
         self.result_event = threading.Event()
 
-        # Chunk reassembly buffer
-        self.chunk_buffers = {}
-
     async def _handle_client(self, websocket):
         logging.info(f"WebSocket client connected from {websocket.remote_address}")
 
@@ -139,35 +181,7 @@ class LocalBridgeManager:
             async for message in websocket:
                 try:
                     data = json.loads(message)
-                    if 'type' in data and data['type'] == 'chunk':
-                        msg_id = data.get('message_id')
-                        chunk_idx = data.get('chunk_index')
-                        total_chunks = data.get('total_chunks')
-                        chunk_data = data.get('data')
-
-                        if msg_id not in self.chunk_buffers:
-                            self.chunk_buffers[msg_id] = [None] * total_chunks
-
-                        self.chunk_buffers[msg_id][chunk_idx] = chunk_data
-
-                        if all(c is not None for c in self.chunk_buffers[msg_id]):
-                            full_msg = "".join(self.chunk_buffers[msg_id])
-                            del self.chunk_buffers[msg_id]
-
-                            try:
-                                reconstructed_data = json.loads(full_msg)
-                                if 'type' in reconstructed_data and reconstructed_data['type'] == 'result':
-                                    self.receive_result(reconstructed_data.get('payload', {}))
-                                elif 'type' in reconstructed_data and reconstructed_data['type'] == 'telemetry':
-                                    logging.info(f"Extension Telemetry: {reconstructed_data.get('payload')}")
-                                else:
-                                    reconstructed_str = str(reconstructed_data)
-                                    if len(reconstructed_str) > 200:
-                                        reconstructed_str = reconstructed_str[:200] + "... [TRUNCATED]"
-                                    logging.warning(f"Unknown reconstructed WebSocket message received: {reconstructed_str}")
-                            except json.JSONDecodeError:
-                                logging.error("Failed to decode reconstructed WebSocket message.")
-                    elif 'type' in data and data['type'] == 'ping':
+                    if 'type' in data and data['type'] == 'ping':
                         await websocket.send(json.dumps({"type": "pong"}))
                     elif 'type' in data and data['type'] == 'result':
                         self.receive_result(data.get('payload', {}))
