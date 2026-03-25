@@ -184,6 +184,10 @@ class LocalBridgeManager:
                     if len(msg_str) > 200:
                         msg_str = msg_str[:200] + "... [TRUNCATED]"
                     logging.error(f"Failed to decode WebSocket message: {msg_str}")
+        except websockets.exceptions.ConnectionClosedOK:
+            logging.info(f"WebSocket client disconnected cleanly: {websocket.remote_address}")
+        except websockets.exceptions.ConnectionClosedError as e:
+            logging.error(f"WebSocket client disconnected with an error (e.g. payload too large): {e}")
         except websockets.exceptions.ConnectionClosed:
             logging.info(f"WebSocket client disconnected: {websocket.remote_address}")
         except Exception as e:
@@ -206,7 +210,7 @@ class LocalBridgeManager:
             self._handle_client,
             '127.0.0.1',
             self.port,
-            max_size=None, # Explicitly remove max_size to accommodate massive base64 uncompressed payloads
+            max_size=50_000_000,       # 50MB max_size to accommodate massive base64 uncompressed payloads
             ping_interval=None,        # Disable default pings to avoid timeout during long vision captures
             ping_timeout=None
         )
