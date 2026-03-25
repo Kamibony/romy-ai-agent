@@ -732,6 +732,12 @@ async function handleExecuteNativeAction(payload) {
              return { success: false, error: `Unsupported action type: ${actionType}` };
         }
 
+        // Trap A: Enforce Post-Action Stabilization (1.5s) to allow SPA DOM to settle
+        if (['CLICK', 'TYPE', 'SCROLL', 'PRESS', 'NAVIGATE', 'OPEN_TAB'].includes(actionType)) {
+            sendTelemetryLog(`Enforcing 1.5s Post-Action Stabilization Wait after ${actionType}...`);
+            await new Promise(r => setTimeout(r, 1500));
+        }
+
         return { success: true };
 
     } catch (e) {

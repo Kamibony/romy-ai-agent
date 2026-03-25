@@ -1080,11 +1080,6 @@ class AgentStateMachine:
              self.previous_state_metadata = {"current_url": self.current_url}
              self.previous_state_ui = self.current_ui_elements
 
-             # Trap A: Enforce Post-Action Stabilization (1.5s) to allow SPA DOM to settle
-             if action_type in ["CLICK", "TYPE", "SCROLL", "PRESS", "NAVIGATE", "OPEN_TAB"]:
-                 logging.info(f"Enforcing 1.5s Post-Action Stabilization Wait after {action_type}...")
-                 await asyncio.sleep(1.5)
-
         try:
              save_flight_record(
                  doc_id=self.doc_id,
@@ -1189,9 +1184,6 @@ class AgentStateMachine:
                     if not exec_result.get("success"):
                         logging.error(f"Failed to execute Bridge click for HITL: {exec_result.get('error')}")
 
-                    # Trap A & D: Enforce Post-Action Stabilization (1.5s) after Ghost Click
-                    logging.info("Enforcing 1.5s Post-Action Stabilization Wait after HITL Ghost Click...")
-                    await asyncio.sleep(1.5)
                 except Exception as e:
                     logging.error(f"Failed to execute Bridge click for HITL: {e}")
 
@@ -1617,11 +1609,7 @@ def execute_voice_agent_loop() -> None:
                             previous_state_metadata = {"current_url": current_url}
                             previous_state_ui = ui_elements
 
-                            # Trap A: Enforce Post-Action Stabilization (1.5s) to allow SPA DOM to settle
-                            if action_upper in ["CLICK", "TYPE", "SCROLL", "PRESS", "NAVIGATE", "OPEN_TAB"]:
-                                logging.info(f"Enforcing 1.5s Post-Action Stabilization Wait after {action_upper}...")
-                                time.sleep(1.5)
-                            elif action_idx < len(actions) - 1:
+                            if action_idx < len(actions) - 1:
                                 # Micro-sleep between sequential actions
                                 time.sleep(0.5)
 
