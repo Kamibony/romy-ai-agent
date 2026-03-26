@@ -295,6 +295,70 @@ function sendTelemetryLog(message) {
 }
 
 
+class CDPLifecycleManager {
+    constructor() {
+        this.attachedTabs = new Set();
+        chrome.debugger.onDetach.addListener((source, reason) => {
+            if (source.tabId) {
+                this.attachedTabs.delete(source.tabId);
+                sendTelemetryLog(`[CDP] Session detached for tab ${source.tabId}. Reason: ${reason}`);
+            }
+        });
+    }
+
+    async attach(tabId) {
+        if (this.attachedTabs.has(tabId)) {
+            return;
+        }
+        return new Promise((resolve, reject) => {
+            chrome.debugger.attach({ tabId: tabId }, "1.3", () => {
+                const err = chrome.runtime.lastError;
+                if (err && !err.message.includes("Cannot attach to this target")) {
+                    reject(new Error(err.message));
+                } else {
+                    this.attachedTabs.add(tabId);
+                    resolve();
+                }
+            });
+        });
+    }
+
+    async detach(tabId) {
+        if (!this.attachedTabs.has(tabId)) {
+            return;
+        }
+        return new Promise((resolve) => {
+            chrome.debugger.detach({ tabId: tabId }, () => {
+                const err = chrome.runtime.lastError; // Ignore errors
+                this.attachedTabs.delete(tabId);
+                resolve();
+            });
+        });
+    }
+
+    async sendCommand(tabId, method, params = {}) {
+        if (!this.attachedTabs.has(tabId)) {
+            throw new Error(`[CDP] Cannot send command ${method} to unattached tab ${tabId}`);
+        }
+        return new Promise((resolve, reject) => {
+            chrome.debugger.sendCommand({ tabId: tabId }, method, params, (result) => {
+                const err = chrome.runtime.lastError;
+                if (err) {
+                    if (err.message.includes("Session with given id not found") || err.message.includes("Cannot send command to a detached session")) {
+                         this.attachedTabs.delete(tabId);
+                         reject(new Error(`[CDP] Session detached while sending ${method}: ${err.message}`));
+                    } else {
+                         reject(new Error(`[CDP Error] ${method}: ${err.message}`));
+                    }
+                } else {
+                    resolve(result);
+                }
+            });
+        });
+    }
+}
+const cdpManager = new CDPLifecycleManager();
+
 // --- Utility: Robust Navigation Wrapper ---
 async function waitForTabStable(tabId, maxTimeoutMs = 10000) {
     return new Promise((resolve, reject) => {
@@ -444,25 +508,9 @@ async function handleGetState(payload) {
     let uiElements = [];
 
     try {
-        await new Promise((resolve, reject) => {
-            chrome.debugger.attach({ tabId: tab.id }, "1.3", () => {
-                if (chrome.runtime.lastError && !chrome.runtime.lastError.message.includes("Cannot attach to this target")) {
-                    reject(new Error(chrome.runtime.lastError.message));
-                } else {
-                    resolve();
-                }
-            });
-        });
+        await cdpManager.attach(tab.id);
 
-        const captureResult = await new Promise((resolve, reject) => {
-            chrome.debugger.sendCommand({ tabId: tab.id }, "Page.captureScreenshot", { format: "jpeg", quality: 60 }, (result) => {
-                if (chrome.runtime.lastError) {
-                    reject(new Error(chrome.runtime.lastError.message));
-                } else {
-                    resolve(result);
-                }
-            });
-        });
+        const captureResult = await cdpManager.sendCommand(tab.id, "Page.captureScreenshot", { format: "jpeg", quality: 60 });
 
         if (captureResult && captureResult.data) {
             screenshotBase64 = captureResult.data;
@@ -494,9 +542,7 @@ async function handleGetState(payload) {
         sendTelemetryLog(`CDP Screenshot Error: ${e.message}`);
         throw e;
     } finally {
-        chrome.debugger.detach({ tabId: tab.id }, () => {
-            const err = chrome.runtime.lastError;
-        });
+        await cdpManager.detach(tab.id);
     }
 
     return { success: true, ui_elements: uiElements, screenshot_base64: screenshotBase64, tabId: tab.id, url: tab.url };
@@ -514,24 +560,11 @@ async function handleExecuteNativeAction(payload) {
     isExecutingNativeAction = true;
 
     try {
-        await new Promise((resolve, reject) => {
-            chrome.debugger.attach({ tabId: activeSessionTabId }, "1.3", () => {
-                if (chrome.runtime.lastError && !chrome.runtime.lastError.message.includes("Cannot attach to this target")) {
-                    reject(new Error(chrome.runtime.lastError.message));
-                } else {
-                    resolve();
-                }
-            });
-        });
+        await cdpManager.attach(activeSessionTabId);
 
         // 1. Get window.devicePixelRatio to scale physical pixels
-        const evalResult = await new Promise((resolve, reject) => {
-            chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Runtime.evaluate", {
-                expression: "window.devicePixelRatio"
-            }, (result) => {
-                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                else resolve(result);
-            });
+        const evalResult = await cdpManager.sendCommand(activeSessionTabId, "Runtime.evaluate", {
+            expression: "window.devicePixelRatio"
         });
         const dpr = evalResult?.result?.value || 1;
 
@@ -548,8 +581,8 @@ async function handleExecuteNativeAction(payload) {
             const y = Math.round(rawY * dpr);
 
             // Draw a red dot for HITL feedback before clicking (using CSS pixels)
-            await new Promise((resolve) => {
-                 chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Runtime.evaluate", {
+            try {
+                await cdpManager.sendCommand(activeSessionTabId, "Runtime.evaluate", {
                     expression: `
                         (function() {
                             const dot = document.createElement('div');
@@ -569,36 +602,28 @@ async function handleExecuteNativeAction(payload) {
                             }, 1000);
                         })();
                     `
-                }, resolve);
-            });
+                });
+            } catch (err) {
+                sendTelemetryLog(`[CDP] Failed to draw HITL feedback dot: ${err.message}`);
+            }
 
             // Dispatch MouseEvent (Click)
-            await new Promise((resolve, reject) => {
-                chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchMouseEvent", {
-                    type: "mousePressed",
-                    x: x,
-                    y: y,
-                    button: "left",
-                    clickCount: 1
-                }, (res) => {
-                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                    else resolve(res);
-                });
+            await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", {
+                type: "mousePressed",
+                x: x,
+                y: y,
+                button: "left",
+                clickCount: 1
             });
 
             await new Promise(r => setTimeout(r, 50)); // Small delay between press and release
 
-            await new Promise((resolve, reject) => {
-                chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchMouseEvent", {
-                    type: "mouseReleased",
-                    x: x,
-                    y: y,
-                    button: "left",
-                    clickCount: 1
-                }, (res) => {
-                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                    else resolve(res);
-                });
+            await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", {
+                type: "mouseReleased",
+                x: x,
+                y: y,
+                button: "left",
+                clickCount: 1
             });
 
             sendTelemetryLog(`Action CLICK at (${x}, ${y}) executed successfully.`);
@@ -618,8 +643,8 @@ async function handleExecuteNativeAction(payload) {
                 const y = Math.round(rawY * dpr);
 
                 // Draw a red dot for HITL feedback before typing focus click (using CSS pixels)
-                await new Promise((resolve) => {
-                     chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Runtime.evaluate", {
+                try {
+                    await cdpManager.sendCommand(activeSessionTabId, "Runtime.evaluate", {
                         expression: `
                             (function() {
                                 const dot = document.createElement('div');
@@ -639,29 +664,22 @@ async function handleExecuteNativeAction(payload) {
                                 }, 1000);
                             })();
                         `
-                    }, resolve);
-                });
+                    });
+                } catch (err) {
+                    sendTelemetryLog(`[CDP] Failed to draw HITL feedback dot: ${err.message}`);
+                }
 
-                await new Promise((resolve, reject) => {
-                    chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchMouseEvent", { type: "mousePressed", x: x, y: y, button: "left", clickCount: 1 }, (res) => { if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message)); else resolve(res); });
-                });
+                await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", { type: "mousePressed", x: x, y: y, button: "left", clickCount: 1 });
                 await new Promise(r => setTimeout(r, 50));
-                await new Promise((resolve, reject) => {
-                    chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchMouseEvent", { type: "mouseReleased", x: x, y: y, button: "left", clickCount: 1 }, (res) => { if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message)); else resolve(res); });
-                });
+                await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x: x, y: y, button: "left", clickCount: 1 });
                 await new Promise(r => setTimeout(r, 100)); // Allow focus to settle
             }
 
             for (let i = 0; i < text.length; i++) {
                 const char = text[i];
-                await new Promise((resolve, reject) => {
-                    chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchKeyEvent", {
-                        type: "char",
-                        text: char
-                    }, (res) => {
-                        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                        else resolve(res);
-                    });
+                await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchKeyEvent", {
+                    type: "char",
+                    text: char
                 });
                 await new Promise(r => setTimeout(r, 10)); // Typematic delay
             }
@@ -710,17 +728,12 @@ async function handleExecuteNativeAction(payload) {
             // Typical scroll amounts
             const amount = direction.toLowerCase() === 'up' ? -500 : 500;
 
-            await new Promise((resolve, reject) => {
-                chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchMouseEvent", {
-                    type: "mouseWheel",
-                    x: 0,
-                    y: 0,
-                    deltaX: 0,
-                    deltaY: amount
-                }, (res) => {
-                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                    else resolve(res);
-                });
+            await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", {
+                type: "mouseWheel",
+                x: 0,
+                y: 0,
+                deltaX: 0,
+                deltaY: amount
             });
             sendTelemetryLog(`SCROLL ${direction} executed successfully.`);
         } else if (actionType === 'PRESS') {
@@ -739,34 +752,24 @@ async function handleExecuteNativeAction(payload) {
 
             const keyData = keyToCode[key] || { text: key, unmodifiedText: key, keyIdentifier: key, code: key, windowsVirtualKeyCode: 0, nativeVirtualKeyCode: 0 };
 
-            await new Promise((resolve, reject) => {
-                chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchKeyEvent", {
-                    type: "keyDown",
-                    text: keyData.text,
-                    unmodifiedText: keyData.unmodifiedText,
-                    keyIdentifier: keyData.keyIdentifier,
-                    code: keyData.code,
-                    windowsVirtualKeyCode: keyData.windowsVirtualKeyCode,
-                    nativeVirtualKeyCode: keyData.nativeVirtualKeyCode
-                }, (res) => {
-                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                    else resolve(res);
-                });
+            await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchKeyEvent", {
+                type: "keyDown",
+                text: keyData.text,
+                unmodifiedText: keyData.unmodifiedText,
+                keyIdentifier: keyData.keyIdentifier,
+                code: keyData.code,
+                windowsVirtualKeyCode: keyData.windowsVirtualKeyCode,
+                nativeVirtualKeyCode: keyData.nativeVirtualKeyCode
             });
 
             await new Promise(r => setTimeout(r, 50));
 
-            await new Promise((resolve, reject) => {
-                chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Input.dispatchKeyEvent", {
-                    type: "keyUp",
-                    keyIdentifier: keyData.keyIdentifier,
-                    code: keyData.code,
-                    windowsVirtualKeyCode: keyData.windowsVirtualKeyCode,
-                    nativeVirtualKeyCode: keyData.nativeVirtualKeyCode
-                }, (res) => {
-                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                    else resolve(res);
-                });
+            await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchKeyEvent", {
+                type: "keyUp",
+                keyIdentifier: keyData.keyIdentifier,
+                code: keyData.code,
+                windowsVirtualKeyCode: keyData.windowsVirtualKeyCode,
+                nativeVirtualKeyCode: keyData.nativeVirtualKeyCode
             });
 
             sendTelemetryLog(`PRESS ${key} executed successfully.`);
@@ -775,14 +778,9 @@ async function handleExecuteNativeAction(payload) {
             if (!script) throw new Error("Script/Code missing for action EXECUTE_JS");
 
             sendTelemetryLog(`Executing JS: ${script}`);
-            const result = await new Promise((resolve, reject) => {
-                chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Runtime.evaluate", {
-                    expression: script,
-                    returnByValue: true
-                }, (res) => {
-                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                    else resolve(res);
-                });
+            const result = await cdpManager.sendCommand(activeSessionTabId, "Runtime.evaluate", {
+                expression: script,
+                returnByValue: true
             });
 
             if (result && result.exceptionDetails) {
@@ -812,8 +810,6 @@ async function handleExecuteNativeAction(payload) {
         return { success: false, error: e.message };
     } finally {
         isExecutingNativeAction = false;
-        chrome.debugger.detach({ tabId: activeSessionTabId }, () => {
-             const err = chrome.runtime.lastError; // Ignore detach errors
-        });
+        await cdpManager.detach(activeSessionTabId);
     }
 }
