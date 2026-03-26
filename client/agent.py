@@ -152,19 +152,23 @@ def set_firebase_token(token: str) -> None:
     global CURRENT_TOKEN
     CURRENT_TOKEN = token
 
+_GLOBAL_SESSION = None
+
 def get_resilient_session() -> requests.Session:
-    """Returns a requests.Session configured with exponential backoff and retries."""
-    session = requests.Session()
-    retry_strategy = Retry(
-        total=5,
-        backoff_factor=1,  # 1s, 2s, 4s, 8s, 16s
-        status_forcelist=[500, 502, 503, 504],
-        allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PATCH", "PUT", "DELETE"]
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    return session
+    """Returns a global requests.Session configured with exponential backoff and retries."""
+    global _GLOBAL_SESSION
+    if _GLOBAL_SESSION is None:
+        _GLOBAL_SESSION = requests.Session()
+        retry_strategy = Retry(
+            total=5,
+            backoff_factor=1,  # 1s, 2s, 4s, 8s, 16s
+            status_forcelist=[500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PATCH", "PUT", "DELETE"]
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        _GLOBAL_SESSION.mount("https://", adapter)
+        _GLOBAL_SESSION.mount("http://", adapter)
+    return _GLOBAL_SESSION
 
 
 def firestore_update_document(collection: str, doc_id: str, updates: Dict[str, Any], delete_fields: list = None) -> None:
@@ -219,11 +223,11 @@ def firestore_update_document(collection: str, doc_id: str, updates: Dict[str, A
     for attempt in range(max_retries):
         try:
             # Using resilient session for robust retries
-            with get_resilient_session() as session:
-                response = session.patch(url, json=payload, headers=headers, timeout=10)
-                logging.info(f"Status update response for {doc_id}: {response.status_code}")
-                response.raise_for_status()
-                return  # Success, exit the function
+            session = get_resilient_session()
+            response = session.patch(url, json=payload, headers=headers, timeout=10)
+            logging.info(f"Status update response for {doc_id}: {response.status_code}")
+            response.raise_for_status()
+            return  # Success, exit the function
         except requests.exceptions.HTTPError as e:
             logging.error(f"HTTPError updating Firestore doc {doc_id} on attempt {attempt+1}: {e} - Response: {e.response.text}")
             if e.response.status_code in [400, 401, 403, 404]:
@@ -248,8 +252,8 @@ def firestore_get_document(collection: str, doc_id: str) -> Dict[str, Any]:
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}"}
 
     try:
-        with get_resilient_session() as session:
-            response = session.get(url, headers=headers, timeout=10)
+        session = get_resilient_session()
+        response = session.get(url, headers=headers, timeout=10)
         if response.status_code == 404:
             return {}
         response.raise_for_status()
@@ -318,6 +322,7 @@ def start_remote_listener() -> None:
     import threading
 
     def _poll_loop():
+        global _GLOBAL_SESSION
         logging.info("Started listening for remote commands on Firestore via REST polling.")
         url = "https://firestore.googleapis.com/v1/projects/romy-ai-agent/databases/(default)/documents:runQuery"
 
@@ -399,7 +404,9 @@ def start_remote_listener() -> None:
                 error_count += 1
                 logging.error(f"SSL/Network error in remote listener poll (attempt {error_count}): {e}")
                 if error_count >= 3:
-                    session.close()
+                    if _GLOBAL_SESSION:
+                        _GLOBAL_SESSION.close()
+                        _GLOBAL_SESSION = None
                     session = get_resilient_session()
                     logging.warning("Re-initializing resilient requests session due to repeated errors.")
             except requests.exceptions.RequestException as e:
@@ -407,7 +414,9 @@ def start_remote_listener() -> None:
                 logging.error(f"Network error in remote listener poll (attempt {error_count}): {e}")
                 # Re-initialize session on network errors to clear potentially bad sockets
                 if error_count >= 3:
-                    session.close()
+                    if _GLOBAL_SESSION:
+                        _GLOBAL_SESSION.close()
+                        _GLOBAL_SESSION = None
                     session = get_resilient_session()
                     logging.warning("Re-initializing resilient requests session due to repeated errors.")
 
@@ -619,8 +628,8 @@ def pre_flight_check(command_text: str) -> dict:
     payload = {"command_text": command_text}
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
     try:
-        with get_resilient_session() as session:
-            response = session.post(url, json=payload, headers=headers, timeout=(10, 20))
+        session = get_resilient_session()
+        response = session.post(url, json=payload, headers=headers, timeout=(10, 20))
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -636,8 +645,8 @@ def supervisor_plan(command_text: str) -> list:
     payload = {"command_text": command_text}
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
     try:
-        with get_resilient_session() as session:
-            response = session.post(url, json=payload, headers=headers, timeout=(10, 30))
+        session = get_resilient_session()
+        response = session.post(url, json=payload, headers=headers, timeout=(10, 30))
         response.raise_for_status()
         return response.json().get("sub_tasks", [])
     except Exception as e:
@@ -728,8 +737,8 @@ def critic_verify(sub_task: str, action_taken: dict, before_state: dict, after_s
     }
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
     try:
-        with get_resilient_session() as session:
-            response = session.post(url, json=payload, headers=headers, timeout=(10, 30))
+        session = get_resilient_session()
+        response = session.post(url, json=payload, headers=headers, timeout=(10, 30))
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -759,8 +768,8 @@ def classify_intent(command_text: str, audio_b64: str) -> Tuple[str, str]:
     }
 
     try:
-        with get_resilient_session() as session:
-            response = session.post(url, json=payload, headers=headers, timeout=(10, 20))
+        session = get_resilient_session()
+        response = session.post(url, json=payload, headers=headers, timeout=(10, 20))
         response.raise_for_status()
         data = response.json()
 
@@ -1462,8 +1471,8 @@ def execute_voice_agent_loop() -> None:
                         retry_delay = 5
                         for attempt in range(max_retries):
                             try:
-                                with get_resilient_session() as session:
-                                    response = session.post(config.GET_COMMAND_ENDPOINT, json=payload, headers=headers, timeout=(15, 60))
+                                session = get_resilient_session()
+                                response = session.post(config.GET_COMMAND_ENDPOINT, json=payload, headers=headers, timeout=(15, 60))
                                 response.raise_for_status()
                                 backend_data = response.json()
                                 break
@@ -1754,8 +1763,8 @@ def execute_voice_agent_loop() -> None:
                 retry_delay = 5
                 for attempt in range(max_retries):
                     try:
-                        with get_resilient_session() as session:
-                            response = session.post(config.GET_COMMAND_ENDPOINT, json=payload, headers=headers, timeout=(15, 60))
+                        session = get_resilient_session()
+                        response = session.post(config.GET_COMMAND_ENDPOINT, json=payload, headers=headers, timeout=(15, 60))
                         response.raise_for_status()
                         backend_data = response.json()
                         break
@@ -2168,8 +2177,8 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
             }
 
             try:
-                with get_resilient_session() as session:
-                    response = session.get(backend_url, headers=headers, timeout=10)
+                session = get_resilient_session()
+                response = session.get(backend_url, headers=headers, timeout=10)
                 response.raise_for_status()
 
                 self.send_response(HTTPStatus.OK)
