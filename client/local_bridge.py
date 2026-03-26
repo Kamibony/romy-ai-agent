@@ -6,7 +6,6 @@ import time
 import websockets
 import os
 import subprocess
-from http.server import BaseHTTPRequestHandler, HTTPServer
 import urllib.parse
 
 def _kill_process_using_port(port: int):
@@ -38,119 +37,13 @@ def _kill_process_using_port(port: int):
         logging.warning(f"Failed to check/kill process on port {port}: {e}")
 
 
-class StateAPIHandler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        if self.path == '/api/state':
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-
-            try:
-                data = json.loads(post_data.decode('utf-8'))
-
-                # Send the result to the global bridge instance
-                bridge.receive_result(data)
-
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-
-                # Enable CORS for the extension
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
-                self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-
-                self.end_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
-
-            except json.JSONDecodeError:
-                logging.error("Failed to decode JSON from HTTP POST payload")
-                self.send_response(400)
-                self.send_header('Content-type', 'application/json')
-
-                # Enable CORS
-                self.send_header('Access-Control-Allow-Origin', '*')
-
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
-            except Exception as e:
-                logging.error(f"Error handling HTTP POST payload: {e}")
-                self.send_response(500)
-                self.send_header('Content-type', 'application/json')
-
-                # Enable CORS
-                self.send_header('Access-Control-Allow-Origin', '*')
-
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
-            except Exception as e:
-                logging.error(f"Error handling HTTP POST payload: {e}")
-                self.send_response(500)
-                self.send_header('Content-type', 'application/json')
-
-                # Enable CORS
-                self.send_header('Access-Control-Allow-Origin', '*')
-
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode())
-        elif self.path == '/api/vision_state':
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-
-            try:
-                data = json.loads(post_data.decode('utf-8'))
-
-                # Send the result to the global bridge instance
-                bridge.receive_result(data)
-
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-
-                # Enable CORS for the extension
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
-                self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-
-                self.end_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
-
-            except json.JSONDecodeError:
-                logging.error("Failed to decode JSON from HTTP POST payload")
-                self.send_response(400)
-                self.send_header('Content-type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
-            except Exception as e:
-                logging.error(f"Error handling HTTP POST payload: {e}")
-                self.send_response(500)
-                self.send_header('Content-type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode())
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        self.end_headers()
-
-    def log_message(self, format, *args):
-        # Suppress default logging of requests
-        pass
-
 class LocalBridgeManager:
-    def __init__(self, port=8765, http_port=8766):
+    def __init__(self, port=8765):
         self.port = port
-        self.http_port = http_port
         self.active_websocket = None
         self.pending_command = None
         self.result = None
         self.server_thread = None
-        self.http_thread = None
-        self.http_server = None
         self.loop = None
         self.server = None
 
@@ -158,6 +51,9 @@ class LocalBridgeManager:
         self.lock = threading.Lock()
         self.condition = threading.Condition(self.lock)
         self.result_event = threading.Event()
+
+        # Chunk reassembly buffer
+        self.chunk_buffers = {}
 
     async def _handle_client(self, websocket):
         logging.info(f"WebSocket client connected from {websocket.remote_address}")
@@ -183,6 +79,32 @@ class LocalBridgeManager:
                     data = json.loads(message)
                     if 'type' in data and data['type'] == 'ping':
                         await websocket.send(json.dumps({"type": "pong"}))
+                    elif 'type' in data and data['type'] == 'chunk':
+                        # Handle chunked data
+                        msg_id = data.get('message_id')
+                        chunk_idx = data.get('chunk_index')
+                        total_chunks = data.get('total_chunks')
+                        chunk_data = data.get('chunk_data', '')
+
+                        if msg_id not in self.chunk_buffers:
+                            self.chunk_buffers[msg_id] = {}
+
+                        self.chunk_buffers[msg_id][chunk_idx] = chunk_data
+
+                        # Check if all chunks are received
+                        if len(self.chunk_buffers[msg_id]) == total_chunks:
+                            # Reassemble
+                            import base64
+                            full_payload_base64 = "".join([self.chunk_buffers[msg_id][i] for i in range(total_chunks)])
+                            del self.chunk_buffers[msg_id]
+
+                            try:
+                                full_payload_bytes = base64.b64decode(full_payload_base64)
+                                full_payload_str = full_payload_bytes.decode('utf-8')
+                                full_payload = json.loads(full_payload_str)
+                                self.receive_result(full_payload)
+                            except Exception as e:
+                                logging.error(f"Failed to decode and parse reassembled base64 chunk payload: {e}")
                     elif 'type' in data and data['type'] == 'result':
                         self.receive_result(data.get('payload', {}))
                     elif 'type' in data and data['type'] == 'telemetry':
@@ -251,39 +173,12 @@ class LocalBridgeManager:
             self.server_thread = threading.Thread(target=self._start_loop, daemon=True)
             self.server_thread.start()
 
-        if self.http_thread is None or not self.http_thread.is_alive():
-            self.http_thread = threading.Thread(target=self._start_http_server, daemon=True)
-            self.http_thread.start()
-
-    def _start_http_server(self):
-        try:
-            # Ensure the port is free before binding
-            _kill_process_using_port(self.http_port)
-            time.sleep(0.5)
-
-            self.http_server = HTTPServer(('127.0.0.1', self.http_port), StateAPIHandler)
-
-            # Allow address reuse
-            self.http_server.allow_reuse_address = True
-
-            logging.info(f"HTTP local bridge server started on http://127.0.0.1:{self.http_port}")
-            self.http_server.serve_forever()
-        except Exception as e:
-            logging.error(f"HTTP server thread exception: {e}")
-
     def stop(self):
         if self.loop and self.loop.is_running():
             self.loop.call_soon_threadsafe(self.stop_event.set)
 
         if self.server_thread:
             self.server_thread.join(timeout=2)
-
-        if self.http_server:
-            self.http_server.shutdown()
-            self.http_server.server_close()
-
-        if self.http_thread:
-            self.http_thread.join(timeout=2)
 
     def delegate_command(self, payload: dict, timeout=300):
         # Import inside the method to avoid circular imports if any

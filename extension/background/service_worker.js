@@ -88,21 +88,25 @@ function connectLocalBridge() {
                     try {
                         if (cmd.action_type === 'GET_STATE') {
                             result = await handleGetState(cmd);
-                            // Send via HTTP POST
-                            try {
-                                const response = await fetch('http://127.0.0.1:8766/api/vision_state', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify(result)
-                                });
-                                if (!response.ok) {
-                                    throw new Error(`HTTP Error: ${response.status}`);
-                                }
-                            } catch (httpErr) {
-                                console.error("HTTP State Transfer failed:", httpErr);
-                                // Tell python bridge about the failure via WS to prevent hang
-                                if (ws.readyState === WebSocket.OPEN) {
-                                    ws.send(JSON.stringify({ type: 'result', payload: { success: false, error: httpErr.message } }));
+                            if (ws.readyState === WebSocket.OPEN) {
+                                const payloadStr = JSON.stringify(result);
+                                // Safely chunk base64 instead of raw utf-16 string to avoid severing multibyte characters
+                                // We'll convert the whole payload to base64, chunk it, and decode on Python side
+                                // In JS, btoa() requires Latin1, so we encode URI component and unescape first
+                                const base64Payload = btoa(unescape(encodeURIComponent(payloadStr)));
+                                const chunkSize = 128 * 1024; // 128KB chunks
+                                const totalChunks = Math.ceil(base64Payload.length / chunkSize);
+                                const messageId = crypto.randomUUID();
+
+                                for (let i = 0; i < totalChunks; i++) {
+                                    const chunk = base64Payload.substring(i * chunkSize, (i + 1) * chunkSize);
+                                    ws.send(JSON.stringify({
+                                        type: 'chunk',
+                                        message_id: messageId,
+                                        chunk_index: i,
+                                        total_chunks: totalChunks,
+                                        chunk_data: chunk
+                                    }));
                                 }
                             }
                         } else if (cmd.action_type === 'EXECUTE_ACTION') {
@@ -119,23 +123,8 @@ function connectLocalBridge() {
                     } catch (err) {
                         console.error("Error processing command internally:", err);
                         result = { success: false, error: err.message || String(err) };
-                        // Even if it failed, we must return the result via WebSocket or HTTP so Python doesn't hang
-                        if (cmd.action_type === 'GET_STATE') {
-                             try {
-                                await fetch('http://127.0.0.1:8766/api/vision_state', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify(result)
-                                });
-                             } catch(e) {
-                                if (ws.readyState === WebSocket.OPEN) {
-                                    ws.send(JSON.stringify({ type: 'result', payload: result }));
-                                }
-                             }
-                        } else {
-                            if (ws.readyState === WebSocket.OPEN) {
-                                ws.send(JSON.stringify({ type: 'result', payload: result }));
-                            }
+                        if (ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({ type: 'result', payload: result }));
                         }
                     }
                 }
