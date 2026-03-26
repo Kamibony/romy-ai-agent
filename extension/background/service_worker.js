@@ -42,7 +42,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 function connectLocalBridge() {
-    if (localBridgeWs && localBridgeWs.readyState === WebSocket.OPEN) {
+    if (localBridgeWs && (localBridgeWs.readyState === WebSocket.OPEN || localBridgeWs.readyState === WebSocket.CONNECTING)) {
         return;
     }
     if (isConnecting) {
@@ -52,9 +52,11 @@ function connectLocalBridge() {
     isConnecting = true;
     console.log(`Connecting to local bridge via WebSocket... (Attempt ${reconnectAttempts + 1})`);
     try {
-        localBridgeWs = new WebSocket('ws://127.0.0.1:8765');
+        const ws = new WebSocket('ws://127.0.0.1:8765');
+        localBridgeWs = ws;
 
-        localBridgeWs.onopen = () => {
+        ws.onopen = () => {
+            if (localBridgeWs !== ws) return;
             isConnecting = false;
             console.log("WebSocket connected to local bridge.");
             reconnectAttempts = 0; // Reset counter on successful connection
@@ -66,13 +68,14 @@ function connectLocalBridge() {
             // Start heartbeat to keep connection alive
             if (heartbeatInterval) clearInterval(heartbeatInterval);
             heartbeatInterval = setInterval(() => {
-                if (localBridgeWs && localBridgeWs.readyState === WebSocket.OPEN) {
-                    localBridgeWs.send(JSON.stringify({ type: 'ping' }));
+                if (localBridgeWs === ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'ping' }));
                 }
             }, 10000); // 10 seconds
         };
 
-        localBridgeWs.onmessage = async (event) => {
+        ws.onmessage = async (event) => {
+            if (localBridgeWs !== ws) return;
             try {
                 const msg = JSON.parse(event.data);
                 if (msg.type === 'pong') {
@@ -98,14 +101,20 @@ function connectLocalBridge() {
                             } catch (httpErr) {
                                 console.error("HTTP State Transfer failed:", httpErr);
                                 // Tell python bridge about the failure via WS to prevent hang
-                                localBridgeWs.send(JSON.stringify({ type: 'result', payload: { success: false, error: httpErr.message } }));
+                                if (ws.readyState === WebSocket.OPEN) {
+                                    ws.send(JSON.stringify({ type: 'result', payload: { success: false, error: httpErr.message } }));
+                                }
                             }
                         } else if (cmd.action_type === 'EXECUTE_ACTION') {
                             result = await handleExecuteNativeAction(cmd);
-                            localBridgeWs.send(JSON.stringify({ type: 'result', payload: result }));
+                            if (ws.readyState === WebSocket.OPEN) {
+                                ws.send(JSON.stringify({ type: 'result', payload: result }));
+                            }
                         } else {
                             result = { success: false, error: "Unknown action_type." };
-                            localBridgeWs.send(JSON.stringify({ type: 'result', payload: result }));
+                            if (ws.readyState === WebSocket.OPEN) {
+                                ws.send(JSON.stringify({ type: 'result', payload: result }));
+                            }
                         }
                     } catch (err) {
                         console.error("Error processing command internally:", err);
@@ -119,10 +128,14 @@ function connectLocalBridge() {
                                     body: JSON.stringify(result)
                                 });
                              } catch(e) {
-                                localBridgeWs.send(JSON.stringify({ type: 'result', payload: result }));
+                                if (ws.readyState === WebSocket.OPEN) {
+                                    ws.send(JSON.stringify({ type: 'result', payload: result }));
+                                }
                              }
                         } else {
-                            localBridgeWs.send(JSON.stringify({ type: 'result', payload: result }));
+                            if (ws.readyState === WebSocket.OPEN) {
+                                ws.send(JSON.stringify({ type: 'result', payload: result }));
+                            }
                         }
                     }
                 }
@@ -131,7 +144,10 @@ function connectLocalBridge() {
             }
         };
 
-        localBridgeWs.onclose = () => {
+        ws.onclose = () => {
+            if (localBridgeWs !== ws) {
+                return;
+            }
             isConnecting = false;
             localBridgeWs = null;
             if (heartbeatInterval) clearInterval(heartbeatInterval);
@@ -140,17 +156,19 @@ function connectLocalBridge() {
             // Adjust backoff: initially fast retries, maxing out at 15 seconds to catch Python agent restarts quickly
             const backoff = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 15000);
             console.log(`WebSocket connection closed. Reconnecting in ${backoff}ms...`);
+            if (reconnectTimeout) clearTimeout(reconnectTimeout);
             reconnectTimeout = setTimeout(connectLocalBridge, backoff);
         };
 
-        localBridgeWs.onerror = (error) => {
+        ws.onerror = (error) => {
+            if (localBridgeWs !== ws) return;
             // Silence network errors to avoid spamming the console when Python agent is down
             isConnecting = false;
-            if (localBridgeWs && localBridgeWs.readyState === WebSocket.CONNECTING) {
+            if (ws.readyState === WebSocket.CONNECTING) {
                 // If we get an error while connecting (e.g. connection refused), close it
                 // so the onclose handler can trigger a reconnect attempt.
                 try {
-                    localBridgeWs.close();
+                    ws.close();
                 } catch(e) {}
             }
         };
@@ -159,6 +177,7 @@ function connectLocalBridge() {
         console.error("Error setting up WebSocket:", e);
         reconnectAttempts++;
         const backoff = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+        if (reconnectTimeout) clearTimeout(reconnectTimeout);
         reconnectTimeout = setTimeout(connectLocalBridge, backoff);
     }
 }
