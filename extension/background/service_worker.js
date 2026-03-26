@@ -442,9 +442,10 @@ async function handleGetState(payload) {
         }
     }
 
-    // 2. Capture Clean Screenshot Natively via CDP
+    // 2. Capture Clean Screenshot Natively via CDP and Extract UI Elements
     sendTelemetryLog(`Capturing pure screenshot via CDP for tab ${tab.id}...`);
     let screenshotBase64 = null;
+    let uiElements = [];
 
     try {
         await new Promise((resolve, reject) => {
@@ -471,6 +472,28 @@ async function handleGetState(payload) {
             screenshotBase64 = captureResult.data;
             sendTelemetryLog(`Successfully captured pure screenshot.`);
         }
+
+        // 3. Request DOM Map from the content script using scripting API
+        sendTelemetryLog(`Requesting structural UI array from RomyDomMapper...`);
+        try {
+            const results = await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                func: () => {
+                    if (window.RomyDomMapper && typeof window.RomyDomMapper.extractUIElements === 'function') {
+                        return window.RomyDomMapper.extractUIElements();
+                    }
+                    return [];
+                }
+            });
+
+            if (results && results[0] && results[0].result) {
+                uiElements = results[0].result;
+                sendTelemetryLog(`Successfully extracted ${uiElements.length} UI elements.`);
+            }
+        } catch (domErr) {
+            sendTelemetryLog(`Warning: Failed to extract UI elements via scripting: ${domErr.message}. Falling back to empty array.`);
+        }
+
     } catch (e) {
         sendTelemetryLog(`CDP Screenshot Error: ${e.message}`);
         throw e;
@@ -480,8 +503,7 @@ async function handleGetState(payload) {
         });
     }
 
-    // Return empty ui_elements as we now rely on vision
-    return { success: true, ui_elements: [], screenshot_base64: screenshotBase64, tabId: tab.id, url: tab.url };
+    return { success: true, ui_elements: uiElements, screenshot_base64: screenshotBase64, tabId: tab.id, url: tab.url };
 }
 
 async function handleExecuteNativeAction(payload) {
