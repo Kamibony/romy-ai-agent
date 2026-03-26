@@ -750,6 +750,29 @@ async function handleExecuteNativeAction(payload) {
             });
 
             sendTelemetryLog(`PRESS ${key} executed successfully.`);
+        } else if (actionType === 'EXECUTE_JS') {
+            const script = actionData.script || actionData.code || "";
+            if (!script) throw new Error("Script/Code missing for action EXECUTE_JS");
+
+            sendTelemetryLog(`Executing JS: ${script}`);
+            const result = await new Promise((resolve, reject) => {
+                chrome.debugger.sendCommand({ tabId: activeSessionTabId }, "Runtime.evaluate", {
+                    expression: script,
+                    returnByValue: true
+                }, (res) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else resolve(res);
+                });
+            });
+
+            if (result && result.exceptionDetails) {
+                throw new Error(result.exceptionDetails.exception ? result.exceptionDetails.exception.description : "JS Execution Exception");
+            }
+
+            sendTelemetryLog(`EXECUTE_JS executed successfully.`);
+
+            // Return early for EXECUTE_JS to include the evaluation result
+            return { success: true, result: result?.result?.value };
         }
         else {
              sendTelemetryLog(`Unsupported native action type: ${actionType}`);
