@@ -279,6 +279,61 @@ function sendTelemetryLog(message) {
     }
 }
 
+
+// --- Utility: Robust Navigation Wrapper ---
+async function waitForTabStable(tabId, maxTimeoutMs = 10000) {
+    return new Promise((resolve, reject) => {
+        let isResolved = false;
+        let listener = null;
+        let timeoutId = null;
+
+        const cleanup = () => {
+            if (isResolved) return;
+            isResolved = true;
+            if (listener) chrome.tabs.onUpdated.removeListener(listener);
+            if (timeoutId) clearTimeout(timeoutId);
+        };
+
+        const resolveSafe = (tId) => {
+            chrome.tabs.get(tId, (t) => {
+                if (chrome.runtime.lastError) {
+                    // Ignore error on final resolve, just resolve null/undefined or current state if possible
+                }
+                resolve(t);
+            });
+        };
+
+        // 1. Attach Listener for future completion FIRST to avoid micro race condition
+        listener = (updatedTabId, info) => {
+            if (updatedTabId === tabId && info.status === 'complete') {
+                sendTelemetryLog(`[Navigation] Tab ${tabId} reached 'complete' status.`);
+                cleanup();
+                resolveSafe(tabId);
+            }
+        };
+        chrome.tabs.onUpdated.addListener(listener);
+
+        // 2. Immediate Check: Is it already complete?
+        chrome.tabs.get(tabId, (tab) => {
+            if (chrome.runtime.lastError) {
+                cleanup();
+                return reject(new Error(chrome.runtime.lastError.message));
+            }
+            if (tab.status === 'complete') {
+                sendTelemetryLog(`[Navigation] Tab ${tabId} already complete.`);
+                cleanup();
+                return resolve(tab);
+            }
+
+            // 3. Hard Timeout Fallback (start timeout only after we confirm it's not complete yet)
+            timeoutId = setTimeout(() => {
+                sendTelemetryLog(`[Navigation] Tab ${tabId} stability timed out after ${maxTimeoutMs}ms. Forcing proceed.`);
+                cleanup();
+                resolveSafe(tabId); // Resolve anyway, assume 'good enough'
+            }, maxTimeoutMs);
+        });
+    });
+}
 async function handleGetState(payload) {
     const { commandText, iteration } = payload;
     sendTelemetryLog(`Requesting WEB State (Vision-First)... Iteration: ${iteration}`);
@@ -304,15 +359,10 @@ async function handleGetState(payload) {
         tab = await new Promise((resolve, reject) => {
             chrome.tabs.create({ url: urlToOpen }, (newTab) => {
                 if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-                const listener = (tabId, info) => {
-                    if (tabId === newTab.id && info.status === 'complete') {
-                        chrome.tabs.onUpdated.removeListener(listener);
-                        resolve(newTab);
-                    }
-                };
-                chrome.tabs.onUpdated.addListener(listener);
+                resolve(newTab);
             });
         });
+        tab = await waitForTabStable(tab.id);
         activeSessionTabId = tab.id;
         await new Promise(r => setTimeout(r, 1000));
     } else {
@@ -354,30 +404,20 @@ async function handleGetState(payload) {
             tab = await new Promise((resolve, reject) => {
                 chrome.tabs.update(tab.id, { url: targetUrl }, (updatedTab) => {
                     if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-                    const listener = (tabId, info) => {
-                        if (tabId === updatedTab.id && info.status === 'complete') {
-                            chrome.tabs.onUpdated.removeListener(listener);
-                            resolve(updatedTab);
-                        }
-                    };
-                    chrome.tabs.onUpdated.addListener(listener);
+                    resolve(updatedTab);
                 });
             });
+            tab = await waitForTabStable(tab.id);
             await new Promise(r => setTimeout(r, 1000));
         } else if (isRestrictedUrl(tab.url)) {
             sendTelemetryLog(`Restricted tab detected. Opening new tab: ${targetUrl || 'https://www.google.com'}`);
             tab = await new Promise((resolve, reject) => {
                 chrome.tabs.create({ url: targetUrl || 'https://www.google.com' }, (newTab) => {
                     if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-                    const listener = (tabId, info) => {
-                        if (tabId === newTab.id && info.status === 'complete') {
-                            chrome.tabs.onUpdated.removeListener(listener);
-                            resolve(newTab);
-                        }
-                    };
-                    chrome.tabs.onUpdated.addListener(listener);
+                    resolve(newTab);
                 });
             });
+            tab = await waitForTabStable(tab.id);
             activeSessionTabId = tab.id;
             await new Promise(r => setTimeout(r, 1000));
         }
@@ -593,32 +633,26 @@ async function handleExecuteNativeAction(payload) {
             if (!url) throw new Error("URL missing for NAVIGATE/OPEN_TAB");
 
             if (actionType === 'OPEN_TAB') {
-                 await new Promise((resolve, reject) => {
-                    chrome.tabs.create({ url: url }, (newTab) => {
+
+                 let newTab = await new Promise((resolve, reject) => {
+                    chrome.tabs.create({ url: url }, (tab) => {
                         if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-                        activeSessionTabId = newTab.id; // Switch tracking to new tab
-                        const listener = (tabId, info) => {
-                            if (tabId === newTab.id && info.status === 'complete') {
-                                chrome.tabs.onUpdated.removeListener(listener);
-                                resolve(newTab);
-                            }
-                        };
-                        chrome.tabs.onUpdated.addListener(listener);
+                        resolve(tab);
                     });
                 });
+                activeSessionTabId = newTab.id; // Switch tracking to new tab
+                await waitForTabStable(newTab.id);
+
             } else {
-                 await new Promise((resolve, reject) => {
-                    chrome.tabs.update(activeSessionTabId, { url: url }, (updatedTab) => {
+
+                 let updatedTab = await new Promise((resolve, reject) => {
+                    chrome.tabs.update(activeSessionTabId, { url: url }, (tab) => {
                         if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-                        const listener = (tabId, info) => {
-                            if (tabId === updatedTab.id && info.status === 'complete') {
-                                chrome.tabs.onUpdated.removeListener(listener);
-                                resolve(updatedTab);
-                            }
-                        };
-                        chrome.tabs.onUpdated.addListener(listener);
+                        resolve(tab);
                     });
                 });
+                await waitForTabStable(updatedTab.id);
+
             }
              sendTelemetryLog(`${actionType} to ${url} executed successfully.`);
         } else if (actionType === 'FOCUS_TAB') {
