@@ -15,6 +15,9 @@ let isRecording = false;
 let isProcessing = false;
 let activeSessionTabId = null;
 
+// Flag to ignore ghost clicks triggered by our own native actions
+let isExecutingNativeAction = false;
+
 async function setupOffscreenDocument(path) {
     if (await chrome.offscreen.hasDocument()) return;
     await chrome.offscreen.createDocument({
@@ -204,6 +207,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             return false;
 
         case MESSAGE_TYPES.HUMAN_CLICK_INTERCEPTED:
+            if (isExecutingNativeAction) {
+                console.log("[Telemetry] Ignored ghost click during native action execution.");
+                return false;
+            }
             handleGhostClick(request.payload);
             return false;
 
@@ -504,6 +511,8 @@ async function handleExecuteNativeAction(payload) {
         return { success: false, error: "No active session tab to execute action on." };
     }
 
+    isExecutingNativeAction = true;
+
     try {
         await new Promise((resolve, reject) => {
             chrome.debugger.attach({ tabId: activeSessionTabId }, "1.3", () => {
@@ -802,6 +811,7 @@ async function handleExecuteNativeAction(payload) {
         sendTelemetryLog(`Native Execution Error: ${e.message}`);
         return { success: false, error: e.message };
     } finally {
+        isExecutingNativeAction = false;
         chrome.debugger.detach({ tabId: activeSessionTabId }, () => {
              const err = chrome.runtime.lastError; // Ignore detach errors
         });
