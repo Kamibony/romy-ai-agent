@@ -225,11 +225,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 function handleGhostClick(payload) {
-    sendTelemetryLog(`Forwarding ghost click to local agent: ${payload.xpath}`);
+    sendTelemetryLog(`Forwarding ghost click to local agent: ${payload.xpath || payload.type}`);
     fetch('http://127.0.0.1:8764/api/human_guidance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: typeof payload === 'string' ? payload : JSON.stringify(payload)
     }).catch(err => {
         console.error("Failed to forward ghost click to local agent:", err);
     });
@@ -571,7 +571,7 @@ async function handleExecuteNativeAction(payload) {
         if (actionType === 'CLICK') {
             const coords = actionData.coordinates;
             if (!coords || coords.length < 2) {
-                throw new Error(`Coordinates missing for action CLICK`);
+                return { success: false, error: "Coordinates missing for action CLICK" };
             }
             const rawX = coords[0];
             const rawY = coords[1];
@@ -630,7 +630,7 @@ async function handleExecuteNativeAction(payload) {
 
         } else if (actionType === 'TYPE') {
             const text = actionData.text || "";
-            if (!text) throw new Error("Text missing for action TYPE");
+            if (!text) return { success: false, error: "Text missing for action TYPE" };
 
             sendTelemetryLog(`Typing text: ${text}`);
 
@@ -687,7 +687,7 @@ async function handleExecuteNativeAction(payload) {
 
         } else if (actionType === 'NAVIGATE' || actionType === 'OPEN_TAB') {
             const url = actionData.url;
-            if (!url) throw new Error("URL missing for NAVIGATE/OPEN_TAB");
+            if (!url) return { success: false, error: "URL missing for NAVIGATE/OPEN_TAB" };
 
             if (actionType === 'OPEN_TAB') {
 
@@ -764,9 +764,9 @@ async function handleExecuteNativeAction(payload) {
                 deltaY: amount
             });
             sendTelemetryLog(`SCROLL ${direction} executed successfully.`);
-        } else if (actionType === 'PRESS') {
+        } else if (actionType === 'PRESS' || actionType === 'PRESS_KEY') {
             const key = actionData.key;
-            if (!key) throw new Error("Key missing for action PRESS");
+            if (!key) return { success: false, error: "Key missing for action PRESS" };
 
             sendTelemetryLog(`Pressing key: ${key}`);
 
@@ -801,9 +801,26 @@ async function handleExecuteNativeAction(payload) {
             });
 
             sendTelemetryLog(`PRESS ${key} executed successfully.`);
+        } else if (actionType === 'HOVER') {
+            const coords = actionData.coordinates;
+            if (!coords || coords.length < 2) {
+                return { success: false, error: "Coordinates missing for action HOVER" };
+            }
+            const rawX = coords[0];
+            const rawY = coords[1];
+
+            const x = Math.round(rawX * dpr);
+            const y = Math.round(rawY * dpr);
+
+            await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", {
+                type: "mouseMoved",
+                x: x,
+                y: y
+            });
+            sendTelemetryLog(`Action HOVER at (${x}, ${y}) executed successfully.`);
         } else if (actionType === 'EXECUTE_JS') {
             const script = actionData.script || actionData.code || "";
-            if (!script) throw new Error("Script/Code missing for action EXECUTE_JS");
+            if (!script) return { success: false, error: "Script/Code missing for action EXECUTE_JS" };
 
             sendTelemetryLog(`Executing JS: ${script}`);
             const result = await cdpManager.sendCommand(activeSessionTabId, "Runtime.evaluate", {
@@ -812,21 +829,60 @@ async function handleExecuteNativeAction(payload) {
             });
 
             if (result && result.exceptionDetails) {
-                throw new Error(result.exceptionDetails.exception ? result.exceptionDetails.exception.description : "JS Execution Exception");
+                return { success: false, error: result.exceptionDetails.exception ? result.exceptionDetails.exception.description : "JS Execution Exception" };
             }
 
             sendTelemetryLog(`EXECUTE_JS executed successfully.`);
 
             // Return early for EXECUTE_JS to include the evaluation result
             return { success: true, result: result?.result?.value };
-        }
-        else {
+        } else if (actionType === 'REPLY') {
+            const text = actionData.text || "";
+            sendTelemetryLog(`Agent Replied: ${text}`);
+            return { success: true };
+        } else if (actionType === 'RESET_VIEW') {
+            sendTelemetryLog(`Executing RESET_VIEW action`);
+
+            const keyData = { text: '', unmodifiedText: '', keyIdentifier: 'U+001B', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 };
+
+            await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchKeyEvent", {
+                type: "keyDown",
+                text: keyData.text,
+                unmodifiedText: keyData.unmodifiedText,
+                keyIdentifier: keyData.keyIdentifier,
+                code: keyData.code,
+                windowsVirtualKeyCode: keyData.windowsVirtualKeyCode,
+                nativeVirtualKeyCode: keyData.nativeVirtualKeyCode
+            });
+
+            await new Promise(r => setTimeout(r, 50));
+
+            await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchKeyEvent", {
+                type: "keyUp",
+                keyIdentifier: keyData.keyIdentifier,
+                code: keyData.code,
+                windowsVirtualKeyCode: keyData.windowsVirtualKeyCode,
+                nativeVirtualKeyCode: keyData.nativeVirtualKeyCode
+            });
+
+            // Also dispatch a click outside (at 0,0) to close some menus
+            await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", { type: "mousePressed", x: 0, y: 0, button: "left", clickCount: 1 });
+            await new Promise(r => setTimeout(r, 50));
+            await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x: 0, y: 0, button: "left", clickCount: 1 });
+
+            sendTelemetryLog(`RESET_VIEW executed successfully.`);
+        } else if (actionType === 'WAIT') {
+            const seconds = parseFloat(actionData.seconds) || 2;
+            sendTelemetryLog(`Executing explicit WAIT for ${seconds} seconds...`);
+            await new Promise(r => setTimeout(r, seconds * 1000));
+            return { success: true };
+        } else {
              sendTelemetryLog(`Unsupported native action type: ${actionType}`);
              return { success: false, error: `Unsupported action type: ${actionType}` };
         }
 
         // Trap A: Enforce Post-Action Stabilization (1.5s) to allow SPA DOM to settle
-        if (['CLICK', 'TYPE', 'SCROLL', 'PRESS', 'PRESS_ENTER', 'NAVIGATE', 'OPEN_TAB'].includes(actionType)) {
+        if (['CLICK', 'TYPE', 'SCROLL', 'PRESS', 'PRESS_KEY', 'PRESS_ENTER', 'NAVIGATE', 'OPEN_TAB', 'HOVER', 'RESET_VIEW'].includes(actionType)) {
             sendTelemetryLog(`Enforcing 1.5s Post-Action Stabilization Wait after ${actionType}...`);
             await new Promise(r => setTimeout(r, 1500));
         }
