@@ -811,7 +811,7 @@ class AgentStateMachine:
         self.previous_action = None
         self.previous_state_metadata = None
         self.previous_state_ui = None
-        self.max_sub_task_iterations = 5
+        self.max_sub_task_iterations = 3
 
     async def run(self, doc_id, command_text, audio_b64="", client_context=None):
         global ACTIVE_DOC_ID
@@ -896,10 +896,13 @@ class AgentStateMachine:
             return
 
         if self.sub_task_iteration >= self.max_sub_task_iterations:
-            logging.info("Max iterations reached for sub-task.")
+            current_sub_task = self.sub_tasks[self.current_sub_task_index]
+            logging.warning(f"Circuit Breaker triggered: Max iterations ({self.max_sub_task_iterations}) reached for sub-task '{current_sub_task}'. Marking as FAILED and advancing.")
+            self.command_text += f"\n[System Note: Sub-task '{current_sub_task}' FAILED after {self.max_sub_task_iterations} attempts. Advancing plan automatically.]"
             self.current_sub_task_index += 1
             self.sub_task_iteration = 0
             self.previous_action = None
+            self.history.clear()
             return
 
         current_sub_task = self.sub_tasks[self.current_sub_task_index]
@@ -1195,6 +1198,12 @@ class AgentStateMachine:
 
                 except Exception as e:
                     logging.error(f"Failed to execute Bridge click for HITL: {e}")
+            else:
+                # Semantic Override
+                semantic_guidance = self.hitl_action.get("xpath", "")
+                if semantic_guidance:
+                    logging.info(f"Received semantic guidance: {semantic_guidance}")
+                    self.command_text += f"\n[System Note: Human Guidance received: '{semantic_guidance}'. Adjust your execution plan accordingly.]"
 
             try:
                 firestore_update_document("remote_commands", self.doc_id, {
