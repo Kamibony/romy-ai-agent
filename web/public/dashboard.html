@@ -38,212 +38,113 @@
         </div>
 
         <div id="admin-dashboard" style="display: none;">
-        <section class="bg-white rounded-lg shadow-md p-6 border border-gray-200">
-            <h2 class="text-2xl font-semibold mb-4 text-gray-800 border-b pb-2">Prompt Engineering</h2>
-            <div id="auth-status" class="mb-4 text-sm text-gray-600 flex justify-between">
+
+        <!-- Header Controls -->
+        <div class="flex justify-between items-center mb-6">
+            <div id="auth-status" class="text-sm text-gray-600">
                 <span id="user-info">Logged in.</span>
-                <button id="btn-logout" class="text-indigo-600 hover:text-indigo-900 font-medium">Logout</button>
             </div>
-            <div id="admin-content" style="display: block;" class="space-y-4">
-                <div>
-                    <label for="global-prompt" class="block text-sm font-medium text-gray-700">Global System Prompt</label>
-                    <textarea id="global-prompt" rows="10" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2" placeholder="Enter instructions for the AI agent..."></textarea>
-                </div>
-                <div>
-                    <button id="save-btn" class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                        Save Prompt
-                    </button>
-                    <span id="save-status" class="ml-4 text-sm text-green-600 hidden">Saved successfully!</span>
-                    <span id="error-status" class="ml-4 text-sm text-red-600 hidden">Error saving prompt.</span>
-                </div>
+            <div class="flex space-x-4">
+                <button id="btn-toggle-settings" class="inline-flex justify-center py-2 px-4 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                    <svg class="w-5 h-5 mr-2 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                    Settings
+                </button>
+                <button id="btn-logout" class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-gray-600 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500">
+                    Logout
+                </button>
             </div>
-        </section>
+        </div>
 
-        <!-- Client Context & Profile Manager Section -->
-        <section class="bg-white rounded-lg shadow-md p-6 border border-gray-200 mt-8">
-            <h2 class="text-2xl font-semibold mb-4 text-gray-800 border-b pb-2">Client Context & Profile Manager</h2>
-            <div id="client-profile-content" class="space-y-4">
-                <div class="flex items-center space-x-4 mb-4">
-                    <label for="client-select" class="block text-sm font-medium text-gray-700">Active Client Profile</label>
-                    <select id="client-select" class="block w-64 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2">
-                        <option value="default">Default</option>
-                        <option value="sreality">Sreality Pilot</option>
-                    </select>
-                </div>
-
-                <div>
-                    <label for="client-business-rules" class="block text-sm font-medium text-gray-700">Business Rules & Guidelines (One per line)</label>
-                    <textarea id="client-business-rules" rows="6" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2 font-sans text-sm" placeholder='e.g.&#10;Always accept cookies&#10;Filter by Prague'></textarea>
-                </div>
-                <div>
-                    <button id="save-client-profile-btn" class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                        Save Client Profile
-                    </button>
-                    <span id="save-client-status" class="ml-4 text-sm text-green-600 hidden">Saved successfully!</span>
-                    <span id="error-client-status" class="ml-4 text-sm text-red-600 hidden">Error saving profile.</span>
-                </div>
-            </div>
-        </section>
-
-        <!-- Global Agent Settings Section -->
-        <section class="bg-white rounded-lg shadow-md p-6 border border-gray-200 mt-8">
-            <h2 class="text-2xl font-semibold mb-4 text-gray-800 border-b pb-2">Global Agent Settings</h2>
-            <div id="settings-content" style="display: block;" class="space-y-4">
-                <div>
-                    <label for="default-workspace-url" class="block text-sm font-medium text-gray-700">Default Workspace URL</label>
-                    <input type="text" id="default-workspace-url" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2" placeholder="e.g., https://example.com">
-                </div>
-                <div>
-                    <button id="save-settings-btn" class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                        Save Configuration
-                    </button>
-                    <span id="save-settings-status" class="ml-4 text-sm text-green-600 hidden">Saved successfully!</span>
-                    <span id="error-settings-status" class="ml-4 text-sm text-red-600 hidden">Error saving settings.</span>
-                </div>
-            </div>
-        </section>
-
-        <!-- Interactive ASK_HUMAN Interface Section (Inbox Style) -->
-        <section id="ask-human-section" class="bg-gray-900 rounded-lg shadow-xl p-6 border border-gray-800 mt-8 hidden text-gray-200">
-            <div class="flex items-center justify-between border-b border-gray-700 pb-3 mb-6">
-                <div class="flex items-center">
-                    <h2 class="text-2xl font-semibold text-white flex items-center mr-4">
-                        <svg class="w-6 h-6 mr-3 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
-                        Intervention Inbox
-                    </h2>
-                    <span class="bg-red-600 text-white text-xs font-bold px-3 py-1 rounded-full animate-pulse shadow-md">ACTION NEEDED</span>
-                </div>
-                <button id="btn-jump-to-task" class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
-                    Jump to Active Task
+        <!-- Hidden Settings Modal/Container -->
+        <div id="settings-container" style="display: none;" class="bg-gray-50 p-6 rounded-lg border border-gray-200 mb-8 space-y-8">
+            <div class="flex justify-between items-center border-b pb-2">
+                <h2 class="text-2xl font-semibold text-gray-800">Configuration Settings</h2>
+                <button id="btn-close-settings" class="text-gray-500 hover:text-gray-700">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                 </button>
             </div>
 
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                <!-- Screenshot View -->
-                <div class="border border-gray-700 rounded-md overflow-hidden bg-gray-800 shadow-inner flex flex-col">
-                    <div class="bg-gray-700 px-4 py-3 text-xs font-semibold text-gray-300 border-b border-gray-600 flex justify-between items-center">
-                        <div class="flex items-center space-x-4">
-                            <span class="uppercase tracking-wider">Latest Screenshot</span>
-                            <div class="flex items-center space-x-2 text-gray-400">
-                                <label class="flex items-center cursor-pointer">
-                                    <input type="checkbox" id="toggle-som-view" class="sr-only peer">
-                                    <div class="w-9 h-5 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-500"></div>
-                                    <span class="ml-2 text-xs font-medium">Show SoM Overlay</span>
-                                </label>
-                            </div>
-                        </div>
-                        <a id="ask-human-img-link" href="#" target="_blank" class="text-indigo-400 hover:text-indigo-300 transition-colors">Open Full Size</a>
-                    </div>
-                    <div class="flex-grow flex items-center justify-center p-2 bg-gray-900 min-h-[400px] relative">
-                        <img id="ask-human-screenshot" src="" alt="Agent Screenshot" class="max-w-full max-h-[500px] object-contain hidden border border-gray-700 rounded" />
-                        <span id="ask-human-no-screenshot" class="text-gray-500 italic flex flex-col items-center">
-                            <svg class="w-12 h-12 mb-2 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                            No visual context provided
-                        </span>
-                    </div>
-                </div>
-
-                <!-- Decision Context & Resolution Form -->
-                <div class="flex flex-col space-y-6">
-                    <!-- Context Panel -->
-                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-5 shadow-sm">
-                        <h3 class="text-sm font-bold text-gray-300 uppercase tracking-wider mb-3 flex items-center">
-                            <svg class="w-4 h-4 mr-2 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                            Decision Context
-                        </h3>
-                        <div class="space-y-3">
-                            <div>
-                                <span class="text-xs text-gray-400 block mb-1">Issue Details:</span>
-                                <p id="ask-human-reason" class="text-sm text-gray-100 bg-gray-900 p-4 rounded-md border border-gray-700 leading-relaxed font-mono">Loading issue details...</p>
-                            </div>
-                            <div id="ask-human-history-container" class="hidden">
-                                <span class="text-xs text-gray-400 block mb-1 mt-4">Previous Guidance in Session:</span>
-                                <ul id="ask-human-history-list" class="text-xs text-gray-300 space-y-2 max-h-32 overflow-y-auto bg-gray-900 p-3 rounded-md border border-gray-700 list-disc pl-5">
-                                </ul>
-                            </div>
-                        </div>
+            <!-- Client Context & Profile Manager Section -->
+            <section>
+                <h3 class="text-lg font-medium mb-4 text-gray-800">Client Context & Profile Manager</h3>
+                <div id="client-profile-content" class="space-y-4">
+                    <div class="flex items-center space-x-4 mb-4">
+                        <label for="client-select" class="block text-sm font-medium text-gray-700">Active Client Profile</label>
+                        <select id="client-select" class="block w-64 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2">
+                            <option value="default">Default</option>
+                            <option value="sreality">Sreality Pilot</option>
+                        </select>
                     </div>
 
-                    <!-- Input Form -->
-                    <div class="flex-grow bg-gray-800 border border-gray-700 rounded-lg p-5 shadow-sm flex flex-col">
-                        <label for="human-guidance" class="block text-sm font-bold text-gray-300 uppercase tracking-wider mb-3 flex items-center">
-                            <svg class="w-4 h-4 mr-2 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path></svg>
-                            Provide Instructions
-                        </label>
-                        <textarea id="human-guidance" rows="5" class="flex-grow block w-full rounded-md border-gray-600 bg-gray-900 text-gray-100 shadow-inner focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-4 placeholder-gray-500 resize-none transition-colors" placeholder="e.g., 'Click the blue login button in the top right corner', or 'Type 'test' into the search bar.'"></textarea>
-
-                        <div class="flex items-center space-x-4 pt-5 mt-auto">
-                            <button id="btn-resolve-human" class="flex-1 inline-flex justify-center items-center py-3 px-4 border border-transparent shadow-sm text-sm font-bold rounded-md text-white bg-indigo-600 hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors">
-                                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg>
-                                Send & Resume
-                            </button>
-                            <button id="btn-abort-task" class="inline-flex justify-center items-center py-3 px-6 border border-gray-600 shadow-sm text-sm font-bold rounded-md text-red-400 bg-gray-800 hover:bg-gray-700 hover:text-red-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 transition-colors">
-                                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                                Abort Task
-                            </button>
-                        </div>
-                        <div id="resolve-status" class="text-sm font-medium text-center hidden w-full mt-3 p-2 rounded"></div>
+                    <div>
+                        <label for="client-business-rules" class="block text-sm font-medium text-gray-700">Business Rules & Guidelines (One per line)</label>
+                        <textarea id="client-business-rules" rows="6" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2 font-sans text-sm" placeholder='e.g.&#10;Always accept cookies&#10;Filter by Prague'></textarea>
+                    </div>
+                    <div>
+                        <button id="save-client-profile-btn" class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                            Save Client Profile
+                        </button>
+                        <span id="save-client-status" class="ml-4 text-sm text-green-600 hidden">Saved successfully!</span>
+                        <span id="error-client-status" class="ml-4 text-sm text-red-600 hidden">Error saving profile.</span>
                     </div>
                 </div>
-            </div>
-        </section>
+            </section>
 
-        <!-- Sreality Pilot Playbook & Learned Rules Section -->
-        <section class="bg-white rounded-lg shadow-md p-6 border border-gray-200 mt-8">
-            <h2 class="text-2xl font-semibold mb-4 text-gray-800 border-b pb-2 flex items-center justify-between">
-                <span>Domain Playbook & Learned Rules</span>
-                <span class="text-xs font-normal text-gray-500 bg-gray-100 px-2 py-1 rounded">Read-Only Vector DB View</span>
+            <!-- Sreality Pilot Playbook & Learned Rules Section -->
+            <section>
+                <h3 class="text-lg font-medium mb-4 text-gray-800 flex items-center justify-between">
+                    <span>Domain Playbook & Learned Rules</span>
+                    <span class="text-xs font-normal text-gray-500 bg-gray-200 px-2 py-1 rounded">Read-Only Vector DB View</span>
+                </h3>
+
+                <div class="flex space-x-4 mb-4">
+                    <input type="text" id="playbook-domain-input" placeholder="Enter domain (e.g., sreality.cz)" class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2" value="sreality.cz">
+                    <button id="btn-load-playbook" class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
+                        Load Rules
+                    </button>
+                </div>
+
+                <div id="playbook-rules-container" class="space-y-3 bg-white border border-gray-200 rounded-md p-4 min-h-[150px]">
+                    <p class="text-gray-500 italic text-sm text-center mt-8">Click 'Load Rules' to fetch learned playbook entries.</p>
+                </div>
+            </section>
+        </div>
+
+        <!-- MVP Tester Control Panel (Unified Mission Control) -->
+        <section class="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+            <h2 class="text-2xl font-semibold mb-4 text-gray-800 border-b pb-2 flex justify-between items-center">
+                Mission Control
+                <!-- Status Indicators -->
+                <div class="flex space-x-6">
+                    <div class="flex items-center space-x-2">
+                        <div id="os-agent-status-dot" class="w-3 h-3 rounded-full bg-red-500"></div>
+                        <span class="text-xs font-medium text-gray-600">OS Agent</span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <div id="local-agent-status-dot" class="w-3 h-3 rounded-full bg-red-500 transition-colors duration-300"></div>
+                        <span class="text-xs font-medium text-gray-600">Local API</span>
+                    </div>
+                </div>
             </h2>
 
-            <div class="flex space-x-4 mb-4">
-                <input type="text" id="playbook-domain-input" placeholder="Enter domain (e.g., sreality.cz)" class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2" value="sreality.cz">
-                <button id="btn-load-playbook" class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
-                    Load Rules
-                </button>
-            </div>
-
-            <div id="playbook-rules-container" class="space-y-3 bg-gray-50 border border-gray-200 rounded-md p-4 min-h-[150px]">
-                <p class="text-gray-500 italic text-sm text-center mt-8">Click 'Load Rules' to fetch learned playbook entries.</p>
-            </div>
-        </section>
-
-        <!-- MVP Tester Control Panel -->
-        <section class="bg-white rounded-lg shadow-md p-6 border border-gray-200 mt-8">
-            <h2 class="text-2xl font-semibold mb-4 text-gray-800 border-b pb-2">MVP Tester Control Panel</h2>
-
-            <!-- Status Indicators -->
-            <div class="flex space-x-8 mb-6 flex-wrap gap-y-4">
-                <div class="flex items-center space-x-2">
-                    <div id="os-agent-status-dot" class="w-4 h-4 rounded-full bg-red-500"></div>
-                    <span class="text-sm font-medium text-gray-700">OS Agent Status</span>
-                </div>
-                <div class="flex items-center space-x-2">
-                    <div id="ext-status-dot" class="w-4 h-4 rounded-full bg-green-500"></div>
-                    <span class="text-sm font-medium text-gray-700">Extension Status</span>
-                </div>
-                <div class="flex items-center space-x-2">
-                    <div id="local-agent-status-dot" class="w-4 h-4 rounded-full bg-red-500 transition-colors duration-300"></div>
-                    <span class="text-sm font-medium text-gray-700">Connected to Local Agent</span>
-                </div>
-            </div>
-
             <!-- Human-Readable Activity Feed -->
-            <div class="mb-6">
-                <h3 class="text-lg font-medium text-gray-800 mb-2">Live Activity</h3>
-                <div id="activity-feed" class="bg-gray-50 border border-gray-200 rounded-md p-4 h-64 overflow-y-auto text-sm space-y-2 font-mono text-gray-700">
-                    <p class="text-gray-400 italic">Waiting for activity...</p>
+            <div class="mb-6 flex flex-col h-[600px]">
+                <div id="activity-feed" class="flex-grow bg-gray-50 border border-gray-200 rounded-md p-4 overflow-y-auto text-sm space-y-4 font-mono text-gray-700 shadow-inner">
+                    <p class="text-gray-400 italic text-center mt-10">Waiting for agent activity...</p>
                 </div>
             </div>
 
             <!-- Emergency Kill Switch -->
-            <div>
-                <button id="btn-emergency-stop" class="w-full inline-flex justify-center py-4 px-4 border border-transparent shadow-sm text-lg font-bold rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
-                    Stop Agent
+            <div class="mt-4 pt-4 border-t">
+                <button id="btn-emergency-stop" class="w-full inline-flex justify-center py-3 px-4 border border-transparent shadow-sm text-base font-bold rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors">
+                    Emergency Stop
                 </button>
                 <p id="stop-status" class="mt-2 text-sm text-red-600 hidden font-semibold text-center">Emergency stop flag sent!</p>
             </div>
         </section>
+
+        <!-- Hidden Legacy ASK_HUMAN Interface Section (Moved to Inline) -->
+        <div id="ask-human-section" style="display: none;"></div>
 
         </div>
     </main>
@@ -265,16 +166,19 @@
 
         const authStatus = document.getElementById('auth-status');
         const userInfo = document.getElementById('user-info');
-        const adminContent = document.getElementById('admin-content');
-        const globalPromptInput = document.getElementById('global-prompt');
-        const saveBtn = document.getElementById('save-btn');
-        const saveStatus = document.getElementById('save-status');
-        const errorStatus = document.getElementById('error-status');
 
-        const defaultWorkspaceUrlInput = document.getElementById('default-workspace-url');
-        const saveSettingsBtn = document.getElementById('save-settings-btn');
-        const saveSettingsStatus = document.getElementById('save-settings-status');
-        const errorSettingsStatus = document.getElementById('error-settings-status');
+        // Settings Modal Elements
+        const btnToggleSettings = document.getElementById('btn-toggle-settings');
+        const btnCloseSettings = document.getElementById('btn-close-settings');
+        const settingsContainer = document.getElementById('settings-container');
+
+        btnToggleSettings.addEventListener('click', () => {
+            settingsContainer.style.display = settingsContainer.style.display === 'none' ? 'block' : 'none';
+        });
+
+        btnCloseSettings.addEventListener('click', () => {
+            settingsContainer.style.display = 'none';
+        });
 
         // Client Profile Elements
         const clientSelect = document.getElementById('client-select');
@@ -491,7 +395,46 @@
         }
 
         function showAskHumanInterface(sessionData, cmdData) {
-            askHumanSection.classList.remove('hidden');
+            // First clear the old interface
+            hideAskHumanInterface();
+
+            // Then rebuild it inside the activity feed
+            const interventionHTML = `
+                <div id="inline-intervention" class="bg-indigo-50 border-l-4 border-indigo-500 p-4 rounded mt-4 shadow-sm animate-pulse">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-indigo-800 font-bold text-sm">Action Needed</h3>
+                        <span class="bg-red-600 text-white text-xs font-bold px-2 py-1 rounded">AWAITING INPUT</span>
+                    </div>
+                    <div class="mb-3">
+                        <span class="text-xs text-indigo-600 block mb-1">Issue Details:</span>
+                        <p id="inline-ask-human-reason" class="text-sm text-gray-800 font-medium"></p>
+                    </div>
+                    <div class="relative inline-block mt-2 mb-4">
+                        <img id="inline-ask-human-screenshot" src="" alt="Agent Screenshot" class="max-w-full rounded border border-indigo-200 cursor-crosshair max-h-96 object-contain" />
+                        <p class="text-xs text-indigo-500 italic mt-1 text-center">Click image to send coordinate or use text override below.</p>
+                    </div>
+                    <div class="space-y-2 mt-2">
+                         <label for="inline-human-guidance" class="text-xs font-semibold text-indigo-700">Semantic Override</label>
+                         <div class="flex space-x-2">
+                             <input type="text" id="inline-human-guidance" class="flex-grow rounded-md border-indigo-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2 bg-white" placeholder="e.g. 'Click the blue login button'">
+                             <button id="inline-btn-resolve" class="inline-flex justify-center items-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                                 Send
+                             </button>
+                         </div>
+                    </div>
+                    <div id="inline-resolve-status" class="mt-2 text-xs font-medium text-center hidden"></div>
+                </div>
+            `;
+
+            // Append it to the activity feed
+            activityFeed.insertAdjacentHTML('afterbegin', interventionHTML);
+
+            // Re-bind elements to the new inline versions
+            const inlineReason = document.getElementById('inline-ask-human-reason');
+            const inlineScreenshot = document.getElementById('inline-ask-human-screenshot');
+            const inlineGuidanceInput = document.getElementById('inline-human-guidance');
+            const inlineBtnResolve = document.getElementById('inline-btn-resolve');
+            const inlineResolveStatus = document.getElementById('inline-resolve-status');
 
             // Extract the reason/last action
             let reason = "The agent requested human assistance to proceed.";
@@ -524,114 +467,83 @@
                 }
             }
 
-            askHumanReason.textContent = `"${reason}"`;
-
-            // Populate history if available
-            if (previousGuidance.length > 0) {
-                askHumanHistoryList.innerHTML = '';
-                previousGuidance.forEach(guidance => {
-                    const li = document.createElement('li');
-                    li.textContent = guidance;
-                    askHumanHistoryList.appendChild(li);
-                });
-                askHumanHistoryContainer.classList.remove('hidden');
-            } else {
-                askHumanHistoryContainer.classList.add('hidden');
-                askHumanHistoryList.innerHTML = '';
-            }
+            inlineReason.textContent = `"${reason}"`;
 
             // Extract screenshots if available
             currentCleanScreenshot = null;
-            currentSomScreenshot = null;
-
-            // For backward compatibility and newer structure (where backend or agent might save both)
             if (cmdData && cmdData.screenshot_b64) {
                 currentCleanScreenshot = cmdData.screenshot_b64.startsWith('data:') ? cmdData.screenshot_b64 : `data:image/png;base64,${cmdData.screenshot_b64}`;
-                currentSomScreenshot = currentCleanScreenshot; // Default to same if only one provided
-            }
-            if (cmdData && cmdData.annotated_screenshot_b64) {
-                currentSomScreenshot = cmdData.annotated_screenshot_b64.startsWith('data:') ? cmdData.annotated_screenshot_b64 : `data:image/png;base64,${cmdData.annotated_screenshot_b64}`;
             }
 
             if (currentCleanScreenshot) {
-                // Initialize view
-                updateScreenshotView();
+                inlineScreenshot.src = currentCleanScreenshot;
+                inlineScreenshot.style.display = 'block';
 
-                askHumanScreenshot.classList.remove('hidden');
-                askHumanNoScreenshot.classList.add('hidden');
-                askHumanImgLink.style.display = 'inline';
+                // Ghost Click Logic
+                inlineScreenshot.addEventListener('click', async (e) => {
+                    if (!activeTaskId && !activeTaskSessionId) return;
 
-                askHumanImgLink.onclick = (e) => {
-                    e.preventDefault();
-                    const b64Data = toggleSomView.checked ? currentSomScreenshot : currentCleanScreenshot;
-                    const newWindow = window.open();
-                    if (newWindow) {
-                        newWindow.document.write(`<html><head><title>Full Size Screenshot</title></head><body style="margin:0; display:flex; justify-content:center; align-items:flex-start; background-color:#0e1111;"><img src="${b64Data}" style="max-width:100%; height:auto;" /></body></html>`);
-                        newWindow.document.close();
+                    // Get coordinates relative to the image
+                    const rect = inlineScreenshot.getBoundingClientRect();
+
+                    // Calculate natural image scale vs displayed scale
+                    const scaleX = inlineScreenshot.naturalWidth / rect.width;
+                    const scaleY = inlineScreenshot.naturalHeight / rect.height;
+
+                    const x = Math.round((e.clientX - rect.left) * scaleX);
+                    const y = Math.round((e.clientY - rect.top) * scaleY);
+                    const dpr = window.devicePixelRatio || 1;
+
+                    if (confirm(`Send ghost click at coordinates (X: ${x}, Y: ${y})?`)) {
+                        await sendHumanGuidance(JSON.stringify({
+                            type: "CLICK",
+                            x: x,
+                            y: y,
+                            dpr: dpr
+                        }), inlineBtnResolve, inlineResolveStatus);
                     }
-                };
+                });
             } else {
-                askHumanScreenshot.classList.add('hidden');
-                askHumanNoScreenshot.classList.remove('hidden');
-                askHumanImgLink.style.display = 'none';
-                askHumanImgLink.onclick = null;
+                inlineScreenshot.style.display = 'none';
             }
 
-            // Scroll to the section
-            askHumanSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            // Semantic Override Handler
+            inlineBtnResolve.addEventListener('click', async () => {
+                if (!activeTaskId && !activeTaskSessionId) return;
+
+                const guidance = inlineGuidanceInput.value.trim();
+                if (!guidance) {
+                    alert("Please provide semantic override instructions for the agent.");
+                    return;
+                }
+
+                // Format the payload as xpath to match what agent.py expects for text inputs
+                await sendHumanGuidance(JSON.stringify({
+                    type: "SEMANTIC",
+                    xpath: guidance
+                }), inlineBtnResolve, inlineResolveStatus);
+            });
+
+            // Scroll to the feed
+            activityFeed.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
 
-
-        function updateScreenshotView() {
-            if (!currentCleanScreenshot) return;
-            askHumanScreenshot.src = toggleSomView.checked ? currentSomScreenshot : currentCleanScreenshot;
-        }
-
-        toggleSomView.addEventListener('change', updateScreenshotView);
 
         function hideAskHumanInterface() {
-            askHumanSection.classList.add('hidden');
+            const el = document.getElementById('inline-intervention');
+            if (el) el.remove();
+
             activeTaskId = null;
             activeTaskSessionId = null;
-            humanGuidanceInput.value = '';
-            askHumanHistoryContainer.classList.add('hidden');
-            askHumanHistoryList.innerHTML = '';
-            resolveStatus.classList.add('hidden');
         }
 
 
-        // Ghost Click Logic
-        askHumanScreenshot.addEventListener('click', async (e) => {
-            if (!activeTaskId && !activeTaskSessionId) return;
-
-            // Get coordinates relative to the image
-            const rect = askHumanScreenshot.getBoundingClientRect();
-
-            // Calculate natural image scale vs displayed scale
-            const scaleX = askHumanScreenshot.naturalWidth / rect.width;
-            const scaleY = askHumanScreenshot.naturalHeight / rect.height;
-
-            const x = Math.round((e.clientX - rect.left) * scaleX);
-            const y = Math.round((e.clientY - rect.top) * scaleY);
-            const dpr = window.devicePixelRatio || 1;
-
-            if (confirm(`Send ghost click at coordinates (X: ${x}, Y: ${y})?`)) {
-                await sendHumanGuidance(JSON.stringify({
-                    type: "CLICK",
-                    x: x,
-                    y: y,
-                    dpr: dpr
-                }));
+        async function sendHumanGuidance(guidanceJson, btnElement, statusElement) {
+            const originalText = btnElement ? btnElement.innerHTML : 'Send';
+            if (btnElement) {
+                btnElement.disabled = true;
+                btnElement.innerHTML = '<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Sending...';
             }
-        });
-
-        // Ensure image has pointer cursor
-        askHumanScreenshot.style.cursor = 'crosshair';
-
-
-        async function sendHumanGuidance(guidanceJson) {
-            btnResolveHuman.disabled = true;
-            btnResolveHuman.innerHTML = '<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Sending...';
 
             try {
                 const response = await fetch('http://127.0.0.1:8764/api/human_guidance', {
@@ -641,9 +553,10 @@
                 });
 
                 if (response.ok) {
-                    resolveStatus.textContent = "Guidance registered. Agent loop unpaused.";
-                    resolveStatus.className = "mt-4 text-sm font-medium text-green-400";
-                    resolveStatus.classList.remove('hidden');
+                    if (statusElement) {
+                        statusElement.textContent = "Guidance registered. Agent loop unpaused.";
+                        statusElement.className = "mt-2 text-xs font-medium text-green-600 block";
+                    }
                     setTimeout(() => hideAskHumanInterface(), 2000);
                 } else {
                     throw new Error("Local API rejected guidance.");
@@ -651,13 +564,9 @@
             } catch (localError) {
                 console.warn("Local API failed, falling back to Firebase...", localError);
                 try {
-                    // Note: Firebase fallback expects string for text input, but JSON for clicks might need handling in cloud if implemented there.
-                    // For now, if local agent is down, this is likely failing anyway.
-                    // Assuming guidanceJson is passed directly.
                     let dataToSave = {};
                     const parsed = JSON.parse(guidanceJson);
                     if (parsed.type === "CLICK") {
-                         // Cloud doesn't support the raw coordinate flow perfectly yet, but we'll save it as text fallback
                          dataToSave = {
                              status: "in_progress",
                              human_response: `Click at X: ${parsed.x}, Y: ${parsed.y}`
@@ -669,134 +578,28 @@
                          };
                     }
 
-                    const { doc, updateDoc } = await import("https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js");
+                    const { doc, updateDoc } = await import("https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js");
                     const taskRef = doc(db, activeTaskSessionId ? "task_sessions" : "remote_commands", activeTaskId);
                     await updateDoc(taskRef, dataToSave);
 
-                    resolveStatus.textContent = "Guidance saved to cloud. Agent will pick it up.";
-                    resolveStatus.className = "mt-4 text-sm font-medium text-green-400";
-                    resolveStatus.classList.remove('hidden');
+                    if (statusElement) {
+                        statusElement.textContent = "Guidance saved to cloud. Agent will pick it up.";
+                        statusElement.className = "mt-2 text-xs font-medium text-green-600 block";
+                    }
                     setTimeout(() => hideAskHumanInterface(), 2000);
                 } catch (firebaseError) {
                     console.error("Firebase update failed:", firebaseError);
-                    resolveStatus.textContent = "Error saving guidance. Please try again.";
-                    resolveStatus.className = "mt-4 text-sm font-medium text-red-500";
-                    resolveStatus.classList.remove('hidden');
-                }
-            } finally {
-                btnResolveHuman.disabled = false;
-                btnResolveHuman.innerHTML = 'Send to Agent & Unpause';
-            }
-        }
-
-        btnResolveHuman.addEventListener('click', async () => {
-            if (!activeTaskId && !activeTaskSessionId) return;
-
-            const guidance = humanGuidanceInput.value.trim();
-            if (!guidance) {
-                alert("Please provide guidance instructions for the agent.");
-                return;
-            }
-
-            btnResolveHuman.disabled = true;
-            btnResolveHuman.innerHTML = '<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Sending...';
-
-            try {
-                if (activeTaskId) {
-                    await updateDoc(doc(db, "remote_commands", activeTaskId), {
-                        status: "in_progress",
-                        human_response: guidance,
-                        updated_at: new Date()
-                    });
-                }
-
-                // Also update session if we have it
-                if (activeTaskSessionId) {
-                    const sessionDoc = await getDoc(doc(db, "task_sessions", activeTaskSessionId));
-                    if (sessionDoc.exists()) {
-                        const data = sessionDoc.data();
-                        const currentHistory = data.thread_history || "";
-                        await updateDoc(doc(db, "task_sessions", activeTaskSessionId), {
-                            status: "in_progress",
-                            thread_history: currentHistory + `\n[HUMAN GUIDANCE PROVIDED]: ${guidance}`
-                        });
+                    if (statusElement) {
+                        statusElement.textContent = "Error saving guidance. Please try again.";
+                        statusElement.className = "mt-2 text-xs font-medium text-red-600 block";
                     }
                 }
-
-                resolveStatus.textContent = "Guidance sent! Agent resuming...";
-                resolveStatus.className = "text-sm font-medium text-center text-green-400 bg-green-900 border border-green-800 block mt-3 p-2 rounded";
-                resolveStatus.classList.remove('hidden');
-
-                setTimeout(() => {
-                    hideAskHumanInterface();
-                    btnResolveHuman.disabled = false;
-                    btnResolveHuman.innerHTML = '<svg class="w-4 h-4 mr-2 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg> Send & Resume';
-                }, 2000);
-
-            } catch (error) {
-                console.error("Error sending guidance:", error);
-                resolveStatus.textContent = "Error: " + error.message;
-                resolveStatus.className = "text-sm font-medium text-center text-red-400 bg-red-900 border border-red-800 block mt-3 p-2 rounded";
-                resolveStatus.classList.remove('hidden');
-                btnResolveHuman.disabled = false;
-                btnResolveHuman.innerHTML = '<svg class="w-4 h-4 mr-2 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg> Send & Resume';
-            }
-        });
-
-        btnAbortTask.addEventListener('click', async () => {
-            if (!activeTaskId && !activeTaskSessionId) return;
-
-            if (!confirm("Are you sure you want to abort this task?")) return;
-
-            btnAbortTask.disabled = true;
-
-            try {
-                if (activeTaskId) {
-                    await updateDoc(doc(db, "remote_commands", activeTaskId), {
-                        status: "failed",
-                        error: "Task aborted by human operator.",
-                        updated_at: new Date()
-                    });
-                }
-
-                if (activeTaskSessionId) {
-                    await updateDoc(doc(db, "task_sessions", activeTaskSessionId), {
-                        status: "failed"
-                    });
-                }
-
-                hideAskHumanInterface();
-            } catch (error) {
-                console.error("Error aborting task:", error);
-                alert("Failed to abort task: " + error.message);
             } finally {
-                btnAbortTask.disabled = false;
-            }
-        });
-
-        if (btnJumpToTask) {
-            btnJumpToTask.addEventListener('click', async () => {
-                try {
-                    btnJumpToTask.disabled = true;
-                    btnJumpToTask.innerHTML = 'Jumping...';
-                    const response = await fetch('http://127.0.0.1:8764/api/focus_tab', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        }
-                    });
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    console.log('Successfully jumped to task');
-                } catch (error) {
-                    console.error("Error jumping to task:", error);
-                    alert("Failed to jump to active task: Make sure the local agent is running.");
-                } finally {
-                    btnJumpToTask.disabled = false;
-                    btnJumpToTask.innerHTML = '<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg> Jump to Active Task';
+                if (btnElement) {
+                    btnElement.disabled = false;
+                    btnElement.innerHTML = originalText;
                 }
-            });
+            }
         }
 
         function stopListeners() {
@@ -1011,30 +814,6 @@
 
         async function loadSettings() {
             loadClientProfile(clientSelect.value);
-
-            try {
-                const docRef = doc(db, "settings", "global_prompt");
-                const docSnap = await getDoc(docRef);
-                if (docSnap.exists()) {
-                    globalPromptInput.value = docSnap.data().prompt || "";
-                }
-            } catch (error) {
-                console.error("Error loading prompt:", error);
-                errorStatus.textContent = "Error loading prompt: " + error.message;
-                errorStatus.classList.remove('hidden');
-            }
-
-            try {
-                const urlDocRef = doc(db, "settings", "default_workspace_url");
-                const urlDocSnap = await getDoc(urlDocRef);
-                if (urlDocSnap.exists()) {
-                    defaultWorkspaceUrlInput.value = urlDocSnap.data().url || "";
-                }
-            } catch (error) {
-                console.error("Error loading default workspace url:", error);
-                errorSettingsStatus.textContent = "Error loading default workspace url: " + error.message;
-                errorSettingsStatus.classList.remove('hidden');
-            }
         }
 
         onAuthStateChanged(auth, async (user) => {
@@ -1111,54 +890,6 @@
 
         btnLogout.addEventListener('click', async () => {
             await signOut(auth);
-        });
-
-        saveBtn.addEventListener('click', async () => {
-            const promptText = globalPromptInput.value;
-            saveBtn.disabled = true;
-            saveBtn.textContent = 'Saving...';
-            saveStatus.classList.add('hidden');
-            errorStatus.classList.add('hidden');
-
-            try {
-                await setDoc(doc(db, "settings", "global_prompt"), {
-                    prompt: promptText,
-                    updatedAt: new Date()
-                });
-                saveStatus.classList.remove('hidden');
-                setTimeout(() => saveStatus.classList.add('hidden'), 3000);
-            } catch (error) {
-                console.error("Error saving prompt:", error);
-                errorStatus.textContent = "Error saving prompt: " + error.message;
-                errorStatus.classList.remove('hidden');
-            } finally {
-                saveBtn.disabled = false;
-                saveBtn.textContent = 'Save Prompt';
-            }
-        });
-
-        saveSettingsBtn.addEventListener('click', async () => {
-            const workspaceUrl = defaultWorkspaceUrlInput.value;
-            saveSettingsBtn.disabled = true;
-            saveSettingsBtn.textContent = 'Saving...';
-            saveSettingsStatus.classList.add('hidden');
-            errorSettingsStatus.classList.add('hidden');
-
-            try {
-                await setDoc(doc(db, "settings", "default_workspace_url"), {
-                    url: workspaceUrl,
-                    updatedAt: new Date()
-                });
-                saveSettingsStatus.classList.remove('hidden');
-                setTimeout(() => saveSettingsStatus.classList.add('hidden'), 3000);
-            } catch (error) {
-                console.error("Error saving default workspace url:", error);
-                errorSettingsStatus.textContent = "Error saving default workspace url: " + error.message;
-                errorSettingsStatus.classList.remove('hidden');
-            } finally {
-                saveSettingsBtn.disabled = false;
-                saveSettingsBtn.textContent = 'Save Configuration';
-            }
         });
     </script>
 </body>
