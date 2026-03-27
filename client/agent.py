@@ -717,7 +717,7 @@ def verify_action_natively(action, before_state, after_state):
         # If state didn't change significantly (or we can't be sure), fallback to LLM Critic
         return {"success": False, "reason": "No deterministic DOM or URL change natively detected after click."}
 
-    elif action_type in ["RESET_VIEW", "SCROLL", "PRESS_ENTER"]:
+    elif action_type in ["RESET_VIEW", "SCROLL", "PRESS_ENTER", "PRESS", "PRESS_KEY", "HOVER", "REPLY"]:
         return {"success": True, "reason": f"{action_type} natively verified."}
 
     # For other actions or complex semantic checks, return False to fallback to LLM Critic
@@ -1079,9 +1079,9 @@ class AgentStateMachine:
                  break
 
              if action_to_take.get("action") == "WAIT":
-                 wait_time = action_to_take.get("wait_time", 2)
+                 wait_time = action_to_take.get("seconds", action_to_take.get("wait_time", 2))
                  logging.info(f"Executing explicit WAIT for {wait_time} seconds...")
-                 await asyncio.sleep(wait_time)
+                 await asyncio.sleep(float(wait_time))
                  bail_out = True
                  break
 
@@ -2081,11 +2081,11 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
 
                         if type_of_guidance == "CLICK" and x is not None and y is not None:
                             guidance = f"Click at (X: {x}, Y: {y})"
-                        elif type_of_guidance == "SEMANTIC":
+                        elif type_of_guidance == "SEMANTIC" or xpath != "Unknown element":
                             guidance = f"Semantic Override: {xpath}"
                         else:
                             # Fallback for legacy format or just text
-                            guidance = f"Semantic Override: {xpath}"
+                            guidance = f"Semantic Override: {data}"
 
                         firestore_update_document("remote_commands", ACTIVE_DOC_ID, {
                             "status": "in_progress",
