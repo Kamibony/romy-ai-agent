@@ -238,7 +238,7 @@
         }
 
         // Listen for help needed tasks
-        const q = query(collection(db, "remote_commands"), where("status", "==", "help_needed"));
+        const q = query(collection(db, "remote_commands"), where("status", "in", ["help_needed", "AWAITING_HUMAN_INPUT"]));
         onSnapshot(q, (snapshot) => {
             if (!snapshot.empty) {
                 // For simplicity, just take the first one
@@ -248,7 +248,8 @@
 
                 hitlReason.textContent = data.help_reason || "No reason provided.";
                 if (data.screenshot_b64) {
-                    hitlScreenshot.src = `data:image/png;base64,${data.screenshot_b64}`;
+                    const prefix = data.screenshot_b64.startsWith('data:') ? '' : 'data:image/png;base64,';
+                    hitlScreenshot.src = `${prefix}${data.screenshot_b64}`;
                     hitlScreenshot.style.display = 'block';
                 } else {
                     hitlScreenshot.style.display = 'none';
@@ -277,6 +278,7 @@
             try {
                 const taskRef = doc(db, "remote_commands", activeHelpTaskId);
                 await updateDoc(taskRef, {
+                    // Mobile acts like a simple semantic override right now
                     human_response: instruction,
                     status: 'in_progress'
                 });

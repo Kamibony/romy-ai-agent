@@ -782,16 +782,15 @@ def classify_intent(command_text: str, audio_b64: str) -> Tuple[str, str]:
         logging.error(f"Error classifying intent with backend: {e}. Defaulting to OS.")
         return "OS", command_text
 
-def load_client_profile() -> Dict[str, Any]:
-    """Loads the client profile from client_profile.json if it exists."""
-    profile_path = os.path.join(os.path.dirname(__file__), "client_profile.json")
-    if os.path.exists(profile_path):
-        try:
-            with open(profile_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            logging.error(f"Failed to load client_profile.json: {e}")
-    return {}
+def load_client_profile(client_id: str = "default") -> Dict[str, Any]:
+    """Loads the client profile from Firestore instead of a local file."""
+    try:
+        profile_data = firestore_get_document("client_profiles", client_id)
+        if profile_data:
+            return profile_data
+    except Exception as e:
+        logging.error(f"Failed to load client profile '{client_id}' from Firestore: {e}")
+    return {"client_id": client_id, "rules": []}
 
 
 class AgentStateMachine:
@@ -820,7 +819,17 @@ class AgentStateMachine:
         self.doc_id = doc_id
         self.command_text = command_text
         self.audio_b64 = audio_b64
-        self.client_context = client_context or load_client_profile()
+
+        # If client_context is passed (e.g., from an API call that provides it), use it.
+        # Otherwise, dynamically fetch the active client profile from Firestore.
+        if client_context:
+            self.client_context = client_context
+        else:
+            # We attempt to fetch the profile by ID if we somehow knew it, but for now we'll default to 'sreality'
+            # since we don't have a global settings config storing the "active" one locally anymore.
+            # In a robust setup, the dashboard would pass the active client_id in the /run_command payload.
+            self.client_context = load_client_profile("sreality")
+
         self.state = AgentState.INITIALIZING
         self.iteration = 0
         self.sub_tasks = []
@@ -1316,7 +1325,9 @@ def execute_voice_agent_loop() -> None:
         logging.error("Error: Missing Firebase Token. Please log in first.")
         return
 
-    client_context = load_client_profile()
+    # In a full implementation, the user's active profile choice would dictate this.
+    # Defaulting to sreality as the pilot.
+    client_context = load_client_profile("sreality")
 
     try:
         logging.info("=== Agent Activated: Ready for commands ===")
@@ -2062,15 +2073,19 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
 
                 if ACTIVE_DOC_ID:
                     if global_state_machine and global_state_machine.state == AgentState.SUSPENDED_HITL:
+                        type_of_guidance = data.get("type", "")
                         xpath = data.get("xpath", "Unknown element")
                         x = data.get("x")
                         y = data.get("y")
                         dpr = data.get("dpr", 1.0)
 
-                        if x is not None and y is not None:
+                        if type_of_guidance == "CLICK" and x is not None and y is not None:
                             guidance = f"Click at (X: {x}, Y: {y})"
+                        elif type_of_guidance == "SEMANTIC":
+                            guidance = f"Semantic Override: {xpath}"
                         else:
-                            guidance = f"Click the element with XPath: {xpath}"
+                            # Fallback for legacy format or just text
+                            guidance = f"Semantic Override: {xpath}"
 
                         firestore_update_document("remote_commands", ACTIVE_DOC_ID, {
                             "status": "in_progress",
