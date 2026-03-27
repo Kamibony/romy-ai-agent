@@ -797,6 +797,7 @@ class AgentStateMachine:
     def __init__(self):
         self.state = AgentState.INITIALIZING
         self.hitl_event = asyncio.Event()
+        self.interrupt_event = asyncio.Event()
         self.hitl_action = None
         self.doc_id = None
         self.command_text = None
@@ -847,6 +848,19 @@ class AgentStateMachine:
             if PAUSE_AGENT:
                 await asyncio.sleep(1)
                 continue
+
+            if self.interrupt_event.is_set():
+                logging.info("Asynchronous semantic interrupt detected!")
+                self.interrupt_event.clear()
+                if self.hitl_action and "xpath" in self.hitl_action:
+                    semantic_guidance = self.hitl_action.get("xpath", "")
+                    if semantic_guidance:
+                        logging.info(f"Processing asynchronous semantic guidance: {semantic_guidance}")
+                        self.command_text += f"\n[System Note: Immediate Human Override Received: '{semantic_guidance}'. Adjust your execution plan accordingly.]"
+                        self.sub_task_iteration = 0
+                        self.state = AgentState.EVALUATING
+                        self.hitl_action = None
+                        continue
 
             if self.state == AgentState.INITIALIZING:
                 await self.state_initializing()
@@ -907,6 +921,14 @@ class AgentStateMachine:
         if self.sub_task_iteration >= self.max_sub_task_iterations:
             current_sub_task = self.sub_tasks[self.current_sub_task_index]
             logging.warning(f"Circuit Breaker triggered: Max iterations ({self.max_sub_task_iterations}) reached for sub-task '{current_sub_task}'. Marking as FAILED and advancing.")
+
+            try:
+                firestore_update_document("remote_commands", self.doc_id, {
+                    "telemetry": f"Circuit Breaker triggered: Max retries ({self.max_sub_task_iterations}) reached for sub-task '{current_sub_task}'. Moving to next sub-task."
+                })
+            except Exception as e:
+                logging.error(f"Failed to update telemetry for Circuit Breaker: {e}")
+
             self.command_text += f"\n[System Note: Sub-task '{current_sub_task}' FAILED after {self.max_sub_task_iterations} attempts. Advancing plan automatically.]"
             self.current_sub_task_index += 1
             self.sub_task_iteration = 0
@@ -916,6 +938,14 @@ class AgentStateMachine:
 
         current_sub_task = self.sub_tasks[self.current_sub_task_index]
         logging.info(f"--- Executing Sub-Task {self.current_sub_task_index + 1}/{len(self.sub_tasks)}: {current_sub_task} ---")
+
+        if self.sub_task_iteration > 0:
+            try:
+                firestore_update_document("remote_commands", self.doc_id, {
+                    "telemetry": f"Retrying sub-task '{current_sub_task}' (Attempt {self.sub_task_iteration + 1}/{self.max_sub_task_iterations})."
+                })
+            except Exception as e:
+                logging.error(f"Failed to update telemetry for retry: {e}")
 
         logging.info("Requesting GET_STATE from bridge...")
         state_payload = {
@@ -1069,6 +1099,11 @@ class AgentStateMachine:
         bail_out = False
 
         for action_idx, action_to_take in enumerate(self.actions_to_execute):
+             if self.interrupt_event.is_set():
+                 logging.info("Asynchronous semantic interrupt detected during action execution! Bailing out early.")
+                 bail_out = True
+                 break
+
              if action_to_take.get("action") == "SUB_TASK_COMPLETE":
                  logging.info(f"Sub-Task '{current_sub_task}' marked as complete by AI.")
                  self.current_sub_task_index += 1
@@ -1093,6 +1128,12 @@ class AgentStateMachine:
 
              if not exec_result.get("success"):
                  logging.warning(f"Macro-action execution failed via bridge: {exec_result.get('error')}. Bailing out of batch.")
+                 try:
+                     firestore_update_document("remote_commands", self.doc_id, {
+                         "telemetry": f"Macro-action '{action_type}' failed: {exec_result.get('error')}. Retrying..."
+                     })
+                 except Exception as e:
+                     logging.error(f"Failed to update telemetry for action failure: {e}")
                  self.command_text += f"\n[System Note: Last action {action_type} failed: {exec_result.get('error')}]"
                  bail_out = True
                  break
@@ -2072,16 +2113,19 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 global ACTIVE_DOC_ID
 
                 if ACTIVE_DOC_ID:
-                    if global_state_machine and global_state_machine.state == AgentState.SUSPENDED_HITL:
-                        type_of_guidance = data.get("type", "")
-                        xpath = data.get("xpath", "Unknown element")
-                        x = data.get("x")
-                        y = data.get("y")
-                        dpr = data.get("dpr", 1.0)
+                    type_of_guidance = data.get("type", "")
+                    xpath = data.get("xpath", "Unknown element")
+                    x = data.get("x")
+                    y = data.get("y")
+                    dpr = data.get("dpr", 1.0)
 
+                    is_semantic = (type_of_guidance == "SEMANTIC" or xpath != "Unknown element")
+                    is_suspended = (global_state_machine and global_state_machine.state == AgentState.SUSPENDED_HITL)
+
+                    if is_suspended or is_semantic:
                         if type_of_guidance == "CLICK" and x is not None and y is not None:
                             guidance = f"Click at (X: {x}, Y: {y})"
-                        elif type_of_guidance == "SEMANTIC" or xpath != "Unknown element":
+                        elif is_semantic:
                             guidance = f"Semantic Override: {xpath}"
                         else:
                             # Fallback for legacy format or just text
@@ -2095,7 +2139,10 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
 
                         def set_event():
                             global_state_machine.hitl_action = data
-                            global_state_machine.hitl_event.set()
+                            if is_semantic and not is_suspended:
+                                global_state_machine.interrupt_event.set()
+                            else:
+                                global_state_machine.hitl_event.set()
 
                         if global_asyncio_loop:
                             global_asyncio_loop.call_soon_threadsafe(set_event)
@@ -2107,7 +2154,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                         self.wfile.write(json.dumps({"status": "ok"}).encode())
                         return
                     else:
-                        logging.info("Ignored ghost click: Agent not in SUSPENDED_HITL state.")
+                        logging.info("Ignored ghost click: Agent not in SUSPENDED_HITL state and payload is not a semantic override.")
                         self.send_response(HTTPStatus.OK)
                         self.send_header('Content-type', 'application/json')
                         self.send_header('Access-Control-Allow-Origin', '*')
