@@ -38,62 +38,65 @@ class StressTestRunner:
             logging.error(f"Failed to inject ghost click: {e}")
             self.diagnostics["ws_errors"] += 1
 
-    def poll_status(self, doc_id, timeout_secs=120):
-        status = "pending"
+    def poll_all_statuses(self, doc_ids, timeout_secs=300):
         start_time = time.time()
-        last_status_change_time = time.time()
+        statuses = {doc_id: "pending" for doc_id in doc_ids}
+        last_status_change_times = {doc_id: time.time() for doc_id in doc_ids}
+        active_docs = set(doc_ids)
 
-        while status not in ["completed", "failed"] and (time.time() - start_time) < timeout_secs:
+        while active_docs and (time.time() - start_time) < timeout_secs:
             time.sleep(2)
-            try:
-                status_req = urllib.request.Request(f"{LOCAL_API_URL}/status/{doc_id}")
-                req_start = time.time()
-                status_response = urllib.request.urlopen(status_req, timeout=5)
-                req_end = time.time()
 
-                status_data = json.loads(status_response.read().decode())
-                new_status = status_data.get("status", "unknown")
+            # Use a list to iterate over safely while modifying the set
+            for doc_id in list(active_docs):
+                try:
+                    status_req = urllib.request.Request(f"{LOCAL_API_URL}/status/{doc_id}")
+                    req_start = time.time()
+                    status_response = urllib.request.urlopen(status_req, timeout=5)
+                    req_end = time.time()
 
-                # Check for "No active session tab" or other errors embedded in status if possible
-                # (Assuming agent or bridge logs it to the API response, though usually it just says failed)
-                # But we at least track WS connection status via successful polling vs timeouts
-                if new_status != status:
-                    duration = time.time() - last_status_change_time
-                    logging.info(f"[{doc_id}] Status changed to '{new_status}' after {duration:.2f}s. Ext. Response Time: {req_end - req_start:.4f}s")
+                    status_data = json.loads(status_response.read().decode())
+                    new_status = status_data.get("status", "unknown")
 
-                    # If duration is approximately >= 1.5s, it roughly validates the native stabilization wait in extension
-                    if duration >= 1.5:
-                        logging.info(f"[{doc_id}] -> Validation: 1.5s native wait likely respected (Duration: {duration:.2f}s)")
-                    else:
-                        logging.warning(f"[{doc_id}] -> Validation Warning: Status changed in {duration:.2f}s (< 1.5s). Wait may have been skipped.")
+                    current_status = statuses[doc_id]
 
-                    last_status_change_time = time.time()
-                    status = new_status
+                    if new_status != current_status:
+                        duration = time.time() - last_status_change_times[doc_id]
+                        logging.info(f"[{doc_id}] Status changed to '{new_status}' after {duration:.2f}s. Ext. Response Time: {req_end - req_start:.4f}s")
 
-                if status == "AWAITING_HUMAN_INPUT":
-                    logging.warning(f"ask_human triggered for {doc_id}!")
-                    self.diagnostics["ask_human_triggers"] += 1
-                    self.diagnostics["ask_human_timestamps"].append(time.time())
+                        if duration >= 1.5:
+                            logging.info(f"[{doc_id}] -> Validation: 1.5s native wait likely respected (Duration: {duration:.2f}s)")
+                        else:
+                            logging.warning(f"[{doc_id}] -> Validation Warning: Status changed in {duration:.2f}s (< 1.5s). Wait may have been skipped.")
 
-                    # Launch background thread to send ghost click without blocking the polling loop immediately
-                    threading.Thread(target=self.trigger_ghost_click, daemon=True).start()
+                        last_status_change_times[doc_id] = time.time()
+                        statuses[doc_id] = new_status
 
-                    # Sleep to avoid multiple threads being spawned for the same AWAITING_HUMAN_INPUT
-                    time.sleep(4)
+                    if new_status == "AWAITING_HUMAN_INPUT":
+                        logging.warning(f"ask_human triggered for {doc_id}!")
+                        self.diagnostics["ask_human_triggers"] += 1
+                        self.diagnostics["ask_human_timestamps"].append(time.time())
 
-            except urllib.error.URLError as e:
-                logging.error(f"WS/Connection Error to API while polling {doc_id}: {e}")
-                self.diagnostics["ws_errors"] += 1
-            except Exception as e:
-                logging.error(f"Failed to poll status for {doc_id}. Error: {e}")
-                self.diagnostics["ws_errors"] += 1
+                        threading.Thread(target=self.trigger_ghost_click, daemon=True).start()
+                        time.sleep(4)
 
-        if status == "failed":
-            logging.error(f"[{doc_id}] Task Failed. Checking for 'No active session tab' errors...")
-            # We assume failure could be due to missing tab; increment diagnostic counter
-            self.diagnostics["no_active_session_errors"] += 1
+                    if new_status in ["completed", "failed"]:
+                        active_docs.remove(doc_id)
+                        if new_status == "failed":
+                            logging.error(f"[{doc_id}] Task Failed. Checking for 'No active session tab' errors...")
+                            self.diagnostics["no_active_session_errors"] += 1
 
-        return status
+                except urllib.error.URLError as e:
+                    logging.error(f"WS/Connection Error to API while polling {doc_id}: {e}")
+                    self.diagnostics["ws_errors"] += 1
+                except Exception as e:
+                    logging.error(f"Failed to poll status for {doc_id}. Error: {e}")
+                    self.diagnostics["ws_errors"] += 1
+
+        if active_docs:
+            logging.error(f"Timeout reached. Active docs remaining: {active_docs}")
+
+        return statuses
 
     def enqueue_command(self, cmd_text, client_context=None):
         doc_id = f"stress_test_{uuid.uuid4().hex[:8]}"
@@ -129,11 +132,9 @@ class StressTestRunner:
         logging.info("=== Starting Scenario A: 'The Rapid Fire' ===")
         # We will rapidly queue several commands to see if the WS bridge buffers them and stays alive.
         commands = [
-            "Navigate to https://example.com and check the title.",
-            "Scroll down slightly.",
-            "Click anywhere on the page.",
-            "Scroll up slightly.",
-            "Type 'Hello world' in any input field if it exists."
+            "Navigate to example.com and use JavaScript to read the exact text of the main h1 heading.",
+            "Navigate to google.com, type 'AI Chrome Agents' into the search box, and press Enter.",
+            "Navigate to wikipedia.org and scroll down the page."
         ]
 
         doc_ids = []
@@ -148,12 +149,10 @@ class StressTestRunner:
 
         logging.info(f"Queued {len(doc_ids)} commands. Now tracking them...")
 
-        for doc_id in doc_ids:
-            logging.info(f"Tracking doc {doc_id}...")
-            # We track them sequentially, but the agent processes them from queue.
-            # Timeout is longer since they are queued up.
-            status = self.poll_status(doc_id, timeout_secs=180)
-            logging.info(f"Command {doc_id} finished with status: {status}")
+        if doc_ids:
+            statuses = self.poll_all_statuses(doc_ids, timeout_secs=300)
+            for doc_id, status in statuses.items():
+                logging.info(f"Command {doc_id} finished with status: {status}")
 
         logging.info("=== Scenario A Completed ===")
 
@@ -172,15 +171,17 @@ class StressTestRunner:
         logging.info(f"Immediately queueing state check: {cmd_state}")
         doc_id_state, _ = self.enqueue_command(cmd_state)
 
+        docs_to_track = []
         if doc_id_nav:
-            logging.info(f"Tracking heavy navigation {doc_id_nav}...")
-            status_nav = self.poll_status(doc_id_nav, timeout_secs=120)
-            logging.info(f"Heavy navigation finished with status: {status_nav}")
-
+            docs_to_track.append(doc_id_nav)
         if doc_id_state:
-            logging.info(f"Tracking immediate state check {doc_id_state}...")
-            status_state = self.poll_status(doc_id_state, timeout_secs=120)
-            logging.info(f"State check finished with status: {status_state}")
+            docs_to_track.append(doc_id_state)
+
+        if docs_to_track:
+            logging.info(f"Tracking {len(docs_to_track)} commands for Scenario B...")
+            statuses = self.poll_all_statuses(docs_to_track, timeout_secs=300)
+            for doc_id, status in statuses.items():
+                logging.info(f"Command {doc_id} finished with status: {status}")
 
         logging.info("=== Scenario B Completed ===")
 
