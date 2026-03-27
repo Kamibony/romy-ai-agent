@@ -92,7 +92,64 @@ window.RomyDomMapper = {
             return '';
         }
 
-        const allNodes = getAllNodes(document);
+        let allNodes = getAllNodes(document);
+
+        // De-noising: remove nodes that are just large wrappers (e.g. > 50% of viewport)
+        // unless they are explicitly semantic like <button>, <a>, <input>
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+
+        allNodes = allNodes.filter(node => {
+            const rect = node.getBoundingClientRect();
+            const isSemantic = node.matches('button, a, input, select, textarea, [role="button"], [role="link"]');
+
+            // If it's just a generic container marked interactive via CSS (cursor: pointer)
+            // and it takes up more than 50% of the screen, we probably don't want it.
+            if (!isSemantic && (rect.width > viewportWidth * 0.5 || rect.height > viewportHeight * 0.5)) {
+                return false;
+            }
+            return true;
+        });
+
+        // De-noising: Deduplicate nested overlaps (keep logical parent, discard fully contained children)
+        // If an element is fully contained inside another interactive element, and they have the same center
+        // or just broadly overlap, it often creates duplicate targets.
+        // A common heuristic: if a child is inside a parent and both are interactive, keep the parent
+        // if they essentially cover the same area, or just filter out children of interactive parents
+        // if they don't add semantic value. Or filter out the parent if the child is the real target.
+        // Actually, usually the outermost interactive element (e.g., <button> or <a>) is the logical parent,
+        // and its inner spans/svgs should be ignored.
+        const nodesToKeep = new Set(allNodes);
+
+        for (const node of allNodes) {
+            let parent = node.parentElement;
+            let isContainedInInteractiveParent = false;
+            while (parent) {
+                if (nodesToKeep.has(parent)) {
+                    isContainedInInteractiveParent = true;
+                    break;
+                }
+                parent = parent.parentElement;
+            }
+
+            if (isContainedInInteractiveParent) {
+                // To be safe, we only discard the child if it's not a distinctly separate interactive element
+                // like an input inside a form. <button> > <span> -> remove span.
+                // <a> > <img> -> remove img.
+                const isDistinct = node.matches('input, select, textarea, button, a');
+                const parentIsDistinct = parent && parent.matches('button, a');
+
+                // If parent is a button/link, almost everything inside it is just part of that button/link.
+                if (parentIsDistinct && !isDistinct) {
+                    nodesToKeep.delete(node);
+                } else if (!isDistinct) {
+                    // Even if parent is just a 'cursor: pointer' div, if child is also non-distinct, remove child.
+                    nodesToKeep.delete(node);
+                }
+            }
+        }
+
+        allNodes = Array.from(nodesToKeep);
 
         allNodes.forEach((node) => {
             const rect = node.getBoundingClientRect();
@@ -133,6 +190,9 @@ window.RomyDomMapper = {
                     textContent = String(textContent).trim();
                 }
 
+                const centerX = rect.x + (rect.width / 2);
+                const centerY = rect.y + (rect.height / 2);
+
                 elements.push({
                     id: uniqueId,
                     type: node.tagName.toLowerCase(),
@@ -144,6 +204,10 @@ window.RomyDomMapper = {
                         y: rect.y,
                         width: rect.width,
                         height: rect.height
+                    },
+                    center: {
+                        x: centerX,
+                        y: centerY
                     }
                 });
             }

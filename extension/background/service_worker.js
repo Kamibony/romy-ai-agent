@@ -712,6 +712,34 @@ async function handleExecuteNativeAction(payload) {
 
             }
              sendTelemetryLog(`${actionType} to ${url} executed successfully.`);
+        } else if (actionType === 'PRESS_ENTER') {
+            sendTelemetryLog(`Executing PRESS_ENTER action`);
+
+            // Use the same fallback mapping logic
+            const keyData = { text: '\r', unmodifiedText: '\r', keyIdentifier: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
+
+            await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchKeyEvent", {
+                type: "keyDown",
+                text: keyData.text,
+                unmodifiedText: keyData.unmodifiedText,
+                keyIdentifier: keyData.keyIdentifier,
+                code: keyData.code,
+                windowsVirtualKeyCode: keyData.windowsVirtualKeyCode,
+                nativeVirtualKeyCode: keyData.nativeVirtualKeyCode
+            });
+
+            await new Promise(r => setTimeout(r, 50));
+
+            await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchKeyEvent", {
+                type: "keyUp",
+                keyIdentifier: keyData.keyIdentifier,
+                code: keyData.code,
+                windowsVirtualKeyCode: keyData.windowsVirtualKeyCode,
+                nativeVirtualKeyCode: keyData.nativeVirtualKeyCode
+            });
+
+            sendTelemetryLog(`PRESS_ENTER executed successfully.`);
+
         } else if (actionType === 'FOCUS_TAB') {
             if (activeSessionTabId) {
                 chrome.tabs.update(activeSessionTabId, { active: true });
@@ -798,7 +826,7 @@ async function handleExecuteNativeAction(payload) {
         }
 
         // Trap A: Enforce Post-Action Stabilization (1.5s) to allow SPA DOM to settle
-        if (['CLICK', 'TYPE', 'SCROLL', 'PRESS', 'NAVIGATE', 'OPEN_TAB'].includes(actionType)) {
+        if (['CLICK', 'TYPE', 'SCROLL', 'PRESS', 'PRESS_ENTER', 'NAVIGATE', 'OPEN_TAB'].includes(actionType)) {
             sendTelemetryLog(`Enforcing 1.5s Post-Action Stabilization Wait after ${actionType}...`);
             await new Promise(r => setTimeout(r, 1500));
         }

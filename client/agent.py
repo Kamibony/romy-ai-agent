@@ -717,7 +717,7 @@ def verify_action_natively(action, before_state, after_state):
         # If state didn't change significantly (or we can't be sure), fallback to LLM Critic
         return {"success": False, "reason": "No deterministic DOM or URL change natively detected after click."}
 
-    elif action_type in ["RESET_VIEW", "SCROLL"]:
+    elif action_type in ["RESET_VIEW", "SCROLL", "PRESS_ENTER"]:
         return {"success": True, "reason": f"{action_type} natively verified."}
 
     # For other actions or complex semantic checks, return False to fallback to LLM Critic
