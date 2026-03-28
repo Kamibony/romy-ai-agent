@@ -33,6 +33,13 @@ class PreFlightRequest(BaseModel):
 class SupervisorPlanRequest(BaseModel):
     command_text: str
 
+class EvaluatePlanProgressRequest(BaseModel):
+    command_text: str
+    current_sub_task: str
+    remaining_plan: List[str]
+    screenshot_base64: Optional[str] = None
+    ui_elements: List[Dict[str, Any]]
+
 class CriticVerifyRequest(BaseModel):
     sub_task: str
     action_taken: Dict[str, Any]
@@ -104,6 +111,26 @@ def supervisor_plan(request: SupervisorPlanRequest, uid: str = Depends(verify_fi
 
     sub_tasks = supervisor_plan_with_gemini(request.command_text)
     return {"sub_tasks": sub_tasks}
+
+@app.post("/api/evaluate_plan_progress")
+def evaluate_plan_progress(request: EvaluatePlanProgressRequest, uid: str = Depends(verify_firebase_token)):
+    """
+    Endpoint to evaluate if a sub-task is already accomplished based on the current DOM/vision state.
+    """
+    if not check_user_license(uid):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User license is not active.",
+        )
+
+    result = evaluate_plan_progress_with_gemini(
+        request.command_text,
+        request.current_sub_task,
+        request.remaining_plan,
+        request.screenshot_base64,
+        request.ui_elements
+    )
+    return result
 
 @app.get("/api/playbook_rules")
 def fetch_playbook_rules(domain: str, client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token)):

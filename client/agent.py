@@ -295,7 +295,7 @@ def _get_uid_from_token() -> str | None:
         payload_b64 += "=" * ((4 - len(payload_b64) % 4) % 4)
         payload_json = base64.urlsafe_b64decode(payload_b64).decode('utf-8')
         payload = json.loads(payload_json)
-        return payload.get('user_id')
+        return payload.get('user_id') or payload.get('sub')
     except Exception as e:
         logging.error(f"Error extracting UID from token: {e}")
         return None
@@ -657,6 +657,29 @@ def supervisor_plan(command_text: str) -> list:
         logging.error(f"Error getting supervisor plan: {e}")
         return []
 
+def evaluate_plan_progress(command_text: str, current_sub_task: str, remaining_plan: list, screenshot_base64: str, ui_elements: list) -> dict:
+    if not CURRENT_TOKEN:
+        return {"is_accomplished": False, "reason": "No token"}
+
+    url = config.EVALUATE_PLAN_PROGRESS_ENDPOINT
+
+    payload = {
+        "command_text": command_text,
+        "current_sub_task": current_sub_task,
+        "remaining_plan": remaining_plan,
+        "screenshot_base64": screenshot_base64,
+        "ui_elements": ui_elements
+    }
+    headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
+    try:
+        session = get_resilient_session()
+        response = session.post(url, json=payload, headers=headers, timeout=(10, 45))
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logging.error(f"Error in evaluate plan progress: {e}")
+        return {"is_accomplished": False, "reason": str(e)}
+
 def verify_action_natively(action, before_state, after_state):
     from urllib.parse import urlparse
     action_type = str(action.get("action", "")).upper()
@@ -1012,6 +1035,26 @@ class AgentStateMachine:
                 self.command_text += f"\n[System Note: Action {self.previous_action.get('action', 'UNKNOWN')} verified successfully natively: {native_res.get('reason')}]"
             else:
                 logging.info(f"Native verification didn't match: {native_res.get('reason')}")
+
+        # Dynamic Sub-Task Evaluation
+        if self.sub_task_iteration == 0:
+            logging.info(f"Evaluating if current sub-task '{current_sub_task}' is already accomplished...")
+            eval_res = evaluate_plan_progress(
+                command_text=self.command_text,
+                current_sub_task=current_sub_task,
+                remaining_plan=self.sub_tasks[self.current_sub_task_index:],
+                screenshot_base64=self.current_clean_screenshot,
+                ui_elements=self.current_ui_elements
+            )
+            if eval_res.get("is_accomplished"):
+                logging.info(f"Sub-task '{current_sub_task}' is ALREADY ACCOMPLISHED: {eval_res.get('reason')}. Skipping...")
+                self.command_text += f"\n[System Note: Sub-task '{current_sub_task}' was dynamically evaluated as already accomplished. Advancing plan automatically.]"
+                self.current_sub_task_index += 1
+                self.sub_task_iteration = 0
+                self.previous_action = None
+                self.history.clear()
+                # Skip thinking and acting, re-evaluate the next sub-task
+                return
 
         self.state = AgentState.THINKING
 
@@ -1426,8 +1469,9 @@ def execute_voice_agent_loop() -> None:
             logging.info("Voice command routed to Web (Chrome Extension). Starting ReAct loop.")
             from local_bridge import bridge
 
+            import uuid
             iteration = 0
-            doc_id = "voice_session_1"
+            doc_id = f"voice_session_{uuid.uuid4().hex[:8]}"
             final_status = "completed"
 
             # Create or ensure the document exists
@@ -1759,8 +1803,9 @@ def execute_voice_agent_loop() -> None:
 
         # Start Agentic Loop for OS
         logging.info("Voice command routed to OS (Native).")
+        import uuid
         iteration = 0
-        doc_id = "voice_session_1"
+        doc_id = f"voice_session_{uuid.uuid4().hex[:8]}"
         final_status = "completed"
 
         # Pre-flight Check
