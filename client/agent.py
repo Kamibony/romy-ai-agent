@@ -1024,7 +1024,27 @@ class AgentStateMachine:
         }
         state_result = bridge.delegate_command(state_payload)
         if not state_result.get("success"):
-            logging.error(f"Failed to get state from extension: {state_result.get('error')}")
+            error_msg = state_result.get('error', 'Unknown error')
+            logging.error(f"Failed to get state from extension: {error_msg}")
+
+            # Treat environment failures (like detached tabs) as a retryable/failing sub-task rather than full agent crash
+            if "Session detached" in error_msg or "No active tab" in error_msg or "closed" in error_msg.lower():
+                 logging.warning("Environment volatility detected. Triggering retry or failure logic.")
+                 self.sub_task_iteration += 1
+                 if self.sub_task_iteration >= self.max_sub_task_iterations:
+                      try:
+                          firestore_update_document("remote_commands", self.doc_id, {
+                              "status": "AWAITING_HUMAN_INPUT",
+                              "help_reason": f"Environment failure (e.g., target tab closed): {error_msg}"
+                          })
+                      except Exception as fs_e:
+                          logging.error(f"Error saving help request: {fs_e}")
+                      self.state = AgentState.SUSPENDED_HITL
+                 else:
+                      self.command_text += f"\n[System Note: Environment error occurred: {error_msg}. Recovering state.]"
+                      self.state = AgentState.EVALUATING
+                 return
+
             self.state = AgentState.TERMINATED
             return
 
@@ -1093,10 +1113,18 @@ class AgentStateMachine:
             backend_url = config.GET_COMMAND_ENDPOINT
             response = session.post(backend_url, json=payload, headers=headers)
             response.raise_for_status()
-            self.ai_response = response.json()
+            try:
+                self.ai_response = response.json()
+            except json.JSONDecodeError as je:
+                raise ValueError(f"Invalid JSON returned from backend: {je}")
         except requests.exceptions.RequestException as e:
             logging.error(f"Backend API call failed: {e}")
             self.actions_to_execute = [{"action": "ERROR", "error": f"Backend API failed: {str(e)}"}]
+            self.state = AgentState.ACTING
+            return
+        except ValueError as ve:
+            logging.error(f"Data schema or parsing error: {ve}")
+            self.actions_to_execute = [{"action": "ERROR", "error": f"Data error: {str(ve)}"}]
             self.state = AgentState.ACTING
             return
 
@@ -1122,6 +1150,16 @@ class AgentStateMachine:
                 if "action" not in act:
                     logging.warning(f"Discarding action missing 'action' key: {act}")
                     continue
+
+                # Check for structural validity
+                action_type = str(act.get("action")).upper()
+                if action_type == "CLICK" and "coordinates" not in act and "target_id" not in act:
+                    logging.warning(f"Discarding invalid CLICK action missing target: {act}")
+                    continue
+                if action_type == "TYPE" and "text" not in act:
+                    logging.warning(f"Discarding invalid TYPE action missing text: {act}")
+                    continue
+
                 validated_actions.append(act)
 
             actions = validated_actions
@@ -1129,18 +1167,24 @@ class AgentStateMachine:
             if not actions:
                  raise ValueError("No valid actions returned by AI.")
         except Exception as e:
-            resp_str = str(self.ai_response)
+            resp_str = str(getattr(self, 'ai_response', 'None'))
             if len(resp_str) > 200:
                 resp_str = resp_str[:200] + "... [TRUNCATED]"
             logging.error(f"Data validation error for API payload: {e}. Raw response: {resp_str}")
-            try:
-                firestore_update_document("remote_commands", self.doc_id, {
-                    "status": "AWAITING_HUMAN_INPUT",
-                    "help_reason": f"System error parsing AI response. Payload: {resp_str}"
-                })
-            except Exception as fs_e:
-                logging.error(f"Error saving help request to Firestore: {fs_e}")
-            self.state = AgentState.SUSPENDED_HITL
+            # Treat as a cognitive misfire and increment sub-task iteration, retrying
+            self.sub_task_iteration += 1
+            if self.sub_task_iteration >= self.max_sub_task_iterations:
+                try:
+                    firestore_update_document("remote_commands", self.doc_id, {
+                        "status": "AWAITING_HUMAN_INPUT",
+                        "help_reason": f"System error parsing AI response after retries. Payload: {resp_str}"
+                    })
+                except Exception as fs_e:
+                    logging.error(f"Error saving help request to Firestore: {fs_e}")
+                self.state = AgentState.SUSPENDED_HITL
+            else:
+                self.command_text += f"\n[System Note: AI generated invalid JSON or invalid actions structure. Try again.]"
+                self.state = AgentState.EVALUATING
             return
 
         for act in actions:
@@ -1159,14 +1203,34 @@ class AgentStateMachine:
                  return
 
         current_state_str = str([{"id": el.get("target_id", "N/A"), "text": el.get("text", "")[:20]} for el in self.current_ui_elements[:5]])
+
+        # Stuck Action Detector: Check if the AI is repeating the exact same action output consecutively
+        current_actions_str = json.dumps(actions, sort_keys=True)
+        if hasattr(self, 'previous_actions_str') and self.previous_actions_str == current_actions_str:
+            self.action_stuck_counter = getattr(self, 'action_stuck_counter', 0) + 1
+            if self.action_stuck_counter >= 3:
+                logging.warning("Action Stuck detector triggered! AI repeatedly issuing identical cyclical actions.")
+                try:
+                    firestore_update_document("remote_commands", self.doc_id, {
+                        "status": "AWAITING_HUMAN_INPUT",
+                        "help_reason": f"Cyclical loop detected (Semantic Blindness). Repeating same action: {current_actions_str[:100]}"
+                    })
+                except Exception as e:
+                    logging.error(f"Error saving stuck state to Firestore: {e}")
+                self.state = AgentState.SUSPENDED_HITL
+                return
+        else:
+            self.action_stuck_counter = 0
+            self.previous_actions_str = current_actions_str
+
         if self.history and self.history[-1] == current_state_str:
             self.stuck_counter = getattr(self, 'stuck_counter', 0) + 1
             if self.stuck_counter >= 5:
-                 logging.warning("Stuck detector triggered! Same visual state for 5 iterations.")
+                 logging.warning("Visual Stuck detector triggered! Same visual state for 5 iterations.")
                  try:
                      firestore_update_document("remote_commands", self.doc_id, {
                          "status": "AWAITING_HUMAN_INPUT",
-                         "help_reason": f"I am stuck in a loop trying to execute: [{current_sub_task}]"
+                         "help_reason": f"I am stuck in a visual loop trying to execute: [{current_sub_task}]"
                      })
                  except Exception as e:
                      logging.error(f"Error saving stuck state to Firestore: {e}")
@@ -1215,14 +1279,20 @@ class AgentStateMachine:
              exec_result = bridge.delegate_command(exec_payload)
 
              if not exec_result.get("success"):
-                 logging.warning(f"Macro-action execution failed via bridge: {exec_result.get('error')}. Bailing out of batch.")
+                 error_msg = exec_result.get('error', 'Unknown error')
+                 logging.warning(f"Macro-action execution failed via bridge: {error_msg}. Bailing out of batch.")
+
+                 # Environmental chaos handler for EXECUTE_ACTION
+                 if "Session detached" in error_msg or "No active tab" in error_msg or "closed" in error_msg.lower():
+                     logging.warning("Environment volatility detected during action execution.")
+
                  try:
                      firestore_update_document("remote_commands", self.doc_id, {
-                         "telemetry": f"Macro-action '{action_type}' failed: {exec_result.get('error')}. Retrying..."
+                         "telemetry": f"Macro-action '{action_type}' failed: {error_msg}. Retrying..."
                      })
                  except Exception as e:
                      logging.error(f"Failed to update telemetry for action failure: {e}")
-                 self.command_text += f"\n[System Note: Last action {action_type} failed: {exec_result.get('error')}]"
+                 self.command_text += f"\n[System Note: Last action {action_type} failed: {error_msg}]"
                  bail_out = True
                  break
 
