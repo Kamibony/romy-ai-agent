@@ -58,20 +58,22 @@ class LocalBridgeManager:
     async def _handle_client(self, websocket):
         logging.info(f"WebSocket client connected from {websocket.remote_address}")
 
-        old_websocket = None
+        reject_new = False
         with self.lock:
             # We only support one active Chrome Extension connection at a time
-            # If a new one connects, cleanly terminate the old one without blocking
-            if self.active_websocket and self.active_websocket != websocket:
-                logging.warning("New WebSocket connection replacing existing active connection.")
-                old_websocket = self.active_websocket
-            self.active_websocket = websocket
+            # If a new one connects while we have an active session, reject the new one
+            if self.active_websocket and not self.active_websocket.closed and self.active_websocket != websocket:
+                reject_new = True
+            else:
+                self.active_websocket = websocket
 
-        if old_websocket:
+        if reject_new:
+            logging.warning("Rejecting new connection. An active Chrome Extension is already connected.")
             try:
-                await old_websocket.close()
+                await websocket.close()
             except Exception as e:
-                logging.warning(f"Error closing stale WebSocket connection: {e}")
+                logging.warning(f"Error closing rejected WebSocket connection: {e}")
+            return
 
         try:
             async for message in websocket:
