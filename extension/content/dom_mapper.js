@@ -123,27 +123,29 @@ window.RomyDomMapper = {
 
         for (const node of allNodes) {
             let parent = node.parentElement;
-            let isContainedInInteractiveParent = false;
+            let interactiveParent = null;
             while (parent) {
                 if (nodesToKeep.has(parent)) {
-                    isContainedInInteractiveParent = true;
+                    interactiveParent = parent;
                     break;
                 }
                 parent = parent.parentElement;
             }
 
-            if (isContainedInInteractiveParent) {
-                // To be safe, we only discard the child if it's not a distinctly separate interactive element
-                // like an input inside a form. <button> > <span> -> remove span.
-                // <a> > <img> -> remove img.
-                const isDistinct = node.matches('input, select, textarea, button, a');
-                const parentIsDistinct = parent && parent.matches('button, a');
+            if (interactiveParent) {
+                const isDistinctChild = node.matches('input, select, textarea, button, a');
+                const parentIsDistinct = interactiveParent.matches('button, a');
 
-                // If parent is a button/link, almost everything inside it is just part of that button/link.
-                if (parentIsDistinct && !isDistinct) {
-                    nodesToKeep.delete(node);
-                } else if (!isDistinct) {
-                    // Even if parent is just a 'cursor: pointer' div, if child is also non-distinct, remove child.
+                if (isDistinctChild) {
+                    // If the child is distinctly interactive (like input or button), we definitely want to keep it.
+                    // But if it's inside a generic interactive wrapper (like a form or a large div),
+                    // we should probably discard the generic wrapper so we don't end up with overlapping targets.
+                    if (!parentIsDistinct) {
+                        nodesToKeep.delete(interactiveParent);
+                    }
+                } else {
+                    // If the child is not distinctly interactive (e.g., a span or svg),
+                    // and it's inside an interactive parent, we don't need the child as a separate target.
                     nodesToKeep.delete(node);
                 }
             }
