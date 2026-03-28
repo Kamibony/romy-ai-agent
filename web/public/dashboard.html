@@ -265,49 +265,6 @@
                 limit(20)
             );
 
-            // Set up a listener for task_sessions to handle ASK_HUMAN
-            const sessionsQuery = query(
-                collection(db, "task_sessions"),
-                where("uid", "==", uid),
-                where("status", "in", ["help_needed", "AWAITING_HUMAN_INPUT"]),
-                orderBy("created_at", "desc"),
-                limit(1)
-            );
-
-            try {
-                onSnapshot(sessionsQuery, async (snapshot) => {
-                    if (!snapshot.empty) {
-                        const sessionDoc = snapshot.docs[0];
-                        const sessionData = sessionDoc.data();
-                        activeTaskSessionId = sessionDoc.id;
-
-                        // We need to find the corresponding remote_command for this session
-                        const cmdQ = query(
-                            collection(db, "remote_commands"),
-                            where("uid", "==", uid),
-                            where("status", "in", ["help_needed", "AWAITING_HUMAN_INPUT"]),
-                            limit(1)
-                        );
-
-                        const cmdSnap = await getDocs(cmdQ);
-                        if (!cmdSnap.empty) {
-                            const cmdDoc = cmdSnap.docs[0];
-                            activeTaskId = cmdDoc.id;
-                            const cmdData = cmdDoc.data();
-
-                            showAskHumanInterface(sessionData, cmdData);
-                        } else {
-                            // Even if command isn't help_needed, show session info
-                            showAskHumanInterface(sessionData, null);
-                        }
-                    }
-                }, (error) => {
-                    console.warn("Firestore error on sessions: ", error);
-                });
-            } catch (error) {
-                console.error("Error setting up session listener:", error);
-            }
-
             try {
                 unsubscribeActivity = onSnapshot(q, (snapshot) => {
                     if (snapshot.empty) {
@@ -343,6 +300,7 @@
 
                         const command = data.command || "Unknown command";
                         const status = data.status || "unknown";
+                        const telemetry = data.telemetry || "";
 
                         let statusColor = "text-gray-500";
                         if (status === "completed") statusColor = "text-green-600";
@@ -351,16 +309,47 @@
                         if (status === "help_needed" || status === "AWAITING_HUMAN_INPUT") statusColor = "text-orange-600";
                         if (status === "pending") statusColor = "text-yellow-600";
 
-                        html += `<div class="border-b border-gray-100 pb-2 mb-2"><span class="font-semibold text-gray-500">${time}</span> - Command: "${command}" | Status: <span class="${statusColor} font-semibold">${status}</span></div>`;
+                        // Sanitize command text to prevent XSS
+                        const tempDiv = document.createElement('div');
+                        tempDiv.textContent = command;
+                        const sanitizedCommand = tempDiv.innerHTML;
+
+                        let displayMessage = `Command: "${sanitizedCommand}"`;
+                        if (telemetry) {
+                            const tempTele = document.createElement('div');
+                            tempTele.textContent = telemetry;
+                            displayMessage = `<span class="text-indigo-600">[Telemetry]</span> ${tempTele.innerHTML}`;
+                        }
+
+                        html += `<div class="border-b border-gray-100 pb-2 mb-2"><span class="font-semibold text-gray-500">${time}</span> - ${displayMessage} | Status: <span class="${statusColor} font-semibold">${status}</span></div>`;
                     });
                     activityFeed.innerHTML = html;
 
-                    if (foundActionNeeded && !activeTaskSessionId) {
-                        activeTaskId = firstActionNeededId;
-                        activeTaskSessionId = firstActionNeededData.session_id;
-                        showAskHumanInterface(null, firstActionNeededData);
-                    } else if (!foundActionNeeded && activeTaskId && !activeTaskSessionId) {
+                    if (foundActionNeeded) {
+                        if (activeTaskId !== firstActionNeededId) {
+                            activeTaskId = firstActionNeededId;
+                            activeTaskSessionId = null;
+                            showAskHumanInterface(null, firstActionNeededData);
+                        } else {
+                            // Update existing interface if needed (like reason changes or new screenshot)
+                            const inlineReason = document.getElementById('inline-ask-human-reason');
+                            const inlineScreenshot = document.getElementById('inline-ask-human-screenshot');
+                            if (inlineReason) {
+                                let newReason = firstActionNeededData.help_reason || firstActionNeededData.error || "The agent requested human assistance to proceed.";
+                                inlineReason.textContent = `"${newReason}"`;
+                            }
+                            if (inlineScreenshot && firstActionNeededData.screenshot_b64) {
+                                const b64 = firstActionNeededData.screenshot_b64.startsWith('data:') ? firstActionNeededData.screenshot_b64 : `data:image/png;base64,${firstActionNeededData.screenshot_b64}`;
+                                if (inlineScreenshot.src !== b64) {
+                                    inlineScreenshot.src = b64;
+                                    inlineScreenshot.style.display = 'block';
+                                }
+                            }
+                        }
+                    } else if (!foundActionNeeded && activeTaskId) {
                          hideAskHumanInterface();
+                         activeTaskId = null;
+                         activeTaskSessionId = null;
                     }
                 }, (error) => {
                     console.warn("Firestore read error (activity):", error);

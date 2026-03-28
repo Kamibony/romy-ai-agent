@@ -156,6 +156,7 @@
 
                     const command = data.command || "Unknown command";
                     const status = data.status || "unknown";
+                    const telemetry = data.telemetry || "";
 
                     let statusColor = "text-gray-500";
                     if (status === "completed") statusColor = "text-green-600";
@@ -169,7 +170,14 @@
                     tempDiv.textContent = command;
                     const sanitizedCommand = tempDiv.innerHTML;
 
-                    html += `<div class="border-b border-gray-100 pb-2 mb-2"><span class="font-semibold text-gray-500">${time}</span><br>Command: "${sanitizedCommand}"<br>Status: <span class="${statusColor} font-semibold">${status}</span></div>`;
+                    let displayMessage = `Command: "${sanitizedCommand}"`;
+                    if (telemetry) {
+                        const tempTele = document.createElement('div');
+                        tempTele.textContent = telemetry;
+                        displayMessage = `<span class="text-indigo-600">[Telemetry]</span> ${tempTele.innerHTML}`;
+                    }
+
+                    html += `<div class="border-b border-gray-100 pb-2 mb-2"><span class="font-semibold text-gray-500">${time}</span><br>${displayMessage}<br>Status: <span class="${statusColor} font-semibold">${status}</span></div>`;
                 });
                 activityFeed.innerHTML = html;
             }, (error) => {
