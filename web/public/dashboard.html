@@ -152,7 +152,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, query, orderBy, limit, onSnapshot, where, getDocs } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, query, orderBy, limit, onSnapshot, where, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyBF2KBDgfYOzMbdSjFgCrGUygQbFaSfSxI",
@@ -744,7 +744,7 @@
 
                 await setDoc(doc(db, "client_profiles", clientId), {
                     ...profileData,
-                    updatedAt: new Date()
+                    updatedAt: serverTimestamp()
                 });
 
                 saveClientStatus.classList.remove('hidden');
