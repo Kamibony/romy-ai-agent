@@ -61,6 +61,14 @@
                 </div>
             </div>
 
+            <!-- Read-Only Activity Feed (Mobile Mission Control) -->
+            <div id="activity-feed-section" style="display: none;" class="mt-6 border-t pt-4">
+                <h3 class="text-sm font-bold text-gray-700 mb-2">Live Activity</h3>
+                <div id="activity-feed" class="bg-gray-50 border border-gray-200 rounded-lg p-3 overflow-y-auto h-48 text-xs space-y-2 font-mono text-gray-700 shadow-inner">
+                    <p class="text-gray-400 italic text-center mt-4">Waiting for agent activity...</p>
+                </div>
+            </div>
+
             <div id="hitl-section" style="display: none;" class="mt-8 border-t pt-6 space-y-4">
                 <h3 class="text-xl font-semibold text-center text-orange-600">Agent Needs Help</h3>
                 <p id="hitl-reason" class="text-center text-gray-700 font-medium"></p>
@@ -79,7 +87,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
         import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, serverTimestamp, query, where, onSnapshot, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, serverTimestamp, query, where, orderBy, limit, onSnapshot, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyBF2KBDgfYOzMbdSjFgCrGUygQbFaSfSxI",
@@ -115,12 +123,76 @@
         const hitlScreenshot = document.getElementById('hitl-screenshot');
         const hitlInput = document.getElementById('hitl-input');
         const resumeBtn = document.getElementById('resume-btn');
+        const activityFeedSection = document.getElementById('activity-feed-section');
+        const activityFeed = document.getElementById('activity-feed');
 
         let currentUser = null;
         let activeHelpTaskId = null;
+        let activeTaskId = null;
         let isRecording = false;
         let mediaRecorder = null;
         let audioChunks = [];
+        let unsubscribeActivity = null;
+
+        function startActivityListener(uid) {
+            if (unsubscribeActivity) unsubscribeActivity();
+
+            const q = query(
+                collection(db, "remote_commands"),
+                where("uid", "==", uid),
+                orderBy("created_at", "desc"),
+                limit(10)
+            );
+
+            unsubscribeActivity = onSnapshot(q, (snapshot) => {
+                if (snapshot.empty) {
+                    activityFeed.innerHTML = '<p class="text-gray-400 italic text-center mt-4">No activity yet.</p>';
+                    activeTaskId = null;
+                    return;
+                }
+
+                let html = '';
+                let firstTask = true;
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    if (firstTask && ['in_progress', 'pending', 'help_needed', 'AWAITING_HUMAN_INPUT'].includes(data.status)) {
+                        activeTaskId = doc.id;
+                    } else if (firstTask) {
+                        activeTaskId = null;
+                    }
+                    firstTask = false;
+
+                    let time = "Unknown time";
+                    if (data.created_at) {
+                        if (typeof data.created_at.toDate === 'function') {
+                            time = data.created_at.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        } else if (typeof data.created_at === 'string') {
+                            time = new Date(data.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        }
+                    }
+
+                    const command = data.command || "Unknown command";
+                    const status = data.status || "unknown";
+
+                    let statusColor = "text-gray-500";
+                    if (status === "completed") statusColor = "text-green-600";
+                    if (status === "in_progress") statusColor = "text-blue-600";
+                    if (status === "failed") statusColor = "text-red-600";
+                    if (status === "help_needed" || status === "AWAITING_HUMAN_INPUT") statusColor = "text-orange-600";
+                    if (status === "pending") statusColor = "text-yellow-600";
+
+                    // Sanitize command text to prevent XSS
+                    const tempDiv = document.createElement('div');
+                    tempDiv.textContent = command;
+                    const sanitizedCommand = tempDiv.innerHTML;
+
+                    html += `<div class="border-b border-gray-100 pb-2 mb-2"><span class="font-semibold text-gray-500">${time}</span><br>Command: "${sanitizedCommand}"<br>Status: <span class="${statusColor} font-semibold">${status}</span></div>`;
+                });
+                activityFeed.innerHTML = html;
+            }, (error) => {
+                console.warn("Firestore error on activity feed:", error);
+            });
+        }
 
         onAuthStateChanged(auth, (user) => {
             if (user) {
@@ -128,7 +200,9 @@
                 authStatus.textContent = `Signed in as ${user.email}`;
                 loginContainer.style.display = 'none';
                 commandContent.style.display = 'block';
+                activityFeedSection.style.display = 'block';
                 statusMessage.textContent = 'Ready to assist';
+                startActivityListener(user.uid);
             } else {
                 currentUser = null;
                 authStatus.textContent = 'Not signed in.';
@@ -314,19 +388,31 @@
                     throw new Error("Must be logged in to send a command.");
                 }
 
-                const payload = {
-                    status: 'pending',
-                    created_at: serverTimestamp(),
-                    uid: currentUser.uid
-                };
+                // If there's an active task running, and this is a text command, treat it as a Semantic Override
+                if (activeTaskId && commandText && !audioB64) {
+                    statusMessage.textContent = 'Sending Semantic Override...';
+                    const taskRef = doc(db, "remote_commands", activeTaskId);
+                    await updateDoc(taskRef, {
+                        human_response: commandText,
+                        status: 'in_progress'
+                    });
+                    console.log("Semantic override sent for task:", activeTaskId);
+                    statusMessage.textContent = 'Override sent successfully!';
+                } else {
+                    const payload = {
+                        status: 'pending',
+                        created_at: serverTimestamp(),
+                        uid: currentUser.uid
+                    };
 
-                if (commandText) payload.command = commandText;
-                if (audioB64) payload.audio_b64 = audioB64;
+                    if (commandText) payload.command = commandText;
+                    if (audioB64) payload.audio_b64 = audioB64;
 
-                const docRef = await addDoc(collection(db, "remote_commands"), payload);
-                console.log("Document written with ID: ", docRef.id);
+                    const docRef = await addDoc(collection(db, "remote_commands"), payload);
+                    console.log("Document written with ID: ", docRef.id);
+                    statusMessage.textContent = 'Command sent successfully!';
+                }
 
-                statusMessage.textContent = 'Command sent successfully!';
                 statusMessage.className = 'text-center text-sm mt-2 font-medium text-green-600 block font-bold';
                 commandInput.value = ''; // Clear input on success
 

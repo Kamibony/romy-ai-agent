@@ -188,7 +188,11 @@ def firestore_update_document(collection: str, doc_id: str, updates: Dict[str, A
     for key, val in updates.items():
         update_mask.append(key)
         if isinstance(val, str):
-            fields[key] = {"stringValue": val}
+            # Ensure correct formatting for created_at to avoid schema mismatches
+            if key == "created_at" and val.endswith("Z"):
+                fields[key] = {"timestampValue": val}
+            else:
+                fields[key] = {"stringValue": val}
         elif isinstance(val, bool):
             fields[key] = {"booleanValue": val}
         elif isinstance(val, int):
@@ -840,7 +844,9 @@ class AgentStateMachine:
         logging.info(f"=== Remote Agent Activated for Document: {doc_id} ===")
         from local_bridge import bridge
 
+        loop_counter = 0
         while self.state != AgentState.TERMINATED:
+            loop_counter += 1
             if ABORT_AGENT:
                 logging.info("Emergency abort triggered. Stopping state machine.")
                 self.state = AgentState.TERMINATED
@@ -848,6 +854,30 @@ class AgentStateMachine:
             if PAUSE_AGENT:
                 await asyncio.sleep(1)
                 continue
+
+            # Check if there is a manual human_response update via Firebase (for mobile semantic interrupts)
+            if self.doc_id and loop_counter % 20 == 0:  # Check every ~2 seconds
+                try:
+                    doc_data = firestore_get_document("remote_commands", self.doc_id)
+                    if doc_data and doc_data.get("human_response"):
+                        human_resp = doc_data.get("human_response")
+                        logging.info(f"Detected semantic guidance from Firestore: {human_resp}")
+                        # Process the human response as an interrupt
+                        self.hitl_action = {"type": "SEMANTIC", "xpath": human_resp}
+
+                        # Only interrupt if we are actively executing, otherwise it's just handled when suspended
+                        if self.state != AgentState.SUSPENDED_HITL:
+                            self.interrupt_event.set()
+                        else:
+                            self.hitl_event.set()
+
+                        # Clear it from Firestore
+                        try:
+                            firestore_update_document("remote_commands", self.doc_id, {}, delete_fields=["human_response"])
+                        except Exception as e:
+                            logging.error(f"Failed to clear human_response: {e}")
+                except Exception as e:
+                    logging.error(f"Error checking for semantic interrupts: {e}")
 
             if self.interrupt_event.is_set():
                 logging.info("Asynchronous semantic interrupt detected!")
@@ -1402,10 +1432,15 @@ def execute_voice_agent_loop() -> None:
 
             # Create or ensure the document exists
             try:
-                firestore_update_document("remote_commands", doc_id, {
+                uid = _get_uid_from_token()
+                payload = {
                     "status": "in_progress",
                     "command": "voice command"
-                })
+                }
+                if uid:
+                    payload["uid"] = uid
+                    payload["created_at"] = datetime.utcnow().isoformat() + "Z"
+                firestore_update_document("remote_commands", doc_id, payload)
             except Exception as e:
                 logging.error(f"Error setting up voice session document: {e}")
 
@@ -1757,10 +1792,15 @@ def execute_voice_agent_loop() -> None:
         # Create or ensure the document exists
         try:
             # For set with merge = true using REST we can just patch
-            firestore_update_document("remote_commands", doc_id, {
+            uid = _get_uid_from_token()
+            payload = {
                 "status": "in_progress",
                 "command": "voice command"
-            })
+            }
+            if uid:
+                payload["uid"] = uid
+                payload["created_at"] = datetime.utcnow().isoformat() + "Z"
+            firestore_update_document("remote_commands", doc_id, payload)
         except Exception as e:
             logging.error(f"Error setting up voice session document: {e}")
 
