@@ -663,22 +663,32 @@ def evaluate_plan_progress(command_text: str, current_sub_task: str, remaining_p
 
     url = config.EVALUATE_PLAN_PROGRESS_ENDPOINT
 
+    # Trim UI elements heavily to reduce payload and backend memory pressure
+    trimmed_ui = []
+    for el in ui_elements[:50]:
+        trimmed_ui.append({
+            "target_id": el.get("target_id", el.get("id")),
+            "type": el.get("type", ""),
+            "text": str(el.get("text", ""))[:50]
+        })
+
     payload = {
         "command_text": command_text,
         "current_sub_task": current_sub_task,
         "remaining_plan": remaining_plan,
         "screenshot_base64": screenshot_base64,
-        "ui_elements": ui_elements
+        "ui_elements": trimmed_ui
     }
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
     try:
-        session = get_resilient_session()
-        response = session.post(url, json=payload, headers=headers, timeout=(10, 45))
+        # Use standard session without backoff so we fail fast and gracefully
+        session = requests.Session()
+        response = session.post(url, json=payload, headers=headers, timeout=(10, 20))
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        logging.error(f"Error in evaluate plan progress: {e}")
-        return {"is_accomplished": False, "reason": str(e)}
+        logging.error(f"Graceful fallback in evaluate_plan_progress: {e}. Defaulting to not accomplished.")
+        return {"is_accomplished": False, "reason": f"Local graceful fallback due to error: {e}"}
 
 def verify_action_natively(action, before_state, after_state):
     from urllib.parse import urlparse
