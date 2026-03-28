@@ -116,21 +116,28 @@ def supervisor_plan(request: SupervisorPlanRequest, uid: str = Depends(verify_fi
 def evaluate_plan_progress(request: EvaluatePlanProgressRequest, uid: str = Depends(verify_firebase_token)):
     """
     Endpoint to evaluate if a sub-task is already accomplished based on the current DOM/vision state.
+    Gracefully catches any internal errors and returns 200 with is_accomplished=False to prevent client-side infinite retry loops.
     """
-    if not check_user_license(uid):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User license is not active.",
-        )
+    try:
+        if not check_user_license(uid):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User license is not active.",
+            )
 
-    result = evaluate_plan_progress_with_gemini(
-        request.command_text,
-        request.current_sub_task,
-        request.remaining_plan,
-        request.screenshot_base64,
-        request.ui_elements
-    )
-    return result
+        result = evaluate_plan_progress_with_gemini(
+            request.command_text,
+            request.current_sub_task,
+            request.remaining_plan,
+            request.screenshot_base64,
+            request.ui_elements
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Graceful fallback in evaluate_plan_progress due to error: {e}")
+        return {"is_accomplished": False, "reason": f"Backend fallback due to error: {str(e)}"}
 
 @app.get("/api/playbook_rules")
 def fetch_playbook_rules(domain: str, client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token)):
