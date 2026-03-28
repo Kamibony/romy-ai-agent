@@ -715,13 +715,10 @@ async function handleExecuteNativeAction(payload) {
         } else if (actionType === 'PRESS_ENTER') {
             sendTelemetryLog(`Executing PRESS_ENTER action`);
 
-            // Use the same fallback mapping logic
-            const keyData = { text: '\r', unmodifiedText: '\r', keyIdentifier: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
+            const keyData = { keyIdentifier: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
 
             await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchKeyEvent", {
                 type: "keyDown",
-                text: keyData.text,
-                unmodifiedText: keyData.unmodifiedText,
                 keyIdentifier: keyData.keyIdentifier,
                 code: keyData.code,
                 windowsVirtualKeyCode: keyData.windowsVirtualKeyCode,
@@ -772,23 +769,28 @@ async function handleExecuteNativeAction(payload) {
 
             // Map common names to CDP key names if necessary. Playwright often sends 'Enter', 'Escape', 'Tab', etc.
             const keyToCode = {
-                'Enter': { text: '\r', unmodifiedText: '\r', keyIdentifier: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 },
-                'Escape': { text: '', unmodifiedText: '', keyIdentifier: 'U+001B', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 },
-                'Tab': { text: '\t', unmodifiedText: '\t', keyIdentifier: 'U+0009', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 },
-                'Backspace': { text: '', unmodifiedText: '', keyIdentifier: 'U+0008', code: 'Backspace', windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8 }
+                'Enter': { isControl: true, keyIdentifier: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 },
+                'Escape': { isControl: true, keyIdentifier: 'U+001B', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 },
+                'Tab': { isControl: true, keyIdentifier: 'U+0009', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 },
+                'Backspace': { isControl: true, keyIdentifier: 'U+0008', code: 'Backspace', windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8 }
             };
 
             const keyData = keyToCode[key] || { text: key, unmodifiedText: key, keyIdentifier: key, code: key, windowsVirtualKeyCode: 0, nativeVirtualKeyCode: 0 };
 
-            await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchKeyEvent", {
+            const keyDownPayload = {
                 type: "keyDown",
-                text: keyData.text,
-                unmodifiedText: keyData.unmodifiedText,
                 keyIdentifier: keyData.keyIdentifier,
                 code: keyData.code,
                 windowsVirtualKeyCode: keyData.windowsVirtualKeyCode,
                 nativeVirtualKeyCode: keyData.nativeVirtualKeyCode
-            });
+            };
+
+            if (!keyData.isControl) {
+                keyDownPayload.text = keyData.text;
+                keyDownPayload.unmodifiedText = keyData.unmodifiedText;
+            }
+
+            await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchKeyEvent", keyDownPayload);
 
             await new Promise(r => setTimeout(r, 50));
 
@@ -843,12 +845,10 @@ async function handleExecuteNativeAction(payload) {
         } else if (actionType === 'RESET_VIEW') {
             sendTelemetryLog(`Executing RESET_VIEW action`);
 
-            const keyData = { text: '', unmodifiedText: '', keyIdentifier: 'U+001B', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 };
+            const keyData = { keyIdentifier: 'U+001B', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 };
 
             await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchKeyEvent", {
                 type: "keyDown",
-                text: keyData.text,
-                unmodifiedText: keyData.unmodifiedText,
                 keyIdentifier: keyData.keyIdentifier,
                 code: keyData.code,
                 windowsVirtualKeyCode: keyData.windowsVirtualKeyCode,
