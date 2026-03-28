@@ -11,6 +11,7 @@ if BACKEND_BASE_URL.endswith('/'):
 GET_COMMAND_ENDPOINT = f"{BACKEND_BASE_URL}/api/v1/agent/command"
 PRE_FLIGHT_ENDPOINT = f"{BACKEND_BASE_URL}/api/pre_flight"
 SUPERVISOR_PLAN_ENDPOINT = f"{BACKEND_BASE_URL}/api/supervisor_plan"
+EVALUATE_PLAN_PROGRESS_ENDPOINT = f"{BACKEND_BASE_URL}/api/evaluate_plan_progress"
 CRITIC_VERIFY_ENDPOINT = f"{BACKEND_BASE_URL}/api/critic_verify"
 CLASSIFY_INTENT_ENDPOINT = f"{BACKEND_BASE_URL}/api/classify_intent"
 SYNTHESIZE_PLAYBOOK_ENDPOINT = f"{BACKEND_BASE_URL}/api/synthesize_playbook"

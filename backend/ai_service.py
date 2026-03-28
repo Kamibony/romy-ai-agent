@@ -136,6 +136,70 @@ def supervisor_plan_with_gemini(command_text: str) -> list[str]:
         return []
 
 
+def evaluate_plan_progress_with_gemini(command_text: str, current_sub_task: str, remaining_plan: list[str], screenshot_base64: str, ui_elements: list[Dict[str, Any]]) -> dict:
+    """
+    Evaluates if the current sub-task is already accomplished based on the current UI state.
+    """
+    if gemini_client is None:
+        return {"is_accomplished": False, "reason": "Gemini client not initialized"}
+
+    system_instruction = (
+        "You are a State Evaluation Agent. Your job is to analyze the current visual and structural state of a UI "
+        "and determine if the 'Current Sub-Task' has ALREADY been successfully accomplished. "
+        "For example, if the sub-task is 'Search for YouTube videos' and the current screen already shows YouTube search results for the query, "
+        "you must mark it as accomplished. If the sub-task is 'Navigate to pelikan.cz' and the browser is already on pelikan.cz, it is accomplished.\n\n"
+        "Output strictly a JSON object with a boolean 'is_accomplished' and a string 'reason' explaining why."
+    )
+
+    prompt = (
+        f"Overall Command: {command_text}\n\n"
+        f"Current Sub-Task to evaluate: {current_sub_task}\n\n"
+        f"Remaining Plan:\n{json.dumps(remaining_plan, indent=2)}\n\n"
+        f"Current UI Elements:\n{json.dumps(ui_elements[:50], indent=2)}\n\n"
+    )
+
+    contents = []
+
+    if screenshot_base64:
+        try:
+            if "," in screenshot_base64:
+                _, screenshot_base64 = screenshot_base64.split(",", 1)
+            img_data = base64.b64decode(screenshot_base64)
+            contents.append("Current State Screenshot:")
+            contents.append(
+                types.Part.from_bytes(
+                    data=img_data,
+                    mime_type="image/webp"
+                )
+            )
+        except Exception as e:
+            pass
+
+    contents.append(prompt)
+
+    try:
+        response = gemini_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.0,
+                response_mime_type="application/json",
+                response_schema=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "is_accomplished": types.Schema(type=types.Type.BOOLEAN),
+                        "reason": types.Schema(type=types.Type.STRING),
+                    },
+                    required=["is_accomplished", "reason"]
+                )
+            )
+        )
+        return json.loads(response.text.strip())
+    except Exception as e:
+        print(f"Error in evaluate_plan_progress: {e}")
+        return {"is_accomplished": False, "reason": str(e)}
+
 def _run_critic_verification(sub_task: str, action_taken: dict, before_state: dict, after_state: dict, include_images: bool) -> dict:
     if gemini_client is None:
         return {"success": False, "reason": "Gemini client not initialized"}
