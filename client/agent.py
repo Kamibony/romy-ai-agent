@@ -188,8 +188,11 @@ def firestore_update_document(collection: str, doc_id: str, updates: Dict[str, A
     for key, val in updates.items():
         update_mask.append(key)
         if isinstance(val, str):
-            # Ensure correct formatting for created_at to avoid schema mismatches
-            if key == "created_at" and val.endswith("Z"):
+            # Universally format ISO 8601 strings to timestampValue to enforce strict schema consistency
+            if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?$", val):
+                # Firestore REST requires 'Z' at the end for UTC timestamps
+                if not val.endswith("Z"):
+                    val += "Z"
                 fields[key] = {"timestampValue": val}
             else:
                 fields[key] = {"stringValue": val}
@@ -269,6 +272,8 @@ def firestore_get_document(collection: str, doc_id: str) -> Dict[str, Any]:
         for key, val_dict in fields.items():
             if "stringValue" in val_dict:
                 result[key] = val_dict["stringValue"]
+            elif "timestampValue" in val_dict:
+                result[key] = val_dict["timestampValue"]
             elif "booleanValue" in val_dict:
                 result[key] = val_dict["booleanValue"]
             elif "integerValue" in val_dict:
