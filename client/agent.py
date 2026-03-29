@@ -1275,6 +1275,18 @@ class AgentStateMachine:
              logging.info(f"Executing Macro-Action {action_idx + 1}/{len(self.actions_to_execute)}: {action_to_take.get('action')}")
              action_type = action_to_take.get("action")
 
+             # Enrich action with fallback selectors if target_id is present
+             if "target_id" in action_to_take:
+                 target_id = str(action_to_take["target_id"])
+                 for el in self.current_ui_elements:
+                     # target_id might be under 'id' or 'target_id'
+                     if str(el.get("target_id", el.get("id", ""))) == target_id:
+                         if "xpath" in el:
+                             action_to_take["fallback_xpath"] = el["xpath"]
+                         if "css_selector" in el:
+                             action_to_take["fallback_css"] = el["css_selector"]
+                         break
+
              exec_payload = {"action_type": "EXECUTE_ACTION", "action": action_to_take, "iteration": self.iteration}
              exec_result = bridge.delegate_command(exec_payload)
 
@@ -1742,6 +1754,17 @@ def execute_voice_agent_loop() -> None:
                             if not isinstance(act, dict):
                                 logging.warning(f"Skipping invalid action type: {type(act)}")
                                 continue
+
+                            # Enrich action with fallback selectors if target_id is present
+                            if "target_id" in act:
+                                target_id = str(act["target_id"])
+                                for el in ui_elements:
+                                    if str(el.get("target_id", el.get("id", ""))) == target_id:
+                                        if "xpath" in el:
+                                            act["fallback_xpath"] = el["xpath"]
+                                        if "css_selector" in el:
+                                            act["fallback_css"] = el["css_selector"]
+                                        break
 
                             action_type = act.get("action", "")
                             action_upper = str(action_type).upper()
