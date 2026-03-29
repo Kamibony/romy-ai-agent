@@ -92,6 +92,39 @@ window.RomyDomMapper = {
             return '';
         }
 
+        function getAncestryContext(el) {
+            const path = [];
+            let current = el.parentElement;
+            let depth = 0;
+            const maxDepth = 5;
+
+            while (current && current.tagName !== 'BODY' && current.tagName !== 'HTML' && depth < maxDepth) {
+                const tagName = current.tagName.toLowerCase();
+
+                // Prioritize explicit structural and testing identifiers
+                const id = current.id ? `#${current.id}` : '';
+                const testId = current.getAttribute('data-testid') ? `[data-testid="${current.getAttribute('data-testid')}"]` : '';
+                const role = current.getAttribute('role') ? `[role="${current.getAttribute('role')}"]` : '';
+
+                // Add common structural semantic tags
+                const isSemantic = ['nav', 'header', 'footer', 'main', 'aside', 'section', 'article', 'form', 'ul', 'li', 'dialog'].includes(tagName);
+
+                if (id || testId || role || isSemantic) {
+                    let descriptor = tagName;
+                    if (id) descriptor += id;
+                    if (testId) descriptor += testId;
+                    if (!id && !testId && role) descriptor += role;
+
+                    path.unshift(descriptor);
+                    depth++;
+                }
+
+                current = current.parentElement;
+            }
+
+            return path.join(' > ');
+        }
+
         function getCssSelector(el) {
             if (!el) return '';
             if (el.tagName.toLowerCase() == 'html') return 'HTML';
@@ -260,6 +293,7 @@ window.RomyDomMapper = {
                     text: textContent,
                     xpath: getXPath(node),
                     css_selector: getCssSelector(node),
+                    ancestry: getAncestryContext(node),
                     // Optionally calculate center coordinates if needed for fallback
                     bounds: {
                         x: rect.x,
