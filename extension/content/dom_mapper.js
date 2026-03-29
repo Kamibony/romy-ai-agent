@@ -92,6 +92,30 @@ window.RomyDomMapper = {
             return '';
         }
 
+        function getCssSelector(el) {
+            if (!el) return '';
+            if (el.tagName.toLowerCase() == 'html') return 'HTML';
+            let str = el.tagName;
+            str += (el.id != '') ? '#' + el.id : '';
+            if (el.className) {
+                let classes = '';
+                if (typeof el.className === 'string') {
+                    classes = el.className;
+                } else if (el.className && el.className.baseVal) {
+                    classes = el.className.baseVal;
+                }
+                if (classes) {
+                    let classesArr = classes.split(/\s+/).filter(Boolean);
+                    for (let i = 0; i < classesArr.length; i++) {
+                        // avoid dynamically generated classes if possible
+                        if (!classesArr[i].match(/^[a-zA-Z0-9-_]+$/)) continue;
+                        str += '.' + classesArr[i];
+                    }
+                }
+            }
+            return str;
+        }
+
         let allNodes = getAllNodes(document);
 
         // De-noising: remove nodes that are just large wrappers (e.g. > 50% of viewport)
@@ -235,6 +259,7 @@ window.RomyDomMapper = {
                     type: node.tagName.toLowerCase(),
                     text: textContent,
                     xpath: getXPath(node),
+                    css_selector: getCssSelector(node),
                     // Optionally calculate center coordinates if needed for fallback
                     bounds: {
                         x: rect.x,

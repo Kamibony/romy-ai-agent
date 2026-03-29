@@ -605,13 +605,58 @@ async function handleExecuteNativeAction(payload) {
         });
         const dpr = evalResult?.result?.value || 1;
 
+        // Helper function for JIT target locating
+        const getRealTimeCoordinates = async (targetId, fallbackXpath, fallbackCss) => {
+            // Escape quotes in selectors to prevent eval errors
+            const safeXpath = fallbackXpath ? fallbackXpath.replace(/"/g, '\\"') : '';
+            const safeCss = fallbackCss ? fallbackCss.replace(/"/g, '\\"') : '';
+
+            let evalExpr = `
+                (function() {
+                    let el = document.querySelector('[data-romy-id="${targetId}"]');
+                    if (!el && "${safeXpath}") {
+                        try {
+                            el = document.evaluate("${safeXpath}", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                        } catch(e) {}
+                    }
+                    if (!el && "${safeCss}") {
+                        try {
+                            el = document.querySelector("${safeCss}");
+                        } catch(e) {}
+                    }
+                    if (el) {
+                        const rect = el.getBoundingClientRect();
+                        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, found: true };
+                    }
+                    return { found: false };
+                })()
+            `;
+            const evalResult = await cdpManager.sendCommand(activeSessionTabId, "Runtime.evaluate", {
+                expression: evalExpr,
+                returnByValue: true
+            });
+            return evalResult?.result?.value;
+        };
+
         if (actionType === 'CLICK') {
-            const coords = actionData.coordinates;
-            if (!coords || coords.length < 2) {
-                return { success: false, error: "Coordinates missing for action CLICK" };
+            let rawX, rawY;
+            if (actionData.target_id) {
+                sendTelemetryLog(`JIT locating target_id: ${actionData.target_id}`);
+                const coords = await getRealTimeCoordinates(actionData.target_id, actionData.fallback_xpath || '', actionData.fallback_css || '');
+                if (!coords || !coords.found) {
+                    return { success: false, error: `Could not locate target_id ${actionData.target_id} in DOM (even with fallbacks)` };
+                }
+                rawX = coords.x;
+                rawY = coords.y;
+                sendTelemetryLog(`Target located at raw coords: (${rawX}, ${rawY})`);
+            } else {
+                const coords = actionData.coordinates;
+                if (!coords || coords.length < 2) {
+                    return { success: false, error: "Coordinates missing for action CLICK" };
+                }
+                rawX = coords[0];
+                rawY = coords[1];
             }
-            const rawX = coords[0];
-            const rawY = coords[1];
 
             // Trap C: Device Pixel Ratio Scaling
             const x = Math.round(rawX * dpr);
@@ -671,11 +716,26 @@ async function handleExecuteNativeAction(payload) {
 
             sendTelemetryLog(`Typing text: ${text}`);
 
-            // Trap B: The "Blind Typist". If coordinates are provided, click first to gain focus.
-            if (actionData.coordinates && actionData.coordinates.length >= 2) {
+            // Trap B: The "Blind Typist". If coordinates/target_id are provided, click first to gain focus.
+            let rawX, rawY;
+            let focusFound = false;
+
+            if (actionData.target_id) {
+                sendTelemetryLog(`JIT locating target_id: ${actionData.target_id} for TYPE focus`);
+                const coords = await getRealTimeCoordinates(actionData.target_id, actionData.fallback_xpath || '', actionData.fallback_css || '');
+                if (coords && coords.found) {
+                    rawX = coords.x;
+                    rawY = coords.y;
+                    focusFound = true;
+                }
+            } else if (actionData.coordinates && actionData.coordinates.length >= 2) {
+                rawX = actionData.coordinates[0];
+                rawY = actionData.coordinates[1];
+                focusFound = true;
+            }
+
+            if (focusFound) {
                 // Trap C: Device Pixel Ratio Scaling
-                const rawX = actionData.coordinates[0];
-                const rawY = actionData.coordinates[1];
                 const x = Math.round(rawX * dpr);
                 const y = Math.round(rawY * dpr);
 
