@@ -185,11 +185,46 @@ window.RomyDomMapper = {
                 node.setAttribute('data-romy-id', uniqueId);
 
                 // Build standard JSON schema expected by the Backend AI Execution Layer
-                let textContent = node.innerText || node.value || node.getAttribute('aria-label') || node.getAttribute('placeholder') || node.title || node.name || node.alt || "";
+
+                // Aggressive A11y Extraction for Icon-Only Target Blindness
+                let a11yLabel = node.getAttribute('aria-label') || node.getAttribute('title') || node.getAttribute('alt') || node.name || node.getAttribute('placeholder') || "";
+
+                // If it's an SVG or contains an SVG, try to extract the <title> tag
+                if (!a11yLabel && (node.tagName.toLowerCase() === 'svg' || node.querySelector('svg'))) {
+                    const svgNode = node.tagName.toLowerCase() === 'svg' ? node : node.querySelector('svg');
+                    const titleNode = svgNode.querySelector('title');
+                    if (titleNode) {
+                        a11yLabel = titleNode.textContent;
+                    }
+                }
+
+                // If aria-labelledby is present, try to find the linked element's text
+                if (!a11yLabel && node.hasAttribute('aria-labelledby')) {
+                    const labelledBy = node.getAttribute('aria-labelledby');
+                    const labelElement = document.getElementById(labelledBy);
+                    if (labelElement) {
+                        a11yLabel = labelElement.textContent;
+                    }
+                }
+
+                let textContent = node.innerText || node.value || "";
+
                 if (typeof textContent === 'string') {
                     textContent = textContent.trim();
                 } else {
                     textContent = String(textContent).trim();
+                }
+
+                if (typeof a11yLabel === 'string') {
+                    a11yLabel = a11yLabel.trim();
+                } else {
+                    a11yLabel = String(a11yLabel).trim();
+                }
+
+                if (a11yLabel && a11yLabel !== textContent) {
+                    textContent = `[A11y: ${a11yLabel}] ${textContent}`.trim();
+                } else if (!textContent && a11yLabel) {
+                    textContent = `[A11y: ${a11yLabel}]`;
                 }
 
                 const centerX = rect.x + (rect.width / 2);

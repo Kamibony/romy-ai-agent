@@ -502,7 +502,44 @@ async function handleGetState(payload) {
         }
     }
 
-    // 2. Capture Clean Screenshot Natively via CDP and Extract UI Elements
+    // 2. Universal UI Quiescence (Wait for SPA Hydration to Settle)
+    sendTelemetryLog(`Waiting for UI Quiescence (DOM stabilization) on tab ${tab.id}...`);
+    try {
+        await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => {
+                return new Promise((resolve) => {
+                    const maxTimeout = 5000;
+                    const debounceMs = 500;
+
+                    let timeoutId;
+                    let debounceId;
+
+                    const settle = () => {
+                        observer.disconnect();
+                        clearTimeout(timeoutId);
+                        clearTimeout(debounceId);
+                        resolve('settled');
+                    };
+
+                    const observer = new MutationObserver(() => {
+                        clearTimeout(debounceId);
+                        debounceId = setTimeout(settle, debounceMs);
+                    });
+
+                    observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+
+                    debounceId = setTimeout(settle, debounceMs);
+                    timeoutId = setTimeout(settle, maxTimeout);
+                });
+            }
+        });
+        sendTelemetryLog(`UI stabilized.`);
+    } catch (qErr) {
+        sendTelemetryLog(`Warning: UI Quiescence script failed: ${qErr.message}. Proceeding anyway.`);
+    }
+
+    // 3. Capture Clean Screenshot Natively via CDP and Extract UI Elements
     sendTelemetryLog(`Capturing pure screenshot via CDP for tab ${tab.id}...`);
     let screenshotBase64 = null;
     let uiElements = [];
