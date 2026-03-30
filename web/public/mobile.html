@@ -51,6 +51,11 @@
                     <textarea id="command-input" rows="2" class="block w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-lg border p-3 resize-none" placeholder="Or type a command..."></textarea>
                 </div>
 
+                <div class="flex items-center space-x-2">
+                    <input type="checkbox" id="force-new-task" class="h-5 w-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                    <label for="force-new-task" class="text-sm font-medium text-gray-700">Force new task</label>
+                </div>
+
                 <div class="flex space-x-4">
                     <button id="execute-btn" class="flex-1 py-3 px-4 border border-transparent rounded-lg shadow-sm text-lg font-bold text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150 ease-in-out">
                         Submit
@@ -94,6 +99,7 @@
         const commandInput = document.getElementById('command-input');
         const executeBtn = document.getElementById('execute-btn');
         const statusMessage = document.getElementById('status-message');
+        const forceNewTaskCheckbox = document.getElementById('force-new-task');
 
         const loginContainer = document.getElementById('login-container');
         const btnLogin = document.getElementById('btn-login');
@@ -139,7 +145,7 @@
                 let firstTask = true;
                 snapshot.forEach((doc) => {
                     const data = doc.data();
-                    if (firstTask && ['in_progress', 'pending', 'help_needed', 'AWAITING_HUMAN_INPUT'].includes(data.status)) {
+                    if (firstTask && ['help_needed', 'AWAITING_HUMAN_INPUT'].includes(data.status)) {
                         activeTaskId = doc.id;
                     } else if (firstTask) {
                         activeTaskId = null;
@@ -331,8 +337,10 @@
                     throw new Error("Must be logged in to send a command.");
                 }
 
+                const forceNew = forceNewTaskCheckbox.checked;
+
                 // If there's an active task running, and this is a text command, treat it as a Semantic Override
-                if (activeTaskId && commandText && !audioB64) {
+                if (activeTaskId && commandText && !audioB64 && !forceNew) {
                     statusMessage.textContent = 'Sending Semantic Override...';
                     const taskRef = doc(db, "remote_commands", activeTaskId);
                     await updateDoc(taskRef, {
@@ -358,6 +366,7 @@
 
                 statusMessage.className = 'text-center text-sm mt-2 font-medium text-green-600 block font-bold';
                 commandInput.value = ''; // Clear input on success
+                forceNewTaskCheckbox.checked = false; // Reset checkbox
 
                 setTimeout(() => {
                     statusMessage.textContent = 'Ready to assist';
