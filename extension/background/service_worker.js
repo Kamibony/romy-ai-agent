@@ -569,9 +569,16 @@ async function handleGetState(payload) {
     sendTelemetryLog(`Capturing pure screenshot via CDP for tab ${tab.id}...`);
     let screenshotBase64 = null;
     let uiElements = [];
+    let dpr = 1.0;
 
     try {
         await cdpManager.attach(tab.id);
+
+        // Fetch Device Pixel Ratio to properly scale coordinates/image bounds
+        const dprResult = await cdpManager.sendCommand(tab.id, "Runtime.evaluate", {
+            expression: "window.devicePixelRatio"
+        });
+        dpr = dprResult?.result?.value || 1.0;
 
         // Optimizing screenshot by requesting a scaled down image directly from CDP
         // to reduce base64 transfer time overhead
@@ -614,7 +621,7 @@ async function handleGetState(payload) {
         await cdpManager.detach(tab.id);
     }
 
-    return { success: true, ui_elements: uiElements, screenshot_base64: screenshotBase64, tabId: tab.id, url: tab.url };
+    return { success: true, ui_elements: uiElements, screenshot_base64: screenshotBase64, tabId: tab.id, url: tab.url, dpr: dpr };
 }
 
 async function handleExecuteNativeAction(payload) {
@@ -671,28 +678,29 @@ async function handleExecuteNativeAction(payload) {
         };
 
         if (actionType === 'CLICK') {
-            let rawX, rawY;
+            let x, y;
             if (actionData.target_id) {
                 sendTelemetryLog(`JIT locating target_id: ${actionData.target_id}`);
                 const coords = await getRealTimeCoordinates(actionData.target_id, actionData.fallback_xpath || '', actionData.fallback_css || '');
                 if (!coords || !coords.found) {
                     return { success: false, error: `Could not locate target_id ${actionData.target_id} in DOM (even with fallbacks)` };
                 }
-                rawX = coords.x;
-                rawY = coords.y;
-                sendTelemetryLog(`Target located at raw coords: (${rawX}, ${rawY})`);
+                // JIT provides CSS pixels
+                x = coords.x;
+                y = coords.y;
+                sendTelemetryLog(`Target located at CSS coords: (${x}, ${y})`);
             } else {
                 const coords = actionData.coordinates;
                 if (!coords || coords.length < 2) {
                     return { success: false, error: "Coordinates missing for action CLICK" };
                 }
-                rawX = coords[0];
-                rawY = coords[1];
+                // LLM outputs coordinates based on scaled physical image, so we divide by DPR to get CSS pixels
+                x = coords[0] / dpr;
+                y = coords[1] / dpr;
             }
 
-            // Trap C: Device Pixel Ratio Scaling
-            const x = Math.round(rawX * dpr);
-            const y = Math.round(rawY * dpr);
+            x = Math.round(x);
+            y = Math.round(y);
 
             // Draw a red dot for HITL feedback before clicking (using CSS pixels)
             try {
@@ -701,8 +709,8 @@ async function handleExecuteNativeAction(payload) {
                         (function() {
                             const dot = document.createElement('div');
                             dot.style.position = 'fixed';
-                            dot.style.left = '${rawX}px';
-                            dot.style.top = '${rawY}px';
+                            dot.style.left = '${x}px';
+                            dot.style.top = '${y}px';
                             dot.style.width = '10px';
                             dot.style.height = '10px';
                             dot.style.backgroundColor = 'rgba(255, 0, 0, 0.7)';
@@ -749,27 +757,26 @@ async function handleExecuteNativeAction(payload) {
             sendTelemetryLog(`Typing text: ${text}`);
 
             // Trap B: The "Blind Typist". If coordinates/target_id are provided, click first to gain focus.
-            let rawX, rawY;
+            let x, y;
             let focusFound = false;
 
             if (actionData.target_id) {
                 sendTelemetryLog(`JIT locating target_id: ${actionData.target_id} for TYPE focus`);
                 const coords = await getRealTimeCoordinates(actionData.target_id, actionData.fallback_xpath || '', actionData.fallback_css || '');
                 if (coords && coords.found) {
-                    rawX = coords.x;
-                    rawY = coords.y;
+                    x = coords.x;
+                    y = coords.y;
                     focusFound = true;
                 }
             } else if (actionData.coordinates && actionData.coordinates.length >= 2) {
-                rawX = actionData.coordinates[0];
-                rawY = actionData.coordinates[1];
+                x = actionData.coordinates[0] / dpr;
+                y = actionData.coordinates[1] / dpr;
                 focusFound = true;
             }
 
             if (focusFound) {
-                // Trap C: Device Pixel Ratio Scaling
-                const x = Math.round(rawX * dpr);
-                const y = Math.round(rawY * dpr);
+                x = Math.round(x);
+                y = Math.round(y);
 
                 // Draw a red dot for HITL feedback before typing focus click (using CSS pixels)
                 try {
@@ -777,15 +784,15 @@ async function handleExecuteNativeAction(payload) {
                         expression: `
                             (function() {
                                 // Attempt to focus the element directly under the coordinates BEFORE appending dot
-                                const el = document.elementFromPoint(${rawX}, ${rawY});
+                                const el = document.elementFromPoint(${x}, ${y});
                                 if (el && typeof el.focus === 'function') {
                                     el.focus();
                                 }
 
                                 const dot = document.createElement('div');
                                 dot.style.position = 'fixed';
-                                dot.style.left = '${rawX}px';
-                                dot.style.top = '${rawY}px';
+                                dot.style.left = '${x}px';
+                                dot.style.top = '${y}px';
                                 dot.style.width = '10px';
                                 dot.style.height = '10px';
                                 dot.style.backgroundColor = 'rgba(0, 0, 255, 0.7)'; // Blue for type focus
@@ -968,11 +975,8 @@ async function handleExecuteNativeAction(payload) {
             if (!coords || coords.length < 2) {
                 return { success: false, error: "Coordinates missing for action HOVER" };
             }
-            const rawX = coords[0];
-            const rawY = coords[1];
-
-            const x = Math.round(rawX * dpr);
-            const y = Math.round(rawY * dpr);
+            const x = Math.round(coords[0] / dpr);
+            const y = Math.round(coords[1] / dpr);
 
             await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", {
                 type: "mouseMoved",

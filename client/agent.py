@@ -561,7 +561,7 @@ def annotate_image_with_crosshair(base64_img: str, x: int, y: int) -> str:
         logging.error(f"Failed to apply crosshair annotation: {e}")
         return base64_img
 
-def annotate_image_with_som(base64_img: str, ui_elements: list) -> str:
+def annotate_image_with_som(base64_img: str, ui_elements: list, dpr: float = 1.0) -> str:
     """Draws Set-of-Mark numbered bounding boxes over interactive elements."""
     try:
         if base64_img.startswith('data:image'):
@@ -581,11 +581,26 @@ def annotate_image_with_som(base64_img: str, ui_elements: list) -> str:
 
         for el in ui_elements:
             box = el.get("bounds")
-            target_id = el.get("target_id")
+            target_id = el.get("target_id", el.get("id"))
 
             if box and target_id is not None:
                 try:
-                    x, y, width, height = map(int, box)
+                    if isinstance(box, dict):
+                        bx = box.get("x", 0)
+                        by = box.get("y", 0)
+                        bwidth = box.get("width", 0)
+                        bheight = box.get("height", 0)
+                    elif isinstance(box, list) and len(box) == 4:
+                        bx, by, bwidth, bheight = box
+                    else:
+                        continue
+
+                    # Scale CSS pixels to Physical pixels for the screenshot
+                    x = int(bx * dpr)
+                    y = int(by * dpr)
+                    width = int(bwidth * dpr)
+                    height = int(bheight * dpr)
+
                     draw.rectangle([x, y, x + width, y + height], outline=(255, 0, 0, 255), width=2)
                     text = f" [{target_id}] "
                     if hasattr(font, 'getbbox'):
@@ -1054,9 +1069,11 @@ class AgentStateMachine:
         self.current_ui_elements = state_result.get("ui_elements", [])
         self.current_url = state_result.get("url", "")
 
+        self.current_dpr = state_result.get("dpr", 1.0)
         self.current_annotated_screenshot = annotate_image_with_som(
             self.current_clean_screenshot,
-            self.current_ui_elements
+            self.current_ui_elements,
+            self.current_dpr
         )
 
         if self.previous_action:
@@ -1370,14 +1387,23 @@ class AgentStateMachine:
                 intersecting_boxes = []
                 for el in getattr(self, 'current_ui_elements', []):
                     box = el.get("bounds")
-                    if box and len(box) == 4:
+                    if box:
                         try:
-                            bx, by, bwidth, bheight = [float(val) for val in box]
-                        except ValueError:
+                            if isinstance(box, dict):
+                                bx = float(box.get("x", 0))
+                                by = float(box.get("y", 0))
+                                bwidth = float(box.get("width", 0))
+                                bheight = float(box.get("height", 0))
+                            elif isinstance(box, list) and len(box) == 4:
+                                bx, by, bwidth, bheight = [float(val) for val in box]
+                            else:
+                                continue
+
+                            if bx <= css_x <= bx + bwidth and by <= css_y <= by + bheight:
+                                area = bwidth * bheight
+                                intersecting_boxes.append({"el": el, "area": area})
+                        except Exception:
                             continue
-                        if bx <= css_x <= bx + bwidth and by <= css_y <= by + bheight:
-                            area = bwidth * bheight
-                            intersecting_boxes.append({"el": el, "area": area})
 
                 target_box = None
                 prompt_text = ""
@@ -1386,7 +1412,7 @@ class AgentStateMachine:
                 if intersecting_boxes:
                     intersecting_boxes.sort(key=lambda item: item["area"])
                     target_box = intersecting_boxes[0]["el"]
-                    target_id = target_box.get("target_id")
+                    target_id = target_box.get("target_id", target_box.get("id"))
 
                     logging.info(f"HITL click at ({css_x}, {css_y}) intersected with SoM Box [{target_id}].")
                     prompt_text = (f"The human operator intervened and clicked on SoM Box ID [{target_id}]. "
@@ -1400,7 +1426,11 @@ class AgentStateMachine:
                                    f"There was no numbered SoM box at this location (AOM failure). "
                                    f"Analyze the raw visual area inside the green crosshair I have drawn at those coordinates "
                                    f"and generate a universal visual rule for the Playbook.")
-                    image_to_send = annotate_image_with_crosshair(self.current_clean_screenshot, int(css_x), int(css_y))
+                    # HITL click coordinates are CSS, image is Physical
+                    current_dpr = getattr(self, "current_dpr", 1.0)
+                    phys_x = int(css_x * current_dpr)
+                    phys_y = int(css_y * current_dpr)
+                    image_to_send = annotate_image_with_crosshair(self.current_clean_screenshot, phys_x, phys_y)
 
                 logging.info("Sending HITL learning package to Synthesizer Agent...")
                 try:
