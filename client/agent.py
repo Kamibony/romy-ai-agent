@@ -935,17 +935,24 @@ class AgentStateMachine:
                     logging.error(f"Error checking for semantic interrupts: {e}")
 
             if self.interrupt_event.is_set():
-                logging.info("Asynchronous semantic interrupt detected!")
+                logging.info("Asynchronous interrupt detected!")
                 self.interrupt_event.clear()
-                if self.hitl_action and "xpath" in self.hitl_action:
-                    semantic_guidance = self.hitl_action.get("xpath", "")
-                    if semantic_guidance:
-                        logging.info(f"Processing asynchronous semantic guidance: {semantic_guidance}")
-                        self.command_text += f"\n[System Note: Immediate Human Override Received: '{semantic_guidance}'. Adjust your execution plan accordingly.]"
-                        self.sub_task_iteration = 0
-                        self.state = AgentState.EVALUATING
-                        self.hitl_action = None
+                if self.hitl_action:
+                    # Spatial interrupt (CLICK)
+                    if self.hitl_action.get("type") == "CLICK" or (self.hitl_action.get("x") is not None and self.hitl_action.get("y") is not None):
+                        logging.info("Processing asynchronous spatial interrupt (Ghost Click).")
+                        self.state = AgentState.LEARNING_ROUTINE
                         continue
+                    # Semantic interrupt
+                    elif "xpath" in self.hitl_action:
+                        semantic_guidance = self.hitl_action.get("xpath", "")
+                        if semantic_guidance:
+                            logging.info(f"Processing asynchronous semantic guidance: {semantic_guidance}")
+                            self.command_text += f"\n[System Note: Immediate Human Override Received: '{semantic_guidance}'. Adjust your execution plan accordingly.]"
+                            self.sub_task_iteration = 0
+                            self.state = AgentState.EVALUATING
+                            self.hitl_action = None
+                            continue
 
             if self.state == AgentState.INITIALIZING:
                 await self.state_initializing()
@@ -1323,6 +1330,9 @@ class AgentStateMachine:
                              action_to_take["fallback_xpath"] = el["xpath"]
                          if "css_selector" in el:
                              action_to_take["fallback_css"] = el["css_selector"]
+                         if "center" in el:
+                             action_to_take["fallback_x"] = el["center"].get("x")
+                             action_to_take["fallback_y"] = el["center"].get("y")
                          break
 
              exec_payload = {"action_type": "EXECUTE_ACTION", "action": action_to_take, "iteration": self.iteration}
@@ -1818,6 +1828,9 @@ def execute_voice_agent_loop() -> None:
                                             act["fallback_xpath"] = el["xpath"]
                                         if "css_selector" in el:
                                             act["fallback_css"] = el["css_selector"]
+                                        if "center" in el:
+                                            act["fallback_x"] = el["center"].get("x")
+                                            act["fallback_y"] = el["center"].get("y")
                                         break
 
                             action_type = act.get("action", "")
@@ -2389,46 +2402,37 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                     is_semantic = (type_of_guidance == "SEMANTIC" or xpath != "Unknown element")
                     is_suspended = (global_state_machine and global_state_machine.state == AgentState.SUSPENDED_HITL)
 
-                    if is_suspended or is_semantic:
-                        if type_of_guidance == "CLICK" and x is not None and y is not None:
-                            guidance = f"Click at (X: {x}, Y: {y})"
-                        elif is_semantic:
-                            guidance = f"Semantic Override: {xpath}"
-                        else:
-                            # Fallback for legacy format or just text
-                            guidance = f"Semantic Override: {raw_data}"
-
-                        firestore_update_document("remote_commands", ACTIVE_DOC_ID, {
-                            "status": "in_progress",
-                            "human_response": guidance
-                        })
-                        logging.info(f"Teleoperation ghost click registered for doc {ACTIVE_DOC_ID}: {guidance}")
-
-                        def set_event():
-                            # Pass the validated dictionary back to the state machine
-                            global_state_machine.hitl_action = validated_request.model_dump()
-                            if is_semantic and not is_suspended:
-                                global_state_machine.interrupt_event.set()
-                            else:
-                                global_state_machine.hitl_event.set()
-
-                        if global_asyncio_loop:
-                            global_asyncio_loop.call_soon_threadsafe(set_event)
-
-                        self.send_response(HTTPStatus.OK)
-                        self.send_header('Content-type', 'application/json')
-                        self.send_header('Access-Control-Allow-Origin', '*')
-                        self.end_headers()
-                        self.wfile.write(json.dumps({"status": "ok"}).encode())
-                        return
+                    if type_of_guidance == "CLICK" and x is not None and y is not None:
+                        guidance = f"Click at (X: {x}, Y: {y})"
+                    elif is_semantic:
+                        guidance = f"Semantic Override: {xpath}"
                     else:
-                        logging.info("Ignored ghost click: Agent not in SUSPENDED_HITL state and payload is not a semantic override.")
-                        self.send_response(HTTPStatus.OK)
-                        self.send_header('Content-type', 'application/json')
-                        self.send_header('Access-Control-Allow-Origin', '*')
-                        self.end_headers()
-                        self.wfile.write(json.dumps({"status": "ignored"}).encode())
-                        return
+                        # Fallback for legacy format or just text
+                        guidance = f"Semantic Override: {raw_data}"
+
+                    firestore_update_document("remote_commands", ACTIVE_DOC_ID, {
+                        "status": "in_progress",
+                        "human_response": guidance
+                    })
+                    logging.info(f"Teleoperation ghost click registered for doc {ACTIVE_DOC_ID}: {guidance}")
+
+                    def set_event():
+                        # Pass the validated dictionary back to the state machine
+                        global_state_machine.hitl_action = validated_request.model_dump()
+                        if is_suspended:
+                            global_state_machine.hitl_event.set()
+                        else:
+                            global_state_machine.interrupt_event.set()
+
+                    if global_asyncio_loop:
+                        global_asyncio_loop.call_soon_threadsafe(set_event)
+
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header('Content-type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"status": "ok"}).encode())
+                    return
                 else:
                     self.send_response(HTTPStatus.BAD_REQUEST)
                     self.send_header('Content-type', 'application/json')

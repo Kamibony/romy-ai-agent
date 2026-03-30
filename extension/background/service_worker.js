@@ -665,6 +665,9 @@ async function handleExecuteNativeAction(payload) {
                     }
                     if (el) {
                         const rect = el.getBoundingClientRect();
+                        if (rect.width === 0 && rect.height === 0) {
+                            return { found: false };
+                        }
                         return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, found: true };
                     }
                     return { found: false };
@@ -682,13 +685,22 @@ async function handleExecuteNativeAction(payload) {
             if (actionData.target_id) {
                 sendTelemetryLog(`JIT locating target_id: ${actionData.target_id}`);
                 const coords = await getRealTimeCoordinates(actionData.target_id, actionData.fallback_xpath || '', actionData.fallback_css || '');
-                if (!coords || !coords.found) {
-                    return { success: false, error: `Could not locate target_id ${actionData.target_id} in DOM (even with fallbacks)` };
+                if (coords && coords.found) {
+                    // JIT provides CSS pixels
+                    x = coords.x;
+                    y = coords.y;
+                    sendTelemetryLog(`Target located at CSS coords: (${x}, ${y})`);
+                } else if (actionData.fallback_x !== undefined && actionData.fallback_y !== undefined) {
+                    sendTelemetryLog(`JIT failed. Using fallback coordinates from DOM snapshot.`);
+                    x = actionData.fallback_x;
+                    y = actionData.fallback_y;
+                } else if (actionData.coordinates && actionData.coordinates.length >= 2) {
+                    sendTelemetryLog(`JIT failed. Using LLM coordinates.`);
+                    x = actionData.coordinates[0] / dpr;
+                    y = actionData.coordinates[1] / dpr;
+                } else {
+                    return { success: false, error: `Could not locate target_id ${actionData.target_id} in DOM (even with fallbacks) and no coordinates provided` };
                 }
-                // JIT provides CSS pixels
-                x = coords.x;
-                y = coords.y;
-                sendTelemetryLog(`Target located at CSS coords: (${x}, ${y})`);
             } else {
                 const coords = actionData.coordinates;
                 if (!coords || coords.length < 2) {
@@ -766,6 +778,16 @@ async function handleExecuteNativeAction(payload) {
                 if (coords && coords.found) {
                     x = coords.x;
                     y = coords.y;
+                    focusFound = true;
+                } else if (actionData.fallback_x !== undefined && actionData.fallback_y !== undefined) {
+                    sendTelemetryLog(`JIT focus failed. Using fallback coordinates from DOM snapshot.`);
+                    x = actionData.fallback_x;
+                    y = actionData.fallback_y;
+                    focusFound = true;
+                } else if (actionData.coordinates && actionData.coordinates.length >= 2) {
+                    sendTelemetryLog(`JIT focus failed. Using LLM coordinates.`);
+                    x = actionData.coordinates[0] / dpr;
+                    y = actionData.coordinates[1] / dpr;
                     focusFound = true;
                 }
             } else if (actionData.coordinates && actionData.coordinates.length >= 2) {
