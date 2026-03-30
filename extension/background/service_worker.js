@@ -818,6 +818,31 @@ async function handleExecuteNativeAction(payload) {
                 });
                 await new Promise(r => setTimeout(r, 10)); // Typematic delay
             }
+
+            if (actionData.submit || actionData.pressEnter) {
+                sendTelemetryLog(`Autonomously injecting Enter keystroke for native form submission...`);
+                const keyData = { keyIdentifier: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
+
+                await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchKeyEvent", {
+                    type: "keyDown",
+                    keyIdentifier: keyData.keyIdentifier,
+                    code: keyData.code,
+                    windowsVirtualKeyCode: keyData.windowsVirtualKeyCode,
+                    nativeVirtualKeyCode: keyData.nativeVirtualKeyCode
+                });
+
+                await new Promise(r => setTimeout(r, 50));
+
+                await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchKeyEvent", {
+                    type: "keyUp",
+                    keyIdentifier: keyData.keyIdentifier,
+                    code: keyData.code,
+                    windowsVirtualKeyCode: keyData.windowsVirtualKeyCode,
+                    nativeVirtualKeyCode: keyData.nativeVirtualKeyCode
+                });
+                sendTelemetryLog(`Enter keystroke injected successfully.`);
+            }
+
             sendTelemetryLog(`Action TYPE executed successfully.`);
 
         } else if (actionType === 'NAVIGATE' || actionType === 'OPEN_TAB') {
