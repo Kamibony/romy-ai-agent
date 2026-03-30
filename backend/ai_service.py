@@ -438,6 +438,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "Supported actions:\n"
             "- {\"action\": \"CLICK\", \"coordinates\": [x, y]}\n"
             "- {\"action\": \"TYPE\", \"coordinates\": [x, y], \"text\": \"<text to type>\", \"submit\": true} (this automatically focuses the element, types, and natively submits by pressing Enter if submit=true)\n"
+            "- {\"action\": \"SEARCH\", \"coordinates\": [x, y], \"text\": \"<search query>\"} (use this explicitly when searching. It acts identically to TYPE with submit=true, bypassing autocomplete dropdowns completely.)\n"
             "- {\"action\": \"SCROLL\", \"direction\": \"down\"} (or \"up\")\n"
             "- {\"action\": \"NAVIGATE\", \"url\": \"<url>\"}\n"
             "- {\"action\": \"OPEN_TAB\", \"url\": \"<url>\"}\n"
@@ -556,6 +557,16 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                             if "submit" in action_data:
                                 action_dict["submit"] = bool(action_data["submit"])
                             parsed_actions.append(action_dict)
+                        elif action_data.get("action") == "SEARCH" and "coordinates" in action_data and "text" in action_data:
+                            # Map SEARCH directly to TYPE with submit=True to leverage existing native submit implementation
+                            action_dict = {
+                                "action": "TYPE",
+                                "coordinates": action_data["coordinates"],
+                                "text": str(action_data["text"]),
+                                "submit": True,
+                                "thought": thought
+                            }
+                            parsed_actions.append(action_dict)
                         elif action_data.get("action") == "SCROLL" and "direction" in action_data:
                             parsed_actions.append({
                                 "action": "SCROLL",
@@ -651,6 +662,15 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                     }
                     if "submit" in action_data:
                         action_dict["submit"] = bool(action_data["submit"])
+                    return [action_dict]
+                elif action_data.get("action") == "SEARCH" and "coordinates" in action_data and "text" in action_data:
+                    action_dict = {
+                        "action": "TYPE",
+                        "coordinates": action_data["coordinates"],
+                        "text": str(action_data["text"]),
+                        "submit": True,
+                        "thought": thought
+                    }
                     return [action_dict]
                 elif action_data.get("action") == "SCROLL" and "direction" in action_data:
                     return [{
