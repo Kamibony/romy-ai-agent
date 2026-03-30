@@ -210,6 +210,10 @@ window.RomyDomMapper = {
 
         allNodes = Array.from(nodesToKeep);
 
+        // To prevent Layout Thrashing, we separate the read phase (getBoundingClientRect, getComputedStyle, innerText)
+        // from the write phase (node.setAttribute).
+        const visibleNodes = [];
+
         allNodes.forEach((node) => {
             const rect = node.getBoundingClientRect();
 
@@ -237,76 +241,83 @@ window.RomyDomMapper = {
             }
 
             if (isVisible) {
-                // Generate and inject unique ID as string of number
-                const uniqueId = String(elementIdCounter++);
-                node.setAttribute('data-romy-id', uniqueId);
-
-                // Build standard JSON schema expected by the Backend AI Execution Layer
-
-                // Aggressive A11y Extraction for Icon-Only Target Blindness
-                let a11yLabel = node.getAttribute('aria-label') || node.getAttribute('title') || node.getAttribute('alt') || node.name || node.getAttribute('placeholder') || "";
-
-                // If it's an SVG or contains an SVG, try to extract the <title> tag
-                if (!a11yLabel && (node.tagName.toLowerCase() === 'svg' || node.querySelector('svg'))) {
-                    const svgNode = node.tagName.toLowerCase() === 'svg' ? node : node.querySelector('svg');
-                    const titleNode = svgNode.querySelector('title');
-                    if (titleNode) {
-                        a11yLabel = titleNode.textContent;
-                    }
-                }
-
-                // If aria-labelledby is present, try to find the linked element's text
-                if (!a11yLabel && node.hasAttribute('aria-labelledby')) {
-                    const labelledBy = node.getAttribute('aria-labelledby');
-                    const labelElement = document.getElementById(labelledBy);
-                    if (labelElement) {
-                        a11yLabel = labelElement.textContent;
-                    }
-                }
-
-                let textContent = node.innerText || node.value || "";
-
-                if (typeof textContent === 'string') {
-                    textContent = textContent.trim();
-                } else {
-                    textContent = String(textContent).trim();
-                }
-
-                if (typeof a11yLabel === 'string') {
-                    a11yLabel = a11yLabel.trim();
-                } else {
-                    a11yLabel = String(a11yLabel).trim();
-                }
-
-                if (a11yLabel && a11yLabel !== textContent) {
-                    textContent = `[A11y: ${a11yLabel}] ${textContent}`.trim();
-                } else if (!textContent && a11yLabel) {
-                    textContent = `[A11y: ${a11yLabel}]`;
-                }
-
-                const centerX = rect.x + (rect.width / 2);
-                const centerY = rect.y + (rect.height / 2);
-
-                elements.push({
-                    id: uniqueId,
-                    type: node.tagName.toLowerCase(),
-                    text: textContent,
-                    xpath: getXPath(node),
-                    css_selector: getCssSelector(node),
-                    ancestry: getAncestryContext(node),
-                    // Optionally calculate center coordinates if needed for fallback
-                    bounds: {
-                        x: rect.x,
-                        y: rect.y,
-                        width: rect.width,
-                        height: rect.height
-                    },
-                    center: {
-                        x: centerX,
-                        y: centerY
-                    }
-                });
+                // Perform layout-dependent reads in this phase
+                const innerText = node.innerText || node.value || "";
+                visibleNodes.push({ node, rect, innerText });
             }
+        });
+
+        // Write Phase: assign attributes and collect structured data
+        visibleNodes.forEach(({ node, rect, innerText }) => {
+            // Generate and inject unique ID as string of number
+            const uniqueId = String(elementIdCounter++);
+            node.setAttribute('data-romy-id', uniqueId);
+
+            // Build standard JSON schema expected by the Backend AI Execution Layer
+
+            // Aggressive A11y Extraction for Icon-Only Target Blindness
+            let a11yLabel = node.getAttribute('aria-label') || node.getAttribute('title') || node.getAttribute('alt') || node.name || node.getAttribute('placeholder') || "";
+
+            // If it's an SVG or contains an SVG, try to extract the <title> tag
+            if (!a11yLabel && (node.tagName.toLowerCase() === 'svg' || node.querySelector('svg'))) {
+                const svgNode = node.tagName.toLowerCase() === 'svg' ? node : node.querySelector('svg');
+                const titleNode = svgNode.querySelector('title');
+                if (titleNode) {
+                    a11yLabel = titleNode.textContent;
+                }
+            }
+
+            // If aria-labelledby is present, try to find the linked element's text
+            if (!a11yLabel && node.hasAttribute('aria-labelledby')) {
+                const labelledBy = node.getAttribute('aria-labelledby');
+                const labelElement = document.getElementById(labelledBy);
+                if (labelElement) {
+                    a11yLabel = labelElement.textContent;
+                }
+            }
+
+            let textContent = innerText;
+
+            if (typeof textContent === 'string') {
+                textContent = textContent.trim();
+            } else {
+                textContent = String(textContent).trim();
+            }
+
+            if (typeof a11yLabel === 'string') {
+                a11yLabel = a11yLabel.trim();
+            } else {
+                a11yLabel = String(a11yLabel).trim();
+            }
+
+            if (a11yLabel && a11yLabel !== textContent) {
+                textContent = `[A11y: ${a11yLabel}] ${textContent}`.trim();
+            } else if (!textContent && a11yLabel) {
+                textContent = `[A11y: ${a11yLabel}]`;
+            }
+
+            const centerX = rect.x + (rect.width / 2);
+            const centerY = rect.y + (rect.height / 2);
+
+            elements.push({
+                id: uniqueId,
+                type: node.tagName.toLowerCase(),
+                text: textContent,
+                xpath: getXPath(node),
+                css_selector: getCssSelector(node),
+                ancestry: getAncestryContext(node),
+                // Optionally calculate center coordinates if needed for fallback
+                bounds: {
+                    x: rect.x,
+                    y: rect.y,
+                    width: rect.width,
+                    height: rect.height
+                },
+                center: {
+                    x: centerX,
+                    y: centerY
+                }
+            });
         });
 
 
