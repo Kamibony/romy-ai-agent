@@ -703,11 +703,20 @@ def evaluate_plan_progress(command_text: str, current_sub_task: str, remaining_p
     }
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
     try:
-        # Use standard session without backoff so we fail fast and gracefully
-        session = requests.Session()
+        # Use the global resilient session to leverage Keep-Alive and retry mechanisms
+        session = get_resilient_session()
         response = session.post(url, json=payload, headers=headers, timeout=(10, 20))
         response.raise_for_status()
         return response.json()
+    except requests.exceptions.ChunkedEncodingError as e:
+        logging.error(f"ChunkedEncodingError in evaluate_plan_progress: {e}. Defaulting to not accomplished.")
+        return {"is_accomplished": False, "reason": f"Local graceful fallback due to ChunkedEncodingError: {e}"}
+    except requests.exceptions.SSLError as e:
+        logging.error(f"SSLError in evaluate_plan_progress: {e}. Defaulting to not accomplished.")
+        return {"is_accomplished": False, "reason": f"Local graceful fallback due to SSLError: {e}"}
+    except requests.exceptions.ConnectionError as e:
+        logging.error(f"ConnectionError in evaluate_plan_progress: {e}. Defaulting to not accomplished.")
+        return {"is_accomplished": False, "reason": f"Local graceful fallback due to ConnectionError: {e}"}
     except Exception as e:
         logging.error(f"Graceful fallback in evaluate_plan_progress: {e}. Defaulting to not accomplished.")
         return {"is_accomplished": False, "reason": f"Local graceful fallback due to error: {e}"}
@@ -1230,11 +1239,15 @@ class AgentStateMachine:
 
         current_state_str = str([{"id": el.get("target_id", "N/A"), "text": el.get("text", "")[:20]} for el in self.current_ui_elements[:5]])
 
+        # If the only action is WAIT, do not trigger the stuck detectors (unless waiting forever)
+        is_only_wait = len(actions) == 1 and str(actions[0].get("action")).upper() == "WAIT"
+
         # Stuck Action Detector: Check if the AI is repeating the exact same action output consecutively
         current_actions_str = json.dumps(actions, sort_keys=True)
         if hasattr(self, 'previous_actions_str') and self.previous_actions_str == current_actions_str:
             self.action_stuck_counter = getattr(self, 'action_stuck_counter', 0) + 1
-            if self.action_stuck_counter >= 3:
+            max_stuck_actions = 10 if is_only_wait else 3
+            if self.action_stuck_counter >= max_stuck_actions:
                 logging.warning("Action Stuck detector triggered! AI repeatedly issuing identical cyclical actions.")
                 try:
                     firestore_update_document("remote_commands", self.doc_id, {
@@ -1251,7 +1264,8 @@ class AgentStateMachine:
 
         if self.history and self.history[-1] == current_state_str:
             self.stuck_counter = getattr(self, 'stuck_counter', 0) + 1
-            if self.stuck_counter >= 5:
+            max_stuck_visual = 15 if is_only_wait else 5
+            if self.stuck_counter >= max_stuck_visual:
                  logging.warning("Visual Stuck detector triggered! Same visual state for 5 iterations.")
                  try:
                      firestore_update_document("remote_commands", self.doc_id, {
@@ -1296,6 +1310,8 @@ class AgentStateMachine:
                  logging.info(f"Executing explicit WAIT for {wait_time} seconds...")
                  await asyncio.sleep(float(wait_time))
                  bail_out = True
+                 # If the action is a WAIT, do not increment the sub_task_iteration to prevent impatience
+                 self.sub_task_iteration -= 1
                  break
 
              logging.info(f"Executing Macro-Action {action_idx + 1}/{len(self.actions_to_execute)}: {action_to_take.get('action')}")
