@@ -319,12 +319,8 @@ window.RomyDomMapper = {
             return a.bounds.x - b.bounds.x;
         });
 
-        // Hard limit to 75 elements to prevent WebSocket/LLM bloat, preserving crucial context
-        const MAX_ELEMENTS = 75;
-        const finalElements = elements.slice(0, MAX_ELEMENTS);
-
-        console.log(`Extracted ${elements.length} visible UI elements. Trimmed to ${finalElements.length} to prevent payload bloat.`);
-        return finalElements;
+        console.log(`Extracted ${elements.length} visible UI elements.`);
+        return elements;
 
     }
 };
