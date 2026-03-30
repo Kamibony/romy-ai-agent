@@ -11,6 +11,8 @@ import queue
 import json
 import threading
 from datetime import datetime
+from pydantic import BaseModel, ValidationError
+from typing import Optional
 
 import io
 import base64
@@ -1275,6 +1277,25 @@ class AgentStateMachine:
              logging.info(f"Executing Macro-Action {action_idx + 1}/{len(self.actions_to_execute)}: {action_to_take.get('action')}")
              action_type = action_to_take.get("action")
 
+             if action_type in ["ERROR", "API_ERROR", "PARSE_ERROR", "PIPELINE_ERROR"]:
+                 error_msg = action_to_take.get("error", action_to_take.get("raw_response", "Unknown error"))
+                 logging.error(f"Backend returned an error action: {action_type} - {error_msg}")
+                 self.sub_task_iteration += 1
+                 if self.sub_task_iteration >= self.max_sub_task_iterations:
+                     try:
+                         firestore_update_document("remote_commands", self.doc_id, {
+                             "status": "AWAITING_HUMAN_INPUT",
+                             "help_reason": f"System error: {action_type}. {error_msg}"
+                         })
+                     except Exception as fs_e:
+                         logging.error(f"Error saving help request to Firestore: {fs_e}")
+                     self.state = AgentState.SUSPENDED_HITL
+                 else:
+                     self.command_text += f"\n[System Note: Backend error encountered: {error_msg}. Retrying.]"
+                     self.state = AgentState.EVALUATING
+                 bail_out = True
+                 break
+
              # Enrich action with fallback selectors if target_id is present
              if "target_id" in action_to_take:
                  target_id = str(action_to_take["target_id"])
@@ -1350,7 +1371,10 @@ class AgentStateMachine:
                 for el in getattr(self, 'current_ui_elements', []):
                     box = el.get("bounds")
                     if box and len(box) == 4:
-                        bx, by, bwidth, bheight = box
+                        try:
+                            bx, by, bwidth, bheight = [float(val) for val in box]
+                        except ValueError:
+                            continue
                         if bx <= css_x <= bx + bwidth and by <= css_y <= by + bheight:
                             area = bwidth * bheight
                             intersecting_boxes.append({"el": el, "area": area})
@@ -2217,6 +2241,14 @@ import socketserver
 import urllib.parse
 from http import HTTPStatus
 
+class HumanGuidanceRequest(BaseModel):
+    type: str = ""
+    xpath: str = "Unknown element"
+    x: Optional[float] = None
+    y: Optional[float] = None
+    dpr: float = 1.0
+
+
 class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         # Truncate long URLs and payloads to prevent terminal flooding and hanging
@@ -2302,15 +2334,27 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
             post_data = self.rfile.read(content_length)
 
             try:
-                data = json.loads(post_data.decode('utf-8'))
+                raw_data = json.loads(post_data.decode('utf-8'))
+
+                # Strict Data Validation Layer via Pydantic
+                try:
+                    validated_request = HumanGuidanceRequest(**raw_data)
+                except ValidationError as ve:
+                    logging.error(f"Validation error for human guidance payload: {ve.errors()}")
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "Validation failed", "details": ve.errors()}).encode())
+                    return
+
                 global ACTIVE_DOC_ID
 
                 if ACTIVE_DOC_ID:
-                    type_of_guidance = data.get("type", "")
-                    xpath = data.get("xpath", "Unknown element")
-                    x = data.get("x")
-                    y = data.get("y")
-                    dpr = data.get("dpr", 1.0)
+                    type_of_guidance = validated_request.type
+                    xpath = validated_request.xpath
+                    x = validated_request.x
+                    y = validated_request.y
+                    dpr = validated_request.dpr
 
                     is_semantic = (type_of_guidance == "SEMANTIC" or xpath != "Unknown element")
                     is_suspended = (global_state_machine and global_state_machine.state == AgentState.SUSPENDED_HITL)
@@ -2322,7 +2366,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                             guidance = f"Semantic Override: {xpath}"
                         else:
                             # Fallback for legacy format or just text
-                            guidance = f"Semantic Override: {data}"
+                            guidance = f"Semantic Override: {raw_data}"
 
                         firestore_update_document("remote_commands", ACTIVE_DOC_ID, {
                             "status": "in_progress",
@@ -2331,7 +2375,8 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                         logging.info(f"Teleoperation ghost click registered for doc {ACTIVE_DOC_ID}: {guidance}")
 
                         def set_event():
-                            global_state_machine.hitl_action = data
+                            # Pass the validated dictionary back to the state machine
+                            global_state_machine.hitl_action = validated_request.model_dump()
                             if is_semantic and not is_suspended:
                                 global_state_machine.interrupt_event.set()
                             else:
