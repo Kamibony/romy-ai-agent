@@ -6,6 +6,9 @@ import uuid
 import json
 import urllib.request
 import urllib.error
+import glob
+import re
+import argparse
 
 # Configure logging to console
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -26,7 +29,89 @@ def check_local_api_running():
     except urllib.error.URLError:
         return False
 
-def test_harness():
+def validate_outcome(doc_id, expected_outcome):
+    """
+    Validates the actual outcome by reading the last flight record JSON file.
+    """
+    if not expected_outcome:
+        return True, "No validation criteria specified."
+
+    user_data_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "RomyAgentBrowserData", "flight_records", doc_id)
+    if not os.path.exists(user_data_dir):
+        return False, "Flight records directory not found."
+
+    record_files = glob.glob(os.path.join(user_data_dir, "record_*.json"))
+    if not record_files:
+        return False, "No flight records found."
+
+    # Sort files by iteration to get the latest one
+    # Assuming filenames are formatted as record_0_timestamp.json, etc.
+    def get_iteration(filename):
+        try:
+            return int(os.path.basename(filename).split('_')[1])
+        except (IndexError, ValueError):
+            return -1
+
+    record_files.sort(key=get_iteration)
+    last_record_file = record_files[-1]
+
+    try:
+        with open(last_record_file, "r", encoding="utf-8") as f:
+            last_record = json.load(f)
+    except Exception as e:
+        return False, f"Failed to read last flight record: {e}"
+
+    actual_url = last_record.get("prompt_payload", {}).get("current_url", "")
+    actions_executed = last_record.get("action_executed", [])
+
+    # Extract replies from all records just in case it replied earlier
+    replies = []
+    urls_visited = []
+    for file in record_files:
+        try:
+            with open(file, "r", encoding="utf-8") as f:
+                rec = json.load(f)
+                url = rec.get("prompt_payload", {}).get("current_url", "")
+                if url:
+                    urls_visited.append(url)
+                for act in rec.get("action_executed", []):
+                    if isinstance(act, dict) and str(act.get("action", "")).upper() == "REPLY":
+                        replies.append(str(act.get("text", "")))
+        except:
+            pass
+
+    rule_type = expected_outcome.get("type")
+
+    if rule_type == "final_url_match":
+        match_str = expected_outcome.get("value", "")
+        if match_str in actual_url:
+            return True, f"Final URL matches '{match_str}'"
+        return False, f"Final URL '{actual_url}' does not contain '{match_str}'"
+
+    elif rule_type == "url_visited":
+        match_str = expected_outcome.get("value", "")
+        for url in urls_visited:
+            if match_str in url:
+                return True, f"Visited URL matching '{match_str}'"
+        return False, f"Never visited a URL containing '{match_str}'"
+
+    elif rule_type == "reply_match":
+        match_str = expected_outcome.get("value", "")
+        for reply in replies:
+            if match_str.lower() in reply.lower():
+                return True, f"Reply matched '{match_str}'"
+        return False, f"No reply contained '{match_str}'. Replies: {replies}"
+
+    elif rule_type == "regex_reply":
+        pattern = expected_outcome.get("value", "")
+        for reply in replies:
+            if re.search(pattern, reply):
+                return True, f"Reply matched regex '{pattern}'"
+        return False, f"No reply matched regex '{pattern}'. Replies: {replies}"
+
+    return False, f"Unknown validation rule type: {rule_type}"
+
+def test_harness(run_target=None):
     """
     E2E Test Harness:
     Automatically feeds commands targeting generic websites to the agent queue via local API.
@@ -43,6 +128,10 @@ def test_harness():
                     "Wait for the exchange rate table to load.",
                     "Extract the EUR/CZK exchange rate."
                 ]
+            },
+            "expected_outcome": {
+                "type": "regex_reply",
+                "value": r"\d+,\d{3}" # Regex to match format like 25,123
             }
         },
         {
@@ -55,6 +144,10 @@ def test_harness():
                     "Use the main search bar to search for 'AI v byznysu'.",
                     "Click on one of the top organic results."
                 ]
+            },
+            "expected_outcome": {
+                "type": "url_visited",
+                "value": "seznam.cz"
             }
         },
         {
@@ -67,6 +160,10 @@ def test_harness():
                     "Do NOT use the search bar. You must use the navigation menu.",
                     "Navigate through the category tree: Počítače a notebooky -> Notebooky."
                 ]
+            },
+            "expected_outcome": {
+                "type": "url_visited",
+                "value": "notebooky"
             }
         },
         {
@@ -80,6 +177,10 @@ def test_harness():
                     "Fill 'Kde' with 'Praha'.",
                     "Submit the form."
                 ]
+            },
+            "expected_outcome": {
+                "type": "url_visited",
+                "value": "firmy.cz"
             }
         },
         {
@@ -93,9 +194,47 @@ def test_harness():
                     "Enter IČO '00006947' into the search field and submit.",
                     "Extract the exact registered name from the complex HTML table result."
                 ]
+            },
+            "expected_outcome": {
+                "type": "reply_match",
+                "value": "Ministerstvo financí"
+            }
+        },
+        {
+            "name": "Stress Test (Sreality.cz)",
+            "command_text": "Přejdi na sreality.cz. Nastav vyhledávání na 'Prodej', 'Byty' a lokalitu 'Brno' a dej vyhledat. Poté ve filtrech nastav dispozici na 3+kk a maximální cenu 8 000 000 Kč. Z výsledků klikni na inzerát, který nabízí balkón. Z jeho detailu mi extrahuj užitnou plochu a energetickou náročnost. Nakonec otevři kontaktní formulář, vyplň jméno 'Test Romy' a e-mail 'test@romy.ai'. Formulář NEODESÍLEJ, ale najdi křížek a modální okno zavři.",
+            "client_context": {
+                "client_id": "sreality_stress_test",
+                "rules": [
+                    "Accept any cookie/consent dialogs.",
+                    "Do NOT submit the contact form.",
+                    "Ensure you extract and reply with the area and energy efficiency."
+                ]
+            },
+            "expected_outcome": {
+                "type": "regex_reply",
+                "value": r"\d+\s*m2" # Looking for area in square meters
             }
         }
     ]
+
+    if run_target is not None:
+        try:
+            # If target is integer index
+            idx = int(run_target) - 1
+            if 0 <= idx < len(commands):
+                commands = [commands[idx]]
+            else:
+                print(f"Error: Target index {run_target} out of range.")
+                return
+        except ValueError:
+            # If target is string match
+            filtered_commands = [c for c in commands if run_target.lower() in c["name"].lower()]
+            if filtered_commands:
+                commands = filtered_commands
+            else:
+                print(f"Error: No scenarios match '{run_target}'.")
+                return
 
     print("=" * 80)
     print("STARTING AUTOMATED E2E TEST SUITE (CZECH B2B MARKET DEMO)")
@@ -111,6 +250,7 @@ def test_harness():
     for i, cmd_obj in enumerate(commands, 1):
         name = cmd_obj["name"]
         cmd = cmd_obj["command_text"]
+        expected_outcome = cmd_obj.get("expected_outcome")
         client_context = cmd_obj.get("client_context")
         doc_id = f"e2e_test_run_{uuid.uuid4().hex[:8]}"
 
@@ -163,7 +303,17 @@ def test_harness():
         end_time = time.time()
         elapsed = end_time - start_time
 
+        # Validation step
+        validation_passed = False
+        validation_reason = ""
+        if status == "completed":
+            validation_passed, validation_reason = validate_outcome(doc_id, expected_outcome)
+            if not validation_passed:
+                status = f"failed (validation: {validation_reason})"
+
         print(f"-> Scenario finished in {elapsed:.2f} seconds. Final Status: {status}")
+        if validation_reason:
+            print(f"Validation: {validation_reason}")
 
         results.append({
             "name": name,
@@ -191,5 +341,9 @@ def test_harness():
     print("=" * 80)
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run E2E tests via Local API.")
+    parser.add_argument("--run", type=str, help="Index or partial name of the scenario to run.")
+    args = parser.parse_args()
+
     print("Note: Make sure your desktop client (main.py) is actively running and logged in.")
-    test_harness()
+    test_harness(run_target=args.run)
