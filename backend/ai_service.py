@@ -436,7 +436,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "Based on the user's command, the current sub-task, and the visual state, locate the correct target element. "
             "You must output the exact target_id of the Set-of-Mark box, or if unavailable, the [x, y] coordinates representing the center of the target element.\n\n"
             "Supported actions:\n"
-            "- {\"action\": \"CLICK\", \"target_id\": \"<id>\", \"coordinates\": [x, y]}\n"
+            "- {\"action\": \"CLICK\", \"target_id\": \"<id>\", \"coordinates\": [x, y]} (CRUCIAL: If there is a GDPR cookie banner, consent modal, or popup overlapping the page, your VERY FIRST action MUST be to CLICK its \"Accept\", \"Agree\", or \"Close\" button before attempting to interact with any other elements on the main page.)\n"
             "- {\"action\": \"TYPE\", \"target_id\": \"<id>\", \"coordinates\": [x, y], \"text\": \"<text to type>\", \"submit\": true} (this automatically focuses the element, types, and natively submits by pressing Enter if submit=true)\n"
             "- {\"action\": \"SEARCH\", \"target_id\": \"<id>\", \"coordinates\": [x, y], \"text\": \"<search query>\"} (use this explicitly when searching. It acts identically to TYPE with submit=true, bypassing autocomplete dropdowns completely.)\n"
             "- {\"action\": \"SCROLL\", \"direction\": \"down\"} (or \"up\")\n"

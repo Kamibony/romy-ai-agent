@@ -291,7 +291,9 @@ def test_harness(run_target=None):
                         status_data = json.loads(status_response.read().decode())
                         status = status_data.get("status", "unknown")
                         if status == "AWAITING_HUMAN_INPUT":
-                            print("Waiting for human Ghost Click...")
+                            print("HITL Deadlock detected in automated test. Failing scenario immediately.")
+                            status = "failed (HITL deadlock)"
+                            break
                     except Exception as e:
                         print(f"Failed to get status. Error: {e}")
                         status = "failed (status poll error)"
