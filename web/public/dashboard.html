@@ -227,6 +227,7 @@
         const stopStatus = document.getElementById('stop-status');
 
         let unsubscribeActivity = null;
+        const telemetryHistory = {};
         let unsubscribeStatus = null;
         let currentUserId = null;
 
@@ -301,6 +302,10 @@
                         const command = data.command || "Unknown command";
                         const status = data.status || "unknown";
                         const telemetry = data.telemetry || "";
+                        if (telemetry && (!telemetryHistory[doc.id] || telemetryHistory[doc.id][telemetryHistory[doc.id].length - 1] !== telemetry)) {
+                            telemetryHistory[doc.id] = telemetryHistory[doc.id] || [];
+                            telemetryHistory[doc.id].push(telemetry);
+                        }
 
                         let statusColor = "text-gray-500";
                         if (status === "completed") statusColor = "text-green-600";
@@ -315,10 +320,13 @@
                         const sanitizedCommand = tempDiv.innerHTML;
 
                         let displayMessage = `Command: "${sanitizedCommand}"`;
-                        if (telemetry) {
-                            const tempTele = document.createElement('div');
-                            tempTele.textContent = telemetry;
-                            displayMessage = `<span class="text-indigo-600">[Telemetry]</span> ${tempTele.innerHTML}`;
+                        if (telemetryHistory[doc.id] && telemetryHistory[doc.id].length > 0) {
+                            let teleLogs = telemetryHistory[doc.id].map(t => {
+                                const tempTele = document.createElement('div');
+                                tempTele.textContent = t;
+                                return `<div class="mt-1 ml-4 border-l-2 border-indigo-200 pl-2"><span class="text-indigo-600 text-xs font-bold">[Telemetry]</span> ${tempTele.innerHTML}</div>`;
+                            }).join('');
+                            displayMessage += teleLogs;
                         }
 
                         html += `<div class="border-b border-gray-100 pb-2 mb-2"><span class="font-semibold text-gray-500">${time}</span> - ${displayMessage} | Status: <span class="${statusColor} font-semibold">${status}</span></div>`;

@@ -213,17 +213,19 @@ window.RomyDomMapper = {
         allNodes.forEach((node) => {
             const rect = node.getBoundingClientRect();
 
-            // Simplified visibility check
             const computedStyle = window.getComputedStyle(node);
 
-            // Allow elements that are partially visible / slightly out of viewport bounds
+            // Viewport Pruning: Algorithmic reduction to strictly include only elements intersecting the visible viewport
+            const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+            const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+
             let isVisible = (
                 rect.width > 0 &&
                 rect.height > 0 &&
-                rect.bottom > 0 && // Element's bottom edge is below top of viewport
-                rect.top < (window.innerHeight || document.documentElement.clientHeight) && // Top edge is above bottom of viewport
-                rect.right > 0 && // Right edge is past left side
-                rect.left < (window.innerWidth || document.documentElement.clientWidth) && // Left edge is before right side
+                rect.bottom >= 0 && // Element's bottom edge is inside or on top of viewport
+                rect.top <= viewportHeight && // Top edge is inside or on bottom of viewport
+                rect.right >= 0 && // Right edge is inside or on left side
+                rect.left <= viewportWidth && // Left edge is inside or on right side
                 computedStyle.visibility !== 'hidden' &&
                 computedStyle.display !== 'none' &&
                 computedStyle.opacity !== '0'
@@ -309,7 +311,9 @@ window.RomyDomMapper = {
             }
         });
 
-        console.log(`Extracted ${elements.length} visible UI elements.`);
+
+        console.log(`Extracted ${elements.length} visible UI elements using strict Viewport Pruning.`);
         return elements;
+
     }
 };
