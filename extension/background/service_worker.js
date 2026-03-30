@@ -503,10 +503,11 @@ async function handleGetState(payload) {
     }
 
     // 2. Universal UI Quiescence (Wait for SPA Hydration to Settle)
-    sendTelemetryLog(`Waiting for UI Quiescence (DOM stabilization) on tab ${tab.id}...`);
+    sendTelemetryLog(`Waiting for UI Quiescence (DOM + Network stabilization) on tab ${tab.id}...`);
     try {
         await chrome.scripting.executeScript({
             target: { tabId: tab.id },
+            world: "MAIN",
             func: () => {
                 return new Promise((resolve) => {
                     const maxTimeout = 5000;
@@ -514,27 +515,52 @@ async function handleGetState(payload) {
 
                     let timeoutId;
                     let debounceId;
+                    let intervalId;
 
                     const settle = () => {
                         observer.disconnect();
                         clearTimeout(timeoutId);
                         clearTimeout(debounceId);
+                        clearInterval(intervalId);
                         resolve('settled');
                     };
 
                     const observer = new MutationObserver(() => {
                         clearTimeout(debounceId);
-                        debounceId = setTimeout(settle, debounceMs);
+                        debounceId = setTimeout(checkStability, debounceMs);
                     });
 
                     observer.observe(document.body, { childList: true, subtree: true, attributes: true });
 
-                    debounceId = setTimeout(settle, debounceMs);
+                    function checkStability() {
+                        const activeReqs = window.__romyActiveRequests || 0;
+                        if (activeReqs === 0) {
+                            settle();
+                        } else {
+                            // If network is still active, wait and re-check via interval
+                            clearTimeout(debounceId);
+                            debounceId = setTimeout(checkStability, debounceMs);
+                        }
+                    }
+
+                    // Also set up a polling interval to catch network drops if DOM doesn't mutate
+                    intervalId = setInterval(() => {
+                        const activeReqs = window.__romyActiveRequests || 0;
+                        if (activeReqs === 0) {
+                             // Do not resolve yet if debounceId is running (DOM mutation recently)
+                        } else {
+                            // Reset the DOM stability timer because network is active
+                            clearTimeout(debounceId);
+                            debounceId = setTimeout(checkStability, debounceMs);
+                        }
+                    }, 100);
+
+                    debounceId = setTimeout(checkStability, debounceMs);
                     timeoutId = setTimeout(settle, maxTimeout);
                 });
             }
         });
-        sendTelemetryLog(`UI stabilized.`);
+        sendTelemetryLog(`UI + Network stabilized.`);
     } catch (qErr) {
         sendTelemetryLog(`Warning: UI Quiescence script failed: ${qErr.message}. Proceeding anyway.`);
     }
