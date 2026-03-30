@@ -433,12 +433,12 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
         system_instruction = (
             "You are a Vision-First RPA assistant implementing a ReAct Loop. You will be provided with "
             "a screenshot of the current state of the application.\n\n"
-            "Based on the user's command, the current sub-task, and the visual state, visually locate the correct target element. "
-            "You must output the exact [x, y] coordinates representing the center of the target element to interact with it.\n\n"
+            "Based on the user's command, the current sub-task, and the visual state, locate the correct target element. "
+            "You must output the exact target_id of the Set-of-Mark box, or if unavailable, the [x, y] coordinates representing the center of the target element.\n\n"
             "Supported actions:\n"
-            "- {\"action\": \"CLICK\", \"coordinates\": [x, y]}\n"
-            "- {\"action\": \"TYPE\", \"coordinates\": [x, y], \"text\": \"<text to type>\", \"submit\": true} (this automatically focuses the element, types, and natively submits by pressing Enter if submit=true)\n"
-            "- {\"action\": \"SEARCH\", \"coordinates\": [x, y], \"text\": \"<search query>\"} (use this explicitly when searching. It acts identically to TYPE with submit=true, bypassing autocomplete dropdowns completely.)\n"
+            "- {\"action\": \"CLICK\", \"target_id\": \"<id>\", \"coordinates\": [x, y]}\n"
+            "- {\"action\": \"TYPE\", \"target_id\": \"<id>\", \"coordinates\": [x, y], \"text\": \"<text to type>\", \"submit\": true} (this automatically focuses the element, types, and natively submits by pressing Enter if submit=true)\n"
+            "- {\"action\": \"SEARCH\", \"target_id\": \"<id>\", \"coordinates\": [x, y], \"text\": \"<search query>\"} (use this explicitly when searching. It acts identically to TYPE with submit=true, bypassing autocomplete dropdowns completely.)\n"
             "- {\"action\": \"SCROLL\", \"direction\": \"down\"} (or \"up\")\n"
             "- {\"action\": \"NAVIGATE\", \"url\": \"<url>\"}\n"
             "- {\"action\": \"OPEN_TAB\", \"url\": \"<url>\"}\n"
@@ -456,7 +456,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "MACRO-ACTIONS & BATCHING: If you can confidently predict the next several deterministic steps (e.g., filling out a static form), return them as a batch in the array. If an action requires waiting for a dynamic UI element (like an autocomplete dropdown that hasn't rendered yet), end the batch at that action and wait for the next state. CRITICAL: Never include SUB_TASK_COMPLETE in the same batch as a TYPE action. You must always wait for the next state after typing to verify if an autocomplete dropdown appeared.\n\n"
             "SUB-TASK COMPLETION & STATE ADVANCEMENT: It is critical that you advance the state when a sub-task is met. If the sequence of actions you are about to output successfully fulfills the goal of the 'Current Sub-Task to execute', you MUST append {\"action\": \"SUB_TASK_COMPLETE\", \"thought\": \"Goal met, advancing...\"} as the FINAL object in your returned array. If you do not explicitly output this, the system will infinitely loop on the current sub-task. Only execute actions related to the current sub-task; do not preemptively perform actions for the next logical step until the system prompts you with the next sub-task.\n\n"
             "CRUCIAL INSTRUCTION: Return a valid JSON array containing one or more action objects. Do not return text outside the array.\n"
-            "Example: [{\"action\": \"TYPE\", \"coordinates\": [350, 420], \"text\": \"London\", \"thought\": \"Typing origin\"}, {\"action\": \"CLICK\", \"coordinates\": [800, 420], \"thought\": \"Clicking search\"}]\n"
+            "Example: [{\"action\": \"TYPE\", \"target_id\": \"5\", \"text\": \"London\", \"thought\": \"Typing origin\"}, {\"action\": \"CLICK\", \"target_id\": \"12\", \"thought\": \"Clicking search\"}]\n"
         )
         if global_prompt:
             system_instruction += f"Global Instructions:\n{global_prompt}\n\n"
@@ -483,7 +483,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             except Exception as e:
                 print(f"Error fetching playbook rules for {current_url}: {e}")
 
-        prompt = f"Determine the correct target element from the image and output the JSON array of actions using [x, y] coordinates."
+        prompt = f"Determine the correct target element from the image and output the JSON array of actions using target_id or [x, y] coordinates."
 
         if current_sub_task:
             prompt += f"\n\nCurrent Sub-Task to execute: {current_sub_task}"
@@ -506,11 +506,18 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                     items=types.Schema(
                         type=types.Type.OBJECT,
                         properties={
-                            "action": types.Schema(type=types.Type.STRING),
+                            "action": types.Schema(
+                                type=types.Type.STRING,
+                                enum=["CLICK", "TYPE", "SEARCH", "SCROLL", "NAVIGATE", "OPEN_TAB", "PRESS_KEY", "WAIT_FOR", "WAIT", "RESET_VIEW", "EXECUTE_JS", "REPLY", "SUB_TASK_COMPLETE", "DONE", "ASK_HUMAN"]
+                            ),
+                            "target_id": types.Schema(
+                                type=types.Type.STRING,
+                                description="The ID of the Set-of-Mark box to interact with (preferred over coordinates)"
+                            ),
                             "coordinates": types.Schema(
                                 type=types.Type.ARRAY,
                                 items=types.Schema(type=types.Type.NUMBER),
-                                description="[x, y] coordinates for CLICK/TYPE actions"
+                                description="Fallback [x, y] coordinates if target_id is not available"
                             ),
                             "text": types.Schema(type=types.Type.STRING),
                             "submit": types.Schema(type=types.Type.BOOLEAN, description="Set to true to press Enter after typing"),
@@ -540,32 +547,41 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                     parsed_actions = []
                     for action_data in actions_data:
                         thought = action_data.get("thought", "")
-                        if action_data.get("action") == "CLICK" and "coordinates" in action_data:
+                        if action_data.get("action") == "CLICK" and ("coordinates" in action_data or "target_id" in action_data):
                             action_dict = {
                                 "action": "CLICK",
-                                "coordinates": action_data["coordinates"],
                                 "thought": thought
                             }
+                            if "target_id" in action_data:
+                                action_dict["target_id"] = str(action_data["target_id"])
+                            if "coordinates" in action_data:
+                                action_dict["coordinates"] = action_data["coordinates"]
                             parsed_actions.append(action_dict)
-                        elif action_data.get("action") == "TYPE" and "coordinates" in action_data and "text" in action_data:
+                        elif action_data.get("action") == "TYPE" and ("coordinates" in action_data or "target_id" in action_data) and "text" in action_data:
                             action_dict = {
                                 "action": "TYPE",
-                                "coordinates": action_data["coordinates"],
                                 "text": str(action_data["text"]),
                                 "thought": thought
                             }
+                            if "target_id" in action_data:
+                                action_dict["target_id"] = str(action_data["target_id"])
+                            if "coordinates" in action_data:
+                                action_dict["coordinates"] = action_data["coordinates"]
                             if "submit" in action_data:
                                 action_dict["submit"] = bool(action_data["submit"])
                             parsed_actions.append(action_dict)
-                        elif action_data.get("action") == "SEARCH" and "coordinates" in action_data and "text" in action_data:
+                        elif action_data.get("action") == "SEARCH" and ("coordinates" in action_data or "target_id" in action_data) and "text" in action_data:
                             # Map SEARCH directly to TYPE with submit=True to leverage existing native submit implementation
                             action_dict = {
                                 "action": "TYPE",
-                                "coordinates": action_data["coordinates"],
                                 "text": str(action_data["text"]),
                                 "submit": True,
                                 "thought": thought
                             }
+                            if "target_id" in action_data:
+                                action_dict["target_id"] = str(action_data["target_id"])
+                            if "coordinates" in action_data:
+                                action_dict["coordinates"] = action_data["coordinates"]
                             parsed_actions.append(action_dict)
                         elif action_data.get("action") == "SCROLL" and "direction" in action_data:
                             parsed_actions.append({
@@ -646,31 +662,40 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             try:
                 action_data = json.loads(match_single.group(0))
                 thought = action_data.get("thought", "")
-                if action_data.get("action") == "CLICK" and "coordinates" in action_data:
+                if action_data.get("action") == "CLICK" and ("coordinates" in action_data or "target_id" in action_data):
                     action_dict = {
                         "action": "CLICK",
-                        "coordinates": action_data["coordinates"],
                         "thought": thought
                     }
+                    if "target_id" in action_data:
+                        action_dict["target_id"] = str(action_data["target_id"])
+                    if "coordinates" in action_data:
+                        action_dict["coordinates"] = action_data["coordinates"]
                     return [action_dict]
-                elif action_data.get("action") == "TYPE" and "coordinates" in action_data and "text" in action_data:
+                elif action_data.get("action") == "TYPE" and ("coordinates" in action_data or "target_id" in action_data) and "text" in action_data:
                     action_dict = {
                         "action": "TYPE",
-                        "coordinates": action_data["coordinates"],
                         "text": str(action_data["text"]),
                         "thought": thought
                     }
+                    if "target_id" in action_data:
+                        action_dict["target_id"] = str(action_data["target_id"])
+                    if "coordinates" in action_data:
+                        action_dict["coordinates"] = action_data["coordinates"]
                     if "submit" in action_data:
                         action_dict["submit"] = bool(action_data["submit"])
                     return [action_dict]
-                elif action_data.get("action") == "SEARCH" and "coordinates" in action_data and "text" in action_data:
+                elif action_data.get("action") == "SEARCH" and ("coordinates" in action_data or "target_id" in action_data) and "text" in action_data:
                     action_dict = {
                         "action": "TYPE",
-                        "coordinates": action_data["coordinates"],
                         "text": str(action_data["text"]),
                         "submit": True,
                         "thought": thought
                     }
+                    if "target_id" in action_data:
+                        action_dict["target_id"] = str(action_data["target_id"])
+                    if "coordinates" in action_data:
+                        action_dict["coordinates"] = action_data["coordinates"]
                     return [action_dict]
                 elif action_data.get("action") == "SCROLL" and "direction" in action_data:
                     return [{
