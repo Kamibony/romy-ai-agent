@@ -437,7 +437,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "You must output the exact [x, y] coordinates representing the center of the target element to interact with it.\n\n"
             "Supported actions:\n"
             "- {\"action\": \"CLICK\", \"coordinates\": [x, y]}\n"
-            "- {\"action\": \"TYPE\", \"coordinates\": [x, y], \"text\": \"<text to type>\"} (this automatically focuses the element via click and types)\n"
+            "- {\"action\": \"TYPE\", \"coordinates\": [x, y], \"text\": \"<text to type>\", \"submit\": true} (this automatically focuses the element, types, and natively submits by pressing Enter if submit=true)\n"
             "- {\"action\": \"SCROLL\", \"direction\": \"down\"} (or \"up\")\n"
             "- {\"action\": \"NAVIGATE\", \"url\": \"<url>\"}\n"
             "- {\"action\": \"OPEN_TAB\", \"url\": \"<url>\"}\n"
@@ -512,6 +512,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                                 description="[x, y] coordinates for CLICK/TYPE actions"
                             ),
                             "text": types.Schema(type=types.Type.STRING),
+                            "submit": types.Schema(type=types.Type.BOOLEAN, description="Set to true to press Enter after typing"),
                             "direction": types.Schema(type=types.Type.STRING),
                             "url": types.Schema(type=types.Type.STRING),
                             "key": types.Schema(type=types.Type.STRING),
@@ -552,6 +553,8 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                                 "text": str(action_data["text"]),
                                 "thought": thought
                             }
+                            if "submit" in action_data:
+                                action_dict["submit"] = bool(action_data["submit"])
                             parsed_actions.append(action_dict)
                         elif action_data.get("action") == "SCROLL" and "direction" in action_data:
                             parsed_actions.append({
@@ -646,6 +649,8 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                         "text": str(action_data["text"]),
                         "thought": thought
                     }
+                    if "submit" in action_data:
+                        action_dict["submit"] = bool(action_data["submit"])
                     return [action_dict]
                 elif action_data.get("action") == "SCROLL" and "direction" in action_data:
                     return [{
