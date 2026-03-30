@@ -158,7 +158,9 @@ window.RomyDomMapper = {
 
         allNodes = allNodes.filter(node => {
             const rect = node.getBoundingClientRect();
-            const isSemantic = node.matches('button, a, input, select, textarea, [role="button"], [role="link"]');
+            const isSemantic = node.matches('button, a, input, select, textarea, [role="button"], [role="link"]') ||
+                               node.hasAttribute('aria-label') ||
+                               node.tagName.toLowerCase() === 'svg';
 
             // If it's just a generic container marked interactive via CSS (cursor: pointer)
             // and it takes up more than 50% of the screen, we probably don't want it.
@@ -190,8 +192,12 @@ window.RomyDomMapper = {
             }
 
             if (interactiveParent) {
-                const isDistinctChild = node.matches('input, select, textarea, button, a');
-                const parentIsDistinct = interactiveParent.matches('button, a');
+                const isDistinctChild = node.matches('input, select, textarea, button, a') ||
+                                        node.hasAttribute('aria-label') ||
+                                        node.tagName.toLowerCase() === 'svg';
+                const parentIsDistinct = interactiveParent.matches('button, a') ||
+                                         interactiveParent.hasAttribute('aria-label') ||
+                                         interactiveParent.tagName.toLowerCase() === 'svg';
 
                 if (isDistinctChild) {
                     // If the child is distinctly interactive (like input or button), we definitely want to keep it.
@@ -201,7 +207,7 @@ window.RomyDomMapper = {
                         nodesToKeep.delete(interactiveParent);
                     }
                 } else {
-                    // If the child is not distinctly interactive (e.g., a span or svg),
+                    // If the child is not distinctly interactive (e.g., a span or svg without distinctness),
                     // and it's inside an interactive parent, we don't need the child as a separate target.
                     nodesToKeep.delete(node);
                 }
