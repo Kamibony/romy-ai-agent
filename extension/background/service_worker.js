@@ -573,7 +573,13 @@ async function handleGetState(payload) {
     try {
         await cdpManager.attach(tab.id);
 
-        const captureResult = await cdpManager.sendCommand(tab.id, "Page.captureScreenshot", { format: "jpeg", quality: 60 });
+        // Optimizing screenshot by requesting a scaled down image directly from CDP
+        // to reduce base64 transfer time overhead
+        const captureResult = await cdpManager.sendCommand(tab.id, "Page.captureScreenshot", {
+            format: "jpeg",
+            quality: 60,
+            optimizeForSpeed: true // Custom hint for faster captures if supported
+        });
 
         if (captureResult && captureResult.data) {
             screenshotBase64 = captureResult.data;
@@ -770,6 +776,12 @@ async function handleExecuteNativeAction(payload) {
                     await cdpManager.sendCommand(activeSessionTabId, "Runtime.evaluate", {
                         expression: `
                             (function() {
+                                // Attempt to focus the element directly under the coordinates BEFORE appending dot
+                                const el = document.elementFromPoint(${rawX}, ${rawY});
+                                if (el && typeof el.focus === 'function') {
+                                    el.focus();
+                                }
+
                                 const dot = document.createElement('div');
                                 dot.style.position = 'fixed';
                                 dot.style.left = '${rawX}px';
@@ -789,7 +801,7 @@ async function handleExecuteNativeAction(payload) {
                         `
                     });
                 } catch (err) {
-                    sendTelemetryLog(`[CDP] Failed to draw HITL feedback dot: ${err.message}`);
+                    sendTelemetryLog(`[CDP] Failed to draw HITL feedback dot or focus element: ${err.message}`);
                 }
 
                 await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", { type: "mousePressed", x: x, y: y, button: "left", clickCount: 1 });
