@@ -1,6 +1,14 @@
 // MESSAGE_TYPES is available globally via window.MESSAGE_TYPES loaded from manifest.json
 console.log("Romy Content Script loaded.");
 
+// Track active network requests across the ISOLATED world boundary
+let currentActiveRequests = 0;
+window.addEventListener('RomyNetworkStatusUpdate', (e) => {
+    if (e.detail && typeof e.detail.activeRequests === 'number') {
+        currentActiveRequests = e.detail.activeRequests;
+    }
+});
+
 // Teleoperation: Listen for physical human clicks
 document.addEventListener('click', (e) => {
     if (!e.isTrusted) return; // Only intercept genuine human physical clicks
@@ -55,41 +63,48 @@ async function handleRequestDomMap(sendResponse) {
 }
 
 /**
- * Returns a Promise that resolves when the DOM is considered "stable".
- * Stability is defined as no new DOM mutations for `debounceMs` milliseconds.
+ * Returns a Promise that resolves when the DOM and Network are considered "stable".
+ * Stability is defined as no new DOM mutations AND zero active network requests for `debounceMs`.
  * If stability isn't reached within `timeoutMs`, the Promise resolves anyway as a fallback.
  */
 function waitForDomStability(debounceMs = 1000, timeoutMs = 5000) {
     return new Promise((resolve) => {
         let debounceTimer;
         let timeoutTimer;
+        let intervalTimer;
         let observer;
 
         const cleanup = () => {
             if (observer) observer.disconnect();
             if (debounceTimer) clearTimeout(debounceTimer);
             if (timeoutTimer) clearTimeout(timeoutTimer);
+            if (intervalTimer) clearInterval(intervalTimer);
         };
 
-        const onStable = () => {
-            cleanup();
-            console.log("DOM considered stable (mutations ceased).");
-            resolve();
+        const checkStability = () => {
+            if (currentActiveRequests === 0) {
+                cleanup();
+                console.log("DOM and Network considered stable.");
+                resolve();
+            } else {
+                if (debounceTimer) clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(checkStability, debounceMs);
+            }
         };
 
         const onTimeout = () => {
             cleanup();
-            console.log("DOM stability check timed out. Proceeding as 'ready enough'.");
+            console.log("Stability check timed out. Proceeding as 'ready enough'.");
             resolve();
         };
 
         timeoutTimer = setTimeout(onTimeout, timeoutMs);
 
-        debounceTimer = setTimeout(onStable, debounceMs);
+        debounceTimer = setTimeout(checkStability, debounceMs);
 
         observer = new MutationObserver(() => {
             if (debounceTimer) clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(onStable, debounceMs);
+            debounceTimer = setTimeout(checkStability, debounceMs);
         });
 
         observer.observe(document.body || document.documentElement, {
@@ -97,5 +112,12 @@ function waitForDomStability(debounceMs = 1000, timeoutMs = 5000) {
             subtree: true,
             attributes: true
         });
+
+        intervalTimer = setInterval(() => {
+            if (currentActiveRequests !== 0) {
+                if (debounceTimer) clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(checkStability, debounceMs);
+            }
+        }, 100);
     });
 }
