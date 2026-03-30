@@ -62,7 +62,16 @@ class LocalBridgeManager:
         with self.lock:
             # We only support one active Chrome Extension connection at a time
             # If a new one connects while we have an active session, reject the new one
-            if self.active_websocket and not self.active_websocket.closed and self.active_websocket != websocket:
+            is_active = False
+            if self.active_websocket:
+                # websockets >= 14 uses 'state' enum instead of 'closed' boolean
+                if hasattr(self.active_websocket, 'state'):
+                    is_active = self.active_websocket.state.name not in ('CLOSED', 'CLOSING')
+                else:
+                    # fallback for older websockets versions
+                    is_active = not getattr(self.active_websocket, 'closed', True)
+
+            if is_active and self.active_websocket != websocket:
                 reject_new = True
             else:
                 self.active_websocket = websocket
