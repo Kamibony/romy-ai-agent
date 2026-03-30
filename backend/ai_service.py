@@ -739,8 +739,10 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             except json.JSONDecodeError:
                 pass
 
-        return [{"action": "PARSE_ERROR", "raw_response": str(response_text)}]
+        return [{"action": "PARSE_ERROR", "error": "Model response could not be parsed as valid JSON actions.", "raw_response": str(response_text)}]
 
     except Exception as e:
         print(f"Error calling Gemini: {e}")
-        return [{"action": "API_ERROR", "error": str(e)}]
+        import traceback
+        traceback.print_exc()
+        return [{"action": "API_ERROR", "error": f"Exception occurred during model generation: {str(e)}"}]
