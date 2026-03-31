@@ -107,10 +107,11 @@ def supervisor_plan_with_gemini(command_text: str) -> list[str]:
     try:
         system_instruction = (
             "You are a Supervisor Agent. Your job is to take a high-level user request and break it down into a strictly sequential list of concrete sub-tasks. "
-            "These sub-tasks will be executed by a web automation agent. "
-            "Keep the sub-tasks concise and descriptive. Do not include execution details like 'click the button' or 'type text' unless necessary, instead use goals like 'Navigate to the website', 'Search for flights', etc. "
-            "Output strictly a JSON array of strings, where each string is a sub-task. "
-            "Example output: [\"Navigate to pelikan.cz\", \"Enter origin city\", \"Enter destination city\", \"Select departure date\", \"Click search\"]"
+            "These sub-tasks will be executed by a hybrid automation agent (capable of both WEB and OS interactions). "
+            "Keep the sub-tasks concise and descriptive. Do not include execution details like 'click the button' or 'type text' unless necessary, instead use goals like 'Navigate to the website', 'Search for flights', 'Open Calculator', etc. "
+            "Crucially, you MUST prefix each sub-task string with either `[WEB]` or `[OS]` to explicitly tag the target environment. "
+            "Output strictly a JSON array of strings, where each string is a prefixed sub-task. "
+            "Example output: [\"[WEB] Navigate to pelikan.cz\", \"[WEB] Enter origin city\", \"[OS] Open Calculator\", \"[WEB] Select departure date\"]"
         )
 
         response = gemini_client.models.generate_content(

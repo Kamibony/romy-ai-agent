@@ -483,34 +483,87 @@ def handle_token_expiry():
 
 
 import concurrent.futures
+import queue
+import threading
+import random
 
 class DesktopEnvironment:
-    """Wrapper to handle thread-blocking OS automation tasks securely."""
+    """Wrapper to handle thread-blocking OS automation tasks securely with a dedicated daemon thread."""
     def __init__(self):
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self.task_queue = queue.Queue()
+        self.daemon_thread = threading.Thread(target=self._worker_loop, daemon=True)
+        self.daemon_thread.start()
 
-    async def scan_ui_elements(self) -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]], str]:
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self.executor, self._sync_scan)
-
-    def _sync_scan(self) -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]], str]:
-        ui_elements = []
-        memory_map = {}
-        window_name = "OS_Environment"
-
-        # Initialize COM on this thread
+    def _worker_loop(self):
+        # Initialize COM once on the dedicated thread
+        com_initialized = False
         try:
             import pythoncom
             pythoncom.CoInitialize()
             com_initialized = True
+            logging.info("COM successfully initialized on DesktopEnvironment worker thread.")
         except ImportError:
             try:
                 import ctypes
                 ctypes.windll.ole32.CoInitialize(None)
                 com_initialized = True
+                logging.info("COM successfully initialized on DesktopEnvironment worker thread via ctypes.")
             except Exception as e:
                 logging.warning(f"Could not initialize COM: {e}")
-                com_initialized = False
+
+        while True:
+            task = self.task_queue.get()
+            if task is None:
+                # Stop signal
+                break
+
+            func, args, kwargs, future = task
+            try:
+                result = func(*args, **kwargs)
+                future.set_result(result)
+            except Exception as e:
+                future.set_exception(e)
+            finally:
+                self.task_queue.task_done()
+
+        if com_initialized:
+            try:
+                import pythoncom
+                pythoncom.CoUninitialize()
+            except ImportError:
+                try:
+                    import ctypes
+                    ctypes.windll.ole32.CoUninitialize()
+                except Exception:
+                    pass
+
+    def _submit_task(self, func, *args, **kwargs):
+        loop = asyncio.get_event_loop()
+        future = loop.create_future()
+
+        # We need a synchronous future for the worker thread to set,
+        # which we then resolve the asyncio future with.
+        sync_future = concurrent.futures.Future()
+
+        def _resolve_async_future(fut):
+            try:
+                result = fut.result()
+                loop.call_soon_threadsafe(future.set_result, result)
+            except Exception as e:
+                loop.call_soon_threadsafe(future.set_exception, e)
+
+        sync_future.add_done_callback(_resolve_async_future)
+
+        self.task_queue.put((func, args, kwargs, sync_future))
+        return future
+
+    async def scan_ui_elements(self) -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]], str]:
+        return await self._submit_task(self._sync_scan)
+
+    def _sync_scan(self) -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]], str]:
+        ui_elements = []
+        memory_map = {}
+        window_name = "OS_Environment"
 
         try:
             # Enforce strict Active Window Pruning
@@ -575,51 +628,60 @@ class DesktopEnvironment:
             logging.info(f"Found {len(ui_elements)} interactive OS UI elements.")
         except Exception as e:
             logging.error(f"Error scanning OS UI tree: {e}")
-        finally:
-            if com_initialized:
-                try:
-                    import pythoncom
-                    pythoncom.CoUninitialize()
-                except ImportError:
-                    try:
-                        import ctypes
-                        ctypes.windll.ole32.CoUninitialize()
-                    except Exception:
-                        pass
 
         return ui_elements, memory_map, window_name
 
     async def click(self, x: int, y: int):
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(self.executor, self._sync_click, x, y)
+        await self._submit_task(self._sync_click, x, y)
 
     def _sync_click(self, x, y):
         try:
-            pyautogui.moveTo(x, y, duration=0.2)
+            if config.STEALTH_MODE:
+                duration = random.uniform(0.15, 0.45)
+                # Use a basic tween if available, otherwise default
+                tween = pyautogui.easeInOutQuad if hasattr(pyautogui, 'easeInOutQuad') else pyautogui.linear
+                pyautogui.moveTo(x, y, duration=duration, tween=tween)
+                time.sleep(random.uniform(0.05, 0.15))
+            else:
+                pyautogui.moveTo(x, y, duration=0.2)
             pyautogui.click()
         except Exception as e:
             logging.error(f"Error clicking at ({x}, {y}): {e}")
 
     async def type(self, x: int, y: int, text: str, submit: bool = False):
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(self.executor, self._sync_type, x, y, text, submit)
+        await self._submit_task(self._sync_type, x, y, text, submit)
 
     def _sync_type(self, x, y, text, submit):
         try:
-            pyautogui.moveTo(x, y, duration=0.2)
+            if config.STEALTH_MODE:
+                duration = random.uniform(0.15, 0.45)
+                tween = pyautogui.easeInOutQuad if hasattr(pyautogui, 'easeInOutQuad') else pyautogui.linear
+                pyautogui.moveTo(x, y, duration=duration, tween=tween)
+                time.sleep(random.uniform(0.05, 0.15))
+            else:
+                pyautogui.moveTo(x, y, duration=0.2)
+
             pyautogui.click()
             pyautogui.hotkey('ctrl', 'a')
             pyautogui.press('backspace')
             time.sleep(0.1)
-            pyautogui.write(text, interval=0.01)
+
+            if config.STEALTH_MODE:
+                for char in text:
+                    pyautogui.write(char)
+                    time.sleep(random.uniform(0.02, 0.08))
+            else:
+                pyautogui.write(text, interval=0.01)
+
             if submit:
+                if config.STEALTH_MODE:
+                    time.sleep(random.uniform(0.1, 0.3))
                 pyautogui.press('enter')
         except Exception as e:
             logging.error(f"Error typing '{text}' at ({x}, {y}): {e}")
 
     async def screenshot(self):
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self.executor, self._sync_screenshot)
+        return await self._submit_task(self._sync_screenshot)
 
     def _sync_screenshot(self):
         try:
@@ -630,6 +692,10 @@ class DesktopEnvironment:
         except Exception as e:
             logging.error(f"Error capturing OS screenshot: {e}")
             return ""
+
+    def close(self):
+        self.task_queue.put(None)
+        self.daemon_thread.join()
 
 desktop_env = DesktopEnvironment()
 
@@ -1140,11 +1206,19 @@ class AgentStateMachine:
         logging.info(f"--- Executing Sub-Task {self.current_sub_task_index + 1}/{len(self.sub_tasks)}: {current_sub_task} ---")
 
         if self.sub_task_iteration == 0:
-            # Dynamically switch intent for each sub-task to allow seamless Web -> OS mid-flight
-            dynamic_intent_text = f"Overall Goal: {self.command_text}\nSub-task: {current_sub_task}"
-            intent, _ = classify_intent(dynamic_intent_text, "")
-            self.intent = intent
-            logging.info(f"Dynamic intent for sub-task '{current_sub_task}' classified as {self.intent}")
+            # Deterministically parse intent from the [WEB] or [OS] prefix
+            if current_sub_task.strip().upper().startswith("[OS]"):
+                self.intent = "OS"
+                logging.info(f"Deterministically parsed intent for sub-task as {self.intent}")
+            elif current_sub_task.strip().upper().startswith("[WEB]"):
+                self.intent = "WEB"
+                logging.info(f"Deterministically parsed intent for sub-task as {self.intent}")
+            else:
+                # Fallback to dynamic classification if prefix is missing
+                dynamic_intent_text = f"Overall Goal: {self.command_text}\nSub-task: {current_sub_task}"
+                intent, _ = classify_intent(dynamic_intent_text, "")
+                self.intent = intent
+                logging.info(f"Prefix missing. Dynamic intent for sub-task '{current_sub_task}' classified as {self.intent}")
 
         if self.sub_task_iteration > 0:
             try:
@@ -1479,6 +1553,8 @@ class AgentStateMachine:
                      self.intent = "OS"
 
              if self.intent == "WEB" and not force_os:
+                 # Pass down STEALTH_MODE config
+                 action_to_take["stealth_mode"] = config.STEALTH_MODE
                  exec_payload = {"action_type": "EXECUTE_ACTION", "action": action_to_take, "iteration": self.iteration}
                  exec_result = bridge.delegate_command(exec_payload)
 

@@ -741,6 +741,26 @@ async function handleExecuteNativeAction(payload) {
                 sendTelemetryLog(`[CDP] Failed to draw HITL feedback dot: ${err.message}`);
             }
 
+            if (actionData.stealth_mode !== false) {
+                // Stealth Kinematics: Add an interpolated mouse move before clicking
+                const currentMouseX = Math.floor(Math.random() * 500); // Simulate coming from somewhere
+                const currentMouseY = Math.floor(Math.random() * 500);
+
+                await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", {
+                    type: "mouseMoved",
+                    x: Math.floor((x + currentMouseX) / 2),
+                    y: Math.floor((y + currentMouseY) / 2)
+                });
+                await new Promise(r => setTimeout(r, Math.floor(Math.random() * 50) + 20));
+
+                await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", {
+                    type: "mouseMoved",
+                    x: x,
+                    y: y
+                });
+                await new Promise(r => setTimeout(r, Math.floor(Math.random() * 100) + 50));
+            }
+
             // Dispatch MouseEvent (Click)
             await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", {
                 type: "mousePressed",
@@ -750,7 +770,13 @@ async function handleExecuteNativeAction(payload) {
                 clickCount: 1
             });
 
-            await new Promise(r => setTimeout(r, 50)); // Small delay between press and release
+            if (actionData.stealth_mode !== false) {
+                // Stealth Kinematics: Randomized click duration
+                const clickDuration = Math.floor(Math.random() * (120 - 40 + 1)) + 40;
+                await new Promise(r => setTimeout(r, clickDuration));
+            } else {
+                await new Promise(r => setTimeout(r, 50)); // Fast fixed delay
+            }
 
             await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", {
                 type: "mouseReleased",
@@ -845,11 +871,23 @@ async function handleExecuteNativeAction(payload) {
                     type: "char",
                     text: char
                 });
-                await new Promise(r => setTimeout(r, 10)); // Typematic delay
+                if (actionData.stealth_mode !== false) {
+                    // Stealth Kinematics: Randomized human-like typing jitter (50ms - 150ms)
+                    const jitterDelay = Math.floor(Math.random() * (150 - 50 + 1)) + 50;
+                    await new Promise(r => setTimeout(r, jitterDelay));
+                } else {
+                    await new Promise(r => setTimeout(r, 10)); // Typematic delay
+                }
             }
 
             if (actionData.submit || actionData.pressEnter) {
                 sendTelemetryLog(`Autonomously injecting Enter keystroke for native form submission...`);
+                if (actionData.stealth_mode !== false) {
+                    // Stealth Kinematics: Add realistic pause before pressing Enter
+                    const preEnterDelay = Math.floor(Math.random() * (400 - 150 + 1)) + 150;
+                    await new Promise(r => setTimeout(r, preEnterDelay));
+                }
+
                 const keyData = { keyIdentifier: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
 
                 await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchKeyEvent", {
