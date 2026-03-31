@@ -488,13 +488,14 @@ class DesktopEnvironment:
     def __init__(self):
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
-    async def scan_ui_elements(self) -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
+    async def scan_ui_elements(self) -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]], str]:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(self.executor, self._sync_scan)
 
-    def _sync_scan(self) -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
+    def _sync_scan(self) -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]], str]:
         ui_elements = []
         memory_map = {}
+        window_name = "OS_Environment"
 
         # Initialize COM on this thread
         try:
@@ -516,7 +517,12 @@ class DesktopEnvironment:
             if not active_window:
                 active_window = auto.GetRootControl()
 
-            logging.info(f"Scanning UI tree for window: {active_window.Name}")
+            try:
+                window_name = active_window.Name
+            except Exception:
+                pass
+
+            logging.info(f"Scanning UI tree for window: {window_name}")
 
             element_id = 1
             # Filter generic control types to reduce noise
@@ -580,7 +586,7 @@ class DesktopEnvironment:
                     except Exception:
                         pass
 
-        return ui_elements, memory_map
+        return ui_elements, memory_map, window_name
 
     async def click(self, x: int, y: int):
         loop = asyncio.get_event_loop()
@@ -851,31 +857,35 @@ def verify_action_natively(action, before_state, after_state):
 
         # Check if typed text exists in the new UI elements natively
         for el in after_ui:
-            # Check value or text attributes mapped by DOMSnapshot
+            # Check value or text attributes mapped by DOMSnapshot (Web) or Name (OS)
             el_text = el.get("text", "") or ""
             el_value = el.get("attributes", {}).get("value", "") or ""
-            el_placeholder = el.get("attributes", {}).get("placeholder", "") or ""
+            el_name = el.get("name", "") or "" # For OS elements
 
-            if text_to_type.lower() in str(el_text).lower() or text_to_type.lower() in str(el_value).lower():
-                return {"success": True, "reason": f"Text '{text_to_type}' natively verified in DOM."}
+            if text_to_type.lower() in str(el_text).lower() or text_to_type.lower() in str(el_value).lower() or text_to_type.lower() in str(el_name).lower():
+                return {"success": True, "reason": f"Text '{text_to_type}' natively verified in state."}
 
-        return {"success": False, "reason": f"Text '{text_to_type}' not found natively in new DOM."}
+        return {"success": False, "reason": f"Text '{text_to_type}' not found natively in new state."}
 
     elif action_type == "CLICK":
-        # If URL changed, click definitely did something
+        # If URL (or Window Name) changed, click definitely did something
         if before_url != after_url and after_url:
-            return {"success": True, "reason": "URL changed after click natively verified."}
+            return {"success": True, "reason": "Context (URL/Window) changed after click natively verified."}
 
-        # If DOM changed significantly (e.g. elements appeared/disappeared)
+        # If DOM/UI Tree changed significantly (e.g. elements appeared/disappeared)
         before_ids = {el.get("id") for el in before_ui if el.get("id")}
         after_ids = {el.get("id") for el in after_ui if el.get("id")}
 
+        # Check by name as well for OS
+        before_names = {el.get("name") for el in before_ui if el.get("name")}
+        after_names = {el.get("name") for el in after_ui if el.get("name")}
+
         # If new elements appeared or old ones disappeared, the state changed
-        if before_ids != after_ids:
-             return {"success": True, "reason": "DOM state changed after click natively verified."}
+        if before_ids != after_ids or before_names != after_names:
+             return {"success": True, "reason": "UI state changed after click natively verified."}
 
         # If state didn't change significantly (or we can't be sure), fallback to LLM Critic
-        return {"success": False, "reason": "No deterministic DOM or URL change natively detected after click."}
+        return {"success": False, "reason": "No deterministic UI or Context change natively detected after click."}
 
     elif action_type in ["RESET_VIEW", "SCROLL", "PRESS_ENTER", "PRESS", "PRESS_KEY", "HOVER", "REPLY"]:
         return {"success": True, "reason": f"{action_type} natively verified."}
@@ -1183,14 +1193,14 @@ class AgentStateMachine:
             self.current_dpr = state_result.get("dpr", 1.0)
         else:
             logging.info("Requesting GET_STATE from Desktop Environment...")
-            ui_elements, memory_map = await desktop_env.scan_ui_elements()
+            ui_elements, memory_map, window_name = await desktop_env.scan_ui_elements()
             screenshot = await desktop_env.screenshot()
 
             self.current_ui_elements = ui_elements
             self.os_memory_map = memory_map
             self.current_clean_screenshot = screenshot
             # For OS, we identify apps by window name or just OS
-            self.current_url = "OS_Environment"
+            self.current_url = window_name
             self.current_dpr = 1.0
         self.current_annotated_screenshot = annotate_image_with_som(
             self.current_clean_screenshot,
@@ -1463,8 +1473,9 @@ class AgentStateMachine:
              if self.intent == "WEB" and action_type in ["PRESS", "PRESS_KEY"]:
                  key = action_to_take.get("key", "").lower()
                  if key in ["win", "windows", "meta", "command"]:
-                     logging.info(f"Systemic guard: Rerouting {action_type} '{key}' from WEB to OS to prevent state bleed.")
+                     logging.info(f"Systemic guard: Rerouting {action_type} '{key}' from WEB to OS to prevent state bleed. Applying strict context lock for the remainder of this sub-task.")
                      force_os = True
+                     self.intent = "OS"
 
              if self.intent == "WEB" and not force_os:
                  exec_payload = {"action_type": "EXECUTE_ACTION", "action": action_to_take, "iteration": self.iteration}
@@ -2254,7 +2265,7 @@ def execute_voice_agent_loop() -> None:
                 logging.error(f"Error checking human response: {e}")
 
             # 3. Scan UI Elements
-            ui_elements, memory_map = scan_ui_elements()
+            ui_elements, memory_map, window_name = desktop_env._sync_scan()
 
             # 4. Construct JSON payload
             payload = {
@@ -2262,7 +2273,8 @@ def execute_voice_agent_loop() -> None:
                 "session_id": doc_id,
                 "command_text": command_text,
                 "current_sub_task": current_sub_task,
-                "client_context": client_context
+                "client_context": client_context,
+                "current_url": window_name
             }
             if sub_task_iteration == 0 and sub_task_idx == 0 and audio_b64:
                 payload["audio_base64"] = audio_b64
