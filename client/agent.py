@@ -55,6 +55,7 @@ import config
 CURRENT_TOKEN = None
 
 COMMAND_QUEUE = queue.Queue()
+PROCESSED_DOC_IDS = set()
 global_state_machine = None
 global_asyncio_loop = None
 
@@ -398,6 +399,10 @@ def start_remote_listener() -> None:
                         doc = res["document"]
                         doc_name = doc.get("name", "")
                         doc_id = doc_name.split("/")[-1]
+
+                        if doc_id in PROCESSED_DOC_IDS:
+                            continue
+                        PROCESSED_DOC_IDS.add(doc_id)
 
                         fields = doc.get("fields", {})
                         command_text = fields.get("command", {}).get("stringValue", "")
@@ -1097,6 +1102,13 @@ class AgentStateMachine:
 
         current_sub_task = self.sub_tasks[self.current_sub_task_index]
         logging.info(f"--- Executing Sub-Task {self.current_sub_task_index + 1}/{len(self.sub_tasks)}: {current_sub_task} ---")
+
+        if self.sub_task_iteration == 0:
+            # Dynamically switch intent for each sub-task to allow seamless Web -> OS mid-flight
+            dynamic_intent_text = f"Overall Goal: {self.command_text}\nSub-task: {current_sub_task}"
+            intent, _ = classify_intent(dynamic_intent_text, "")
+            self.intent = intent
+            logging.info(f"Dynamic intent for sub-task '{current_sub_task}' classified as {self.intent}")
 
         if self.sub_task_iteration > 0:
             try:
@@ -2487,7 +2499,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                         firestore_update_document("remote_commands", doc_id, {
                             "uid": uid,
                             "command": command_text,
-                            "status": "pending",
+                            "status": "in_progress",
                             "created_at": now_str
                         })
                 except Exception as e:
@@ -2503,6 +2515,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 if client_context:
                     command_payload["client_context"] = client_context
 
+                PROCESSED_DOC_IDS.add(doc_id)
                 COMMAND_QUEUE.put(command_payload)
 
                 self.send_response(HTTPStatus.OK)
