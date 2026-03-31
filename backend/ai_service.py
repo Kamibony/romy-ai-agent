@@ -336,9 +336,9 @@ def classify_intent_with_gemini(command_text: str) -> str:
         print(f"Error classifying intent: {e}")
         return "OS"
 
-def synthesize_playbook_rule_with_gemini(domain: str, execution_telemetry: str, client_id: str = None) -> Optional[str]:
+def synthesize_playbook_rule_with_gemini(domain: str, execution_telemetry: str, client_id: str = None, failed_sub_task: str = None) -> Optional[str]:
     """
-    Synthesizer Agent (Sleep Cycle): Reviews execution telemetry for a domain and extracts a universal rule.
+    Synthesizer Agent (Sleep Cycle): Reviews execution telemetry or human correction for a domain and extracts a universal rule.
     Saves the rule to ChromaDB if found.
     """
     if not execution_telemetry or gemini_client is None:
@@ -347,16 +347,20 @@ def synthesize_playbook_rule_with_gemini(domain: str, execution_telemetry: str, 
     try:
         system_instruction = (
             "You are a Synthesizer Agent for an AI web assistant. Your job is to review the execution telemetry "
-            "(the history of actions, successes, and especially failures/retries) for a specific website. "
+            "or human correction for a specific website. "
             "Extract a single, concise, universal rule or 'playbook' for successfully interacting with this site. "
             "For example, 'On pelikan.cz, after typing the city, you must wait for the dropdown and explicitly click the suggestion.' "
             "If the telemetry is straightforward and no special rule is needed, return an empty string. "
             "Return ONLY the extracted rule string, or nothing."
         )
 
+        prompt = f"Domain: {domain}\nTelemetry/Human Correction:\n{execution_telemetry}"
+        if failed_sub_task:
+            prompt += f"\nGoal/Failed Sub-task: {failed_sub_task}"
+
         response = gemini_client.models.generate_content(
             model='gemini-2.5-flash',
-            contents=[f"Domain: {domain}\nTelemetry:\n{execution_telemetry}"],
+            contents=[prompt],
             config=types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 temperature=0.2,
@@ -365,7 +369,7 @@ def synthesize_playbook_rule_with_gemini(domain: str, execution_telemetry: str, 
 
         rule = response.text.strip()
         if rule:
-            save_playbook_rule(domain, rule, client_id=client_id)
+            save_playbook_rule(domain, rule, client_id=client_id, goal=failed_sub_task)
             return rule
         return None
     except Exception as e:
@@ -475,7 +479,10 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                 domain = urlparse(current_url).netloc
                 if domain:
                     domain = domain.replace("www.", "")
-                    playbook_rules = get_playbook_rules(domain, client_id=client_id)
+                    # Optionally, if it's an OS app, it might not have 'www.'. We can use the current_url as domain.
+                    if "://" not in current_url:
+                        domain = current_url
+                    playbook_rules = get_playbook_rules(domain, client_id=client_id, goal=current_sub_task)
                     if playbook_rules:
                         system_instruction += f"\n\n[SITE_SPECIFIC_RULE] for {domain}:\n"
                         for rule in playbook_rules:

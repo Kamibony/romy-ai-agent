@@ -23,8 +23,12 @@ from enum import Enum
 
 try:
     import uiautomation as auto
-except:
-    pass
+    import ctypes
+    # Enforce DPI awareness for accurate coordinates
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception as e:
+    logging.warning(f"Could not set DPI awareness or import uiautomation: {e}")
+
 try:
     import sounddevice as sd
 except:
@@ -472,67 +476,125 @@ def handle_token_expiry():
         pass
 
 
-def scan_ui_elements() -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
-    """
-    Scans the active window's accessibility tree for clickable elements.
-    Returns a list of UI element dictionaries and a memory map of ID to coordinates.
-    """
-    ui_elements = []
-    memory_map = {}
+import concurrent.futures
 
-    try:
-        # We can either scan the entire desktop or the active window.
-        # Active window is usually better for RPA context to avoid sending too much data.
-        active_window = auto.GetForegroundControl()
-        if not active_window:
-            active_window = auto.GetRootControl()
+class DesktopEnvironment:
+    """Wrapper to handle thread-blocking OS automation tasks securely."""
+    def __init__(self):
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
-        logging.info(f"Scanning UI tree for window: {active_window.Name}")
+    async def scan_ui_elements(self) -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self.executor, self._sync_scan)
 
-        # Traverse the tree
-        element_id = 1
-        for walk_result in auto.WalkTree(active_window, getChildren=lambda c: c.GetChildren(), includeTop=True):
-            if isinstance(walk_result, (tuple, list)):
-                control = walk_result[0] if len(walk_result) > 0 else None
-                depth = walk_result[1] if len(walk_result) > 1 else 0
-            else:
-                control = walk_result
-                depth = 0
+    def _sync_scan(self) -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]]]:
+        ui_elements = []
+        memory_map = {}
 
-            if not control:
-                continue
+        try:
+            # Enforce strict Active Window Pruning
+            active_window = auto.GetForegroundControl()
+            if not active_window:
+                active_window = auto.GetRootControl()
 
-            # Filter for elements that are likely interactive or provide context
-            try:
-                control_type = control.ControlTypeName
-                name = control.Name
-            except AttributeError:
-                continue
+            logging.info(f"Scanning UI tree for window: {active_window.Name}")
 
-            if control_type in ['ButtonControl', 'HyperlinkControl', 'TextControl', 'EditControl', 'MenuItemControl', 'ListItemControl', 'TabItemControl']:
-                rect = control.BoundingRectangle
-                if rect.width() > 0 and rect.height() > 0:
-                    center_x = rect.left + rect.width() // 2
-                    center_y = rect.top + rect.height() // 2
+            element_id = 1
+            # Filter generic control types to reduce noise
+            target_types = ['ButtonControl', 'HyperlinkControl', 'TextControl', 'EditControl', 'MenuItemControl', 'ListItemControl', 'TabItemControl', 'DocumentControl', 'CheckBoxControl']
 
-                    element_str_id = str(element_id)
-                    ui_elements.append({
-                        "id": element_str_id,
-                        "type": control_type,
-                        "name": name
-                    })
+            for walk_result in auto.WalkTree(active_window, getChildren=lambda c: c.GetChildren(), includeTop=True, maxDepth=15):
+                if isinstance(walk_result, (tuple, list)):
+                    control = walk_result[0] if len(walk_result) > 0 else None
+                else:
+                    control = walk_result
 
-                    memory_map[element_str_id] = {
-                        "x": center_x,
-                        "y": center_y
-                    }
-                    element_id += 1
+                if not control:
+                    continue
 
-        logging.info(f"Found {len(ui_elements)} UI elements.")
-    except Exception as e:
-        logging.error(f"Error scanning UI tree: {e}")
+                try:
+                    control_type = control.ControlTypeName
+                    name = control.Name
+                except Exception:
+                    continue
 
-    return ui_elements, memory_map
+                if control_type in target_types:
+                    try:
+                        rect = control.BoundingRectangle
+                        if rect and rect.width() > 0 and rect.height() > 0:
+                            center_x = rect.left + rect.width() // 2
+                            center_y = rect.top + rect.height() // 2
+
+                            element_str_id = str(element_id)
+
+                            # Standardize output for LLM
+                            el_data = {
+                                "id": element_str_id,
+                                "type": control_type,
+                                "name": name,
+                                "bounds": {
+                                    "x": rect.left,
+                                    "y": rect.top,
+                                    "width": rect.width(),
+                                    "height": rect.height()
+                                },
+                                "center": {"x": center_x, "y": center_y}
+                            }
+                            ui_elements.append(el_data)
+                            memory_map[element_str_id] = el_data
+                            element_id += 1
+                    except Exception:
+                        continue
+
+            logging.info(f"Found {len(ui_elements)} interactive OS UI elements.")
+        except Exception as e:
+            logging.error(f"Error scanning OS UI tree: {e}")
+
+        return ui_elements, memory_map
+
+    async def click(self, x: int, y: int):
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(self.executor, self._sync_click, x, y)
+
+    def _sync_click(self, x, y):
+        try:
+            pyautogui.moveTo(x, y, duration=0.2)
+            pyautogui.click()
+        except Exception as e:
+            logging.error(f"Error clicking at ({x}, {y}): {e}")
+
+    async def type(self, x: int, y: int, text: str, submit: bool = False):
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(self.executor, self._sync_type, x, y, text, submit)
+
+    def _sync_type(self, x, y, text, submit):
+        try:
+            pyautogui.moveTo(x, y, duration=0.2)
+            pyautogui.click()
+            pyautogui.hotkey('ctrl', 'a')
+            pyautogui.press('backspace')
+            time.sleep(0.1)
+            pyautogui.write(text, interval=0.01)
+            if submit:
+                pyautogui.press('enter')
+        except Exception as e:
+            logging.error(f"Error typing '{text}' at ({x}, {y}): {e}")
+
+    async def screenshot(self):
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self.executor, self._sync_screenshot)
+
+    def _sync_screenshot(self):
+        try:
+            screenshot = pyautogui.screenshot()
+            buffered = io.BytesIO()
+            screenshot.save(buffered, format="PNG")
+            return base64.b64encode(buffered.getvalue()).decode()
+        except Exception as e:
+            logging.error(f"Error capturing OS screenshot: {e}")
+            return ""
+
+desktop_env = DesktopEnvironment()
 
 
 def annotate_image_with_crosshair(base64_img: str, x: int, y: int) -> str:
@@ -981,11 +1043,7 @@ class AgentStateMachine:
     async def state_initializing(self):
         intent, cmd_text = classify_intent(self.command_text, self.audio_b64)
         self.command_text = cmd_text
-
-        if intent != "WEB":
-            logging.info("Non-WEB commands not supported in Async State Machine yet.")
-            self.state = AgentState.TERMINATED
-            return
+        self.intent = intent
 
         logging.info("Running Pre-Flight check...")
         pre_flight = pre_flight_check(self.command_text)
@@ -1048,44 +1106,55 @@ class AgentStateMachine:
             except Exception as e:
                 logging.error(f"Failed to update telemetry for retry: {e}")
 
-        logging.info("Requesting GET_STATE from bridge...")
-        state_payload = {
-            "action_type": "GET_STATE",
-            "commandText": self.command_text,
-            "audioBase64": self.audio_b64 if self.iteration == 0 else "",
-            "iteration": self.iteration
-        }
-        state_result = bridge.delegate_command(state_payload)
-        if not state_result.get("success"):
-            error_msg = state_result.get('error', 'Unknown error')
-            logging.error(f"Failed to get state from extension: {error_msg}")
+        if self.intent == "WEB":
+            logging.info("Requesting GET_STATE from bridge...")
+            state_payload = {
+                "action_type": "GET_STATE",
+                "commandText": self.command_text,
+                "audioBase64": self.audio_b64 if self.iteration == 0 else "",
+                "iteration": self.iteration
+            }
+            state_result = bridge.delegate_command(state_payload)
+            if not state_result.get("success"):
+                error_msg = state_result.get('error', 'Unknown error')
+                logging.error(f"Failed to get state from extension: {error_msg}")
 
-            # Treat environment failures (like detached tabs) as a retryable/failing sub-task rather than full agent crash
-            if "Session detached" in error_msg or "No active tab" in error_msg or "closed" in error_msg.lower():
-                 logging.warning("Environment volatility detected. Triggering retry or failure logic.")
-                 self.sub_task_iteration += 1
-                 if self.sub_task_iteration >= self.max_sub_task_iterations:
-                      try:
-                          firestore_update_document("remote_commands", self.doc_id, {
-                              "status": "AWAITING_HUMAN_INPUT",
-                              "help_reason": f"Environment failure (e.g., target tab closed): {error_msg}"
-                          })
-                      except Exception as fs_e:
-                          logging.error(f"Error saving help request: {fs_e}")
-                      self.state = AgentState.SUSPENDED_HITL
-                 else:
-                      self.command_text += f"\n[System Note: Environment error occurred: {error_msg}. Recovering state.]"
-                      self.state = AgentState.EVALUATING
-                 return
+                # Treat environment failures (like detached tabs) as a retryable/failing sub-task rather than full agent crash
+                if "Session detached" in error_msg or "No active tab" in error_msg or "closed" in error_msg.lower():
+                     logging.warning("Environment volatility detected. Triggering retry or failure logic.")
+                     self.sub_task_iteration += 1
+                     if self.sub_task_iteration >= self.max_sub_task_iterations:
+                          try:
+                              firestore_update_document("remote_commands", self.doc_id, {
+                                  "status": "AWAITING_HUMAN_INPUT",
+                                  "help_reason": f"Environment failure (e.g., target tab closed): {error_msg}"
+                              })
+                          except Exception as fs_e:
+                              logging.error(f"Error saving help request: {fs_e}")
+                          self.state = AgentState.SUSPENDED_HITL
+                     else:
+                          self.command_text += f"\n[System Note: Environment error occurred: {error_msg}. Recovering state.]"
+                          self.state = AgentState.EVALUATING
+                     return
 
-            self.state = AgentState.TERMINATED
-            return
+                self.state = AgentState.TERMINATED
+                return
 
-        self.current_clean_screenshot = state_result.get("screenshot_base64", "")
-        self.current_ui_elements = state_result.get("ui_elements", [])
-        self.current_url = state_result.get("url", "")
+            self.current_clean_screenshot = state_result.get("screenshot_base64", "")
+            self.current_ui_elements = state_result.get("ui_elements", [])
+            self.current_url = state_result.get("url", "")
+            self.current_dpr = state_result.get("dpr", 1.0)
+        else:
+            logging.info("Requesting GET_STATE from Desktop Environment...")
+            ui_elements, memory_map = await desktop_env.scan_ui_elements()
+            screenshot = await desktop_env.screenshot()
 
-        self.current_dpr = state_result.get("dpr", 1.0)
+            self.current_ui_elements = ui_elements
+            self.os_memory_map = memory_map
+            self.current_clean_screenshot = screenshot
+            # For OS, we identify apps by window name or just OS
+            self.current_url = "OS_Environment"
+            self.current_dpr = 1.0
         self.current_annotated_screenshot = annotate_image_with_som(
             self.current_clean_screenshot,
             self.current_ui_elements,
@@ -1351,26 +1420,50 @@ class AgentStateMachine:
                              action_to_take["fallback_y"] = el["center"].get("y")
                          break
 
-             exec_payload = {"action_type": "EXECUTE_ACTION", "action": action_to_take, "iteration": self.iteration}
-             exec_result = bridge.delegate_command(exec_payload)
+             if self.intent == "WEB":
+                 exec_payload = {"action_type": "EXECUTE_ACTION", "action": action_to_take, "iteration": self.iteration}
+                 exec_result = bridge.delegate_command(exec_payload)
 
-             if not exec_result.get("success"):
-                 error_msg = exec_result.get('error', 'Unknown error')
-                 logging.warning(f"Macro-action execution failed via bridge: {error_msg}. Bailing out of batch.")
+                 if not exec_result.get("success"):
+                     error_msg = exec_result.get('error', 'Unknown error')
+                     logging.warning(f"Macro-action execution failed via bridge: {error_msg}. Bailing out of batch.")
 
-                 # Environmental chaos handler for EXECUTE_ACTION
-                 if "Session detached" in error_msg or "No active tab" in error_msg or "closed" in error_msg.lower():
-                     logging.warning("Environment volatility detected during action execution.")
+                     # Environmental chaos handler for EXECUTE_ACTION
+                     if "Session detached" in error_msg or "No active tab" in error_msg or "closed" in error_msg.lower():
+                         logging.warning("Environment volatility detected during action execution.")
 
+                     try:
+                         firestore_update_document("remote_commands", self.doc_id, {
+                             "telemetry": f"Macro-action '{action_type}' failed: {error_msg}. Retrying..."
+                         })
+                     except Exception as e:
+                         logging.error(f"Failed to update telemetry for action failure: {e}")
+                     self.command_text += f"\n[System Note: Last action {action_type} failed: {error_msg}]"
+                     bail_out = True
+                     break
+             else:
+                 # Execute via DesktopEnvironment
                  try:
-                     firestore_update_document("remote_commands", self.doc_id, {
-                         "telemetry": f"Macro-action '{action_type}' failed: {error_msg}. Retrying..."
-                     })
+                     if action_type == "CLICK" and "target_id" in action_to_take:
+                         target_id = str(action_to_take["target_id"])
+                         if target_id in getattr(self, "os_memory_map", {}):
+                             el = self.os_memory_map[target_id]
+                             await desktop_env.click(el["center"]["x"], el["center"]["y"])
+                         else:
+                             logging.warning(f"Target ID {target_id} not found in OS memory map.")
+                     elif action_type == "TYPE" and "target_id" in action_to_take and "text" in action_to_take:
+                         target_id = str(action_to_take["target_id"])
+                         if target_id in getattr(self, "os_memory_map", {}):
+                             el = self.os_memory_map[target_id]
+                             await desktop_env.type(el["center"]["x"], el["center"]["y"], action_to_take["text"], action_to_take.get("submit", False))
+                         else:
+                             logging.warning(f"Target ID {target_id} not found in OS memory map.")
+                     # Other actions like SCROLL can also be added here
                  except Exception as e:
-                     logging.error(f"Failed to update telemetry for action failure: {e}")
-                 self.command_text += f"\n[System Note: Last action {action_type} failed: {error_msg}]"
-                 bail_out = True
-                 break
+                     logging.error(f"Desktop execution failed: {e}")
+                     self.command_text += f"\n[System Note: Desktop action {action_type} failed: {e}]"
+                     bail_out = True
+                     break
 
              self.previous_action = action_to_take
              self.previous_state_metadata = {"current_url": self.current_url}
@@ -1463,11 +1556,15 @@ class AgentStateMachine:
                     session = get_resilient_session()
                     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}"}
                     client_id = self.client_context.get("client_id", "default") if self.client_context else "default"
-                    domain = self.current_url.split('/')[2] if '//' in self.current_url else "unknown_domain"
 
+                    if getattr(self, "current_url", ""):
+                        domain = self.current_url.split('/')[2] if '//' in self.current_url else self.current_url
+                    else:
+                        domain = "unknown_domain"
+
+                    # The backend expects execution_telemetry, mapping prompt_text to it
                     synth_payload = {
-                        "prompt": prompt_text,
-                        "image_base64": image_to_send,
+                        "execution_telemetry": prompt_text,
                         "domain": domain,
                         "client_id": client_id,
                         "failed_sub_task": self.sub_tasks[self.current_sub_task_index]
@@ -1483,27 +1580,57 @@ class AgentStateMachine:
                     logging.error(f"Error calling Synthesizer API: {e}")
 
                 try:
-                    logging.info(f"Executing HITL Ghost Click natively via Bridge at ({css_x}, {css_y})")
-                    exec_payload = {
-                        "action_type": "EXECUTE_ACTION",
-                        "action": {
-                            "action": "CLICK",
-                            "coordinates": [css_x, css_y]
-                        },
-                        "iteration": self.iteration
-                    }
-                    exec_result = bridge.delegate_command(exec_payload)
-                    if not exec_result.get("success"):
-                        logging.error(f"Failed to execute Bridge click for HITL: {exec_result.get('error')}")
-
+                    if self.intent == "WEB":
+                        logging.info(f"Executing HITL Ghost Click natively via Bridge at ({css_x}, {css_y})")
+                        exec_payload = {
+                            "action_type": "EXECUTE_ACTION",
+                            "action": {
+                                "action": "CLICK",
+                                "coordinates": [css_x, css_y]
+                            },
+                            "iteration": self.iteration
+                        }
+                        exec_result = bridge.delegate_command(exec_payload)
+                        if not exec_result.get("success"):
+                            logging.error(f"Failed to execute Bridge click for HITL: {exec_result.get('error')}")
+                    else:
+                        logging.info(f"Executing HITL Ghost Click natively via DesktopEnv at ({css_x}, {css_y})")
+                        await desktop_env.click(int(css_x), int(css_y))
                 except Exception as e:
-                    logging.error(f"Failed to execute Bridge click for HITL: {e}")
+                    logging.error(f"Failed to execute click for HITL: {e}")
             else:
                 # Semantic Override
                 semantic_guidance = self.hitl_action.get("xpath", "")
                 if semantic_guidance:
                     logging.info(f"Received semantic guidance: {semantic_guidance}")
                     self.command_text += f"\n[System Note: Human Guidance received: '{semantic_guidance}'. Adjust your execution plan accordingly.]"
+
+                    # Generate playbook rule for semantic guidance
+                    try:
+                        session = get_resilient_session()
+                        headers = {"Authorization": f"Bearer {CURRENT_TOKEN}"}
+                        client_id = self.client_context.get("client_id", "default") if self.client_context else "default"
+
+                        if getattr(self, "current_url", ""):
+                            domain = self.current_url.split('/')[2] if '//' in self.current_url else self.current_url
+                        else:
+                            domain = "unknown_domain"
+
+                        synth_payload = {
+                            "execution_telemetry": f"The human operator intervened with semantic guidance: '{semantic_guidance}'. Please extract a universal text-based rule.",
+                            "domain": domain,
+                            "client_id": client_id,
+                            "failed_sub_task": self.sub_tasks[self.current_sub_task_index]
+                        }
+
+                        synth_url = config.SYNTHESIZE_PLAYBOOK_ENDPOINT
+                        response = session.post(synth_url, json=synth_payload, headers=headers)
+                        if response.ok:
+                            logging.info("Synthesizer Agent successfully generated a new Playbook Rule for semantic guidance!")
+                        else:
+                            logging.error(f"Synthesizer failed: {response.status_code} - {response.text}")
+                    except Exception as e:
+                        logging.error(f"Error calling Synthesizer API for semantic guidance: {e}")
 
             try:
                 firestore_update_document("remote_commands", self.doc_id, {
