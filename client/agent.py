@@ -496,6 +496,20 @@ class DesktopEnvironment:
         ui_elements = []
         memory_map = {}
 
+        # Initialize COM on this thread
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+            com_initialized = True
+        except ImportError:
+            try:
+                import ctypes
+                ctypes.windll.ole32.CoInitialize(None)
+                com_initialized = True
+            except Exception as e:
+                logging.warning(f"Could not initialize COM: {e}")
+                com_initialized = False
+
         try:
             # Enforce strict Active Window Pruning
             active_window = auto.GetForegroundControl()
@@ -554,6 +568,17 @@ class DesktopEnvironment:
             logging.info(f"Found {len(ui_elements)} interactive OS UI elements.")
         except Exception as e:
             logging.error(f"Error scanning OS UI tree: {e}")
+        finally:
+            if com_initialized:
+                try:
+                    import pythoncom
+                    pythoncom.CoUninitialize()
+                except ImportError:
+                    try:
+                        import ctypes
+                        ctypes.windll.ole32.CoUninitialize()
+                    except Exception:
+                        pass
 
         return ui_elements, memory_map
 
@@ -1432,7 +1457,16 @@ class AgentStateMachine:
                              action_to_take["fallback_y"] = el["center"].get("y")
                          break
 
-             if self.intent == "WEB":
+             # Check if we should override routing to OS despite WEB intent
+             # (e.g. for OS-specific hotkeys like Win or Meta that shouldn't go to Chrome CDP)
+             force_os = False
+             if self.intent == "WEB" and action_type in ["PRESS", "PRESS_KEY"]:
+                 key = action_to_take.get("key", "").lower()
+                 if key in ["win", "windows", "meta", "command"]:
+                     logging.info(f"Systemic guard: Rerouting {action_type} '{key}' from WEB to OS to prevent state bleed.")
+                     force_os = True
+
+             if self.intent == "WEB" and not force_os:
                  exec_payload = {"action_type": "EXECUTE_ACTION", "action": action_to_take, "iteration": self.iteration}
                  exec_result = bridge.delegate_command(exec_payload)
 
@@ -1470,6 +1504,14 @@ class AgentStateMachine:
                              await desktop_env.type(el["center"]["x"], el["center"]["y"], action_to_take["text"], action_to_take.get("submit", False))
                          else:
                              logging.warning(f"Target ID {target_id} not found in OS memory map.")
+                     elif action_type in ["PRESS", "PRESS_KEY"]:
+                         key = action_to_take.get("key", "")
+                         if key:
+                             logging.info(f"Executing OS hotkey via PyAutoGUI: {key}")
+                             # Map generic meta to windows key
+                             if key.lower() in ["meta", "command", "win", "windows"]:
+                                 key = "win"
+                             pyautogui.press(key)
                      # Other actions like SCROLL can also be added here
                  except Exception as e:
                      logging.error(f"Desktop execution failed: {e}")
