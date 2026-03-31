@@ -159,12 +159,12 @@ def get_scenarios():
         },
         {
             "name": "Web -> Stateful Web Handoff",
-            "command_text": "Find the current top headline on news.ycombinator.com, copy it, and navigate to a note-taking web app (like google keep or a mock form) and save it as a new note.",
+            "command_text": "Find the current top headline on news.ycombinator.com, copy it, and navigate to https://keep.google.com/ and save it as a new note.",
             "client_context": {
                 "client_id": "test_phase5_web_to_web",
                 "rules": [
                     "Extract the top article title.",
-                    "Navigate to a site where you can paste it (e.g. a search engine input or notes app).",
+                    "Navigate to https://keep.google.com/.",
                     "Type the title into a text field and submit."
                 ]
             },
