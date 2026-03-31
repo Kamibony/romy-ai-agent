@@ -15,8 +15,8 @@ except Exception as e:
     chroma_client = None
     playbook_collection = None
 
-def save_playbook_rule(domain: str, rule: str, client_id: str = None):
-    """Saves a playbook rule for a specific domain to the vector database."""
+def save_playbook_rule(domain: str, rule: str, client_id: str = None, goal: str = None):
+    """Saves a playbook rule for a specific domain and goal to the vector database."""
     if not playbook_collection:
         print("ChromaDB not initialized, cannot save rule.")
         return
@@ -30,6 +30,8 @@ def save_playbook_rule(domain: str, rule: str, client_id: str = None):
         metadata = {"domain": domain}
         if client_id:
             metadata["client_id"] = client_id
+        if goal:
+            metadata["goal"] = goal
 
         playbook_collection.upsert(
             documents=[rule],
@@ -40,16 +42,15 @@ def save_playbook_rule(domain: str, rule: str, client_id: str = None):
     except Exception as e:
         print(f"Error saving playbook rule: {e}")
 
-def get_playbook_rules(domain: str, query: str = "", n_results: int = 3, client_id: str = None) -> List[str]:
-    """Retrieves relevant playbook rules for a domain."""
+def get_playbook_rules(domain: str, query: str = "", n_results: int = 3, client_id: str = None, goal: str = None) -> List[str]:
+    """Retrieves relevant playbook rules for a domain and an optional goal."""
     if not playbook_collection:
         print("ChromaDB not initialized, cannot retrieve rules.")
         return []
 
     try:
-        # Since we just want rules for the domain, we can query with the domain as the text
-        # Or if we have a specific task query, we can use that to find the most relevant rules
-        search_query = query if query else f"Rules for {domain}"
+        # We prioritize the goal in the search query for contextual retrieval
+        search_query = goal if goal else (query if query else f"Rules for {domain}")
 
         where_clause = {"domain": domain}
         try:

@@ -50,6 +50,7 @@ class SynthesizePlaybookRequest(BaseModel):
     domain: str
     execution_telemetry: str
     client_id: Optional[str] = None
+    failed_sub_task: Optional[str] = None
 
 # Allow all origins, methods, and headers for CORS (adjust as needed in production)
 app.add_middleware(
@@ -163,7 +164,7 @@ def synthesize_playbook(request: SynthesizePlaybookRequest, uid: str = Depends(v
             detail="User license is not active.",
         )
 
-    rule = synthesize_playbook_rule_with_gemini(request.domain, request.execution_telemetry, client_id=request.client_id)
+    rule = synthesize_playbook_rule_with_gemini(request.domain, request.execution_telemetry, client_id=request.client_id, failed_sub_task=request.failed_sub_task)
     return {"status": "ok", "rule": rule}
 
 @app.post("/api/classify_intent")
