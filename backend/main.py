@@ -254,7 +254,8 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
             }
 
             # Check for specific terminal actions in the sequence
-            for action in action_list:
+            actions_to_check = action_list.get("actions", []) if isinstance(action_list, dict) else action_list
+            for action in actions_to_check:
                 if action.get("action") == "ASK_HUMAN":
                     updates["status"] = "help_needed"
                     break

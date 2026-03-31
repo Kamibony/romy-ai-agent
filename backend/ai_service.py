@@ -339,24 +339,38 @@ def classify_intent_with_gemini(command_text: str) -> str:
 def synthesize_playbook_rule_with_gemini(domain: str, execution_telemetry: str, client_id: str = None, failed_sub_task: str = None) -> Optional[str]:
     """
     Synthesizer Agent (Sleep Cycle): Reviews execution telemetry or human correction for a domain and extracts a universal rule.
+    Implements Memory Lifecycle Management: if old rules exist for the subtask, updates/replaces them.
     Saves the rule to ChromaDB if found.
     """
     if not execution_telemetry or gemini_client is None:
         return None
 
     try:
+        existing_rules = []
+        if failed_sub_task:
+            existing_rules = get_playbook_rules(domain, client_id=client_id, goal=failed_sub_task)
+
         system_instruction = (
-            "You are a Synthesizer Agent for an AI web assistant. Your job is to review the execution telemetry "
-            "or human correction for a specific website. "
-            "Extract a single, concise, universal rule or 'playbook' for successfully interacting with this site. "
-            "For example, 'On pelikan.cz, after typing the city, you must wait for the dropdown and explicitly click the suggestion.' "
-            "If the telemetry is straightforward and no special rule is needed, return an empty string. "
-            "Return ONLY the extracted rule string, or nothing."
+            "You are a Synthesizer Agent (Memory Lifecycle Manager) for an AI assistant. "
+            "Your job is to review execution telemetry or a human operator's correction for a specific website or OS app, "
+            "and extract a single, concise, universal rule or 'SOP' (Standard Operating Procedure) for successfully completing the failed sub-task. "
+        )
+
+        if existing_rules:
+            system_instruction += (
+                "CRITICAL: There are existing rules for this sub-task that failed. The human's intervention means the OLD rule might be stale, incomplete, or incorrect. "
+                "Analyze the new telemetry AND the old rule. Generate a NEW, updated, consolidated rule that completely replaces the old one. "
+            )
+
+        system_instruction += (
+            "Return ONLY the final, updated rule string. If no special rule is needed, return an empty string."
         )
 
         prompt = f"Domain: {domain}\nTelemetry/Human Correction:\n{execution_telemetry}"
         if failed_sub_task:
             prompt += f"\nGoal/Failed Sub-task: {failed_sub_task}"
+        if existing_rules:
+            prompt += f"\n\n[EXISTING STALE RULES TO REPLACE]:\n" + "\n".join(existing_rules)
 
         response = gemini_client.models.generate_content(
             model='gemini-2.5-flash',
@@ -376,16 +390,16 @@ def synthesize_playbook_rule_with_gemini(domain: str, execution_telemetry: str, 
         print(f"Error synthesizing playbook rule: {e}")
         return None
 
-def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[str] = None, command_text: Optional[str] = None, thread_history: str = "", screenshot_base64: Optional[str] = None, current_sub_task: Optional[str] = None, current_url: Optional[str] = None, client_context: Optional[Dict[str, Any]] = None) -> list[Dict[str, Any]]:
+def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[str] = None, command_text: Optional[str] = None, thread_history: str = "", screenshot_base64: Optional[str] = None, current_sub_task: Optional[str] = None, current_url: Optional[str] = None, client_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Uses Gemini 2.5 Flash to process audio/text commands, a visual screenshot, and UI elements, returning an array of one or more actions.
     """
     if not audio_b64 and not command_text:
-        return [{"action": "ASK_HUMAN", "reason": "EMPTY_AUDIO"}]
+        return {"actions": [{"action": "ASK_HUMAN", "reason": "EMPTY_AUDIO"}], "memory_rules": []}
 
     if gemini_client is None:
         print("Gemini client not initialized.")
-        return [{"action": "API_ERROR", "error": "Gemini client not initialized."}]
+        return {"actions": [{"action": "API_ERROR", "error": "Gemini client not initialized."}], "memory_rules": []}
 
     try:
         from firebase_admin import firestore
@@ -465,6 +479,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
         if global_prompt:
             system_instruction += f"Global Instructions:\n{global_prompt}\n\n"
 
+        playbook_rules_applied = []
         client_id = None
         if client_context:
             system_instruction += "\n\n[CLIENT PROFILE CONTEXT]:\n"
@@ -484,6 +499,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                         domain = current_url
                     playbook_rules = get_playbook_rules(domain, client_id=client_id, goal=current_sub_task)
                     if playbook_rules:
+                        playbook_rules_applied = playbook_rules
                         system_instruction += f"\n\n[SITE_SPECIFIC_RULE] for {domain}:\n"
                         for rule in playbook_rules:
                             system_instruction += f"- {rule}\n"
@@ -659,7 +675,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                             parsed_actions.append(action_data)
 
                     if parsed_actions:
-                        return parsed_actions
+                        return {"actions": parsed_actions, "memory_rules": playbook_rules_applied}
             except json.JSONDecodeError:
                 pass
 
@@ -678,7 +694,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                         action_dict["target_id"] = str(action_data["target_id"])
                     if "coordinates" in action_data:
                         action_dict["coordinates"] = action_data["coordinates"]
-                    return [action_dict]
+                    return {"actions": [action_dict], "memory_rules": playbook_rules_applied}
                 elif action_data.get("action") == "TYPE" and ("coordinates" in action_data or "target_id" in action_data) and "text" in action_data:
                     action_dict = {
                         "action": "TYPE",
@@ -691,7 +707,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                         action_dict["coordinates"] = action_data["coordinates"]
                     if "submit" in action_data:
                         action_dict["submit"] = bool(action_data["submit"])
-                    return [action_dict]
+                    return {"actions": [action_dict], "memory_rules": playbook_rules_applied}
                 elif action_data.get("action") == "SEARCH" and ("coordinates" in action_data or "target_id" in action_data) and "text" in action_data:
                     action_dict = {
                         "action": "TYPE",
@@ -703,78 +719,78 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                         action_dict["target_id"] = str(action_data["target_id"])
                     if "coordinates" in action_data:
                         action_dict["coordinates"] = action_data["coordinates"]
-                    return [action_dict]
+                    return {"actions": [action_dict], "memory_rules": playbook_rules_applied}
                 elif action_data.get("action") == "SCROLL" and "direction" in action_data:
-                    return [{
+                    return {"actions": [{
                         "action": "SCROLL",
                         "direction": str(action_data["direction"]),
                         "thought": thought
-                    }]
+                    }], "memory_rules": playbook_rules_applied}
                 elif action_data.get("action") == "NAVIGATE" and "url" in action_data:
-                    return [{
+                    return {"actions": [{
                         "action": "NAVIGATE",
                         "url": str(action_data["url"]),
                         "thought": thought
-                    }]
+                    }], "memory_rules": playbook_rules_applied}
                 elif action_data.get("action") == "OPEN_TAB" and "url" in action_data:
-                    return [{
+                    return {"actions": [{
                         "action": "OPEN_TAB",
                         "url": str(action_data["url"]),
                         "thought": thought
-                    }]
+                    }], "memory_rules": playbook_rules_applied}
                 elif action_data.get("action") == "PRESS_KEY" and "key" in action_data:
-                    return [{
+                    return {"actions": [{
                         "action": "PRESS_KEY",
                         "key": str(action_data["key"]),
                         "thought": thought
-                    }]
+                    }], "memory_rules": playbook_rules_applied}
                 elif action_data.get("action") == "WAIT_FOR" and "selector" in action_data:
-                    return [{
+                    return {"actions": [{
                         "action": "WAIT_FOR",
                         "selector": str(action_data["selector"]),
                         "max_wait_seconds": float(action_data.get("max_wait_seconds", 5)),
                         "thought": thought
-                    }]
+                    }], "memory_rules": playbook_rules_applied}
                 elif action_data.get("action") == "WAIT" and "seconds" in action_data:
-                    return [{
+                    return {"actions": [{
                         "action": "WAIT",
                         "seconds": float(action_data.get("seconds", 2)),
                         "thought": thought
-                    }]
+                    }], "memory_rules": playbook_rules_applied}
                 elif action_data.get("action") == "REPLY" and "text" in action_data:
-                    return [{
+                    return {"actions": [{
                         "action": "REPLY",
                         "text": str(action_data["text"]),
                         "thought": thought
-                    }]
+                    }], "memory_rules": playbook_rules_applied}
                 elif action_data.get("action") == "ASK_HUMAN" and "reason" in action_data:
-                    return [{
+                    return {"actions": [{
                         "action": "ASK_HUMAN",
                         "reason": str(action_data["reason"]),
                         "thought": thought
-                    }]
+                    }], "memory_rules": playbook_rules_applied}
                 elif action_data.get("action") == "RESET_VIEW":
-                    return [{
+                    return {"actions": [{
                         "action": "RESET_VIEW",
                         "thought": thought
-                    }]
+                    }], "memory_rules": playbook_rules_applied}
                 elif action_data.get("action") == "EXECUTE_JS" and "code" in action_data:
-                    return [{
+                    return {"actions": [{
                         "action": "EXECUTE_JS",
                         "code": str(action_data["code"]),
                         "thought": thought
-                    }]
+                    }], "memory_rules": playbook_rules_applied}
                 elif action_data.get("action") == "SUB_TASK_COMPLETE":
-                    return [{"action": "SUB_TASK_COMPLETE", "thought": thought}]
+                    return {"actions": [{"action": "SUB_TASK_COMPLETE", "thought": thought}], "memory_rules": playbook_rules_applied}
                 elif action_data.get("action") == "DONE":
-                    return [{"action": "DONE", "thought": thought}]
+                    return {"actions": [{"action": "DONE", "thought": thought}], "memory_rules": playbook_rules_applied}
             except json.JSONDecodeError:
                 pass
 
-        return [{"action": "PARSE_ERROR", "error": "Model response could not be parsed as valid JSON actions.", "raw_response": str(response_text)}]
+        return {"actions": [{"action": "PARSE_ERROR", "error": "Model response could not be parsed as valid JSON actions.", "raw_response": str(response_text)}], "memory_rules": playbook_rules_applied}
 
     except Exception as e:
         print(f"Error calling Gemini: {e}")
         import traceback
         traceback.print_exc()
-        return [{"action": "API_ERROR", "error": f"Exception occurred during model generation: {str(e)}"}]
+        return {"actions": [{"action": "API_ERROR", "error": f"Exception occurred during model generation: {str(e)}"}], "memory_rules": playbook_rules_applied if 'playbook_rules_applied' in locals() else []}
