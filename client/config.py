@@ -1,5 +1,8 @@
 import os
 
+# Anti-Bot Stealth Mode Configuration
+STEALTH_MODE = os.environ.get("STEALTH_MODE", "True").lower() == "true"
+
 # Base URL for the backend Cloud Run endpoint
 BACKEND_BASE_URL = os.environ.get("BACKEND_URL", "https://romy-backend-1049976869239.europe-west1.run.app")
 
