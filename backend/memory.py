@@ -22,10 +22,13 @@ def save_playbook_rule(domain: str, rule: str, client_id: str = None, goal: str 
         return
 
     try:
-        # We use a deterministic hash of the rule as the ID
-        rule_hash = hashlib.sha256(rule.encode()).hexdigest()
-
-        doc_id = f"{domain}_{client_id}_{rule_hash}" if client_id else f"{domain}_{rule_hash}"
+        # If a goal is provided, use it to create a deterministic ID so we overwrite old rules for that sub-task
+        if goal:
+            goal_hash = hashlib.sha256(goal.encode()).hexdigest()
+            doc_id = f"{domain}_{client_id}_{goal_hash}" if client_id else f"{domain}_{goal_hash}"
+        else:
+            rule_hash = hashlib.sha256(rule.encode()).hexdigest()
+            doc_id = f"{domain}_{client_id}_{rule_hash}" if client_id else f"{domain}_{rule_hash}"
 
         metadata = {"domain": domain}
         if client_id:

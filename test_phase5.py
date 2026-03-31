@@ -122,6 +122,7 @@ def validate_outcome(doc_id, expected_outcome):
             try:
                 with open(file, "r", encoding="utf-8") as f:
                     rec = json.load(f)
+                    # First check client_context rules (legacy)
                     prompt_payload = rec.get("prompt_payload", {})
                     client_context = prompt_payload.get("client_context", {})
                     rules = client_context.get("rules", [])
@@ -130,6 +131,14 @@ def validate_outcome(doc_id, expected_outcome):
                         for rule in rules:
                             if match_str.lower() in str(rule).lower():
                                 return True, f"Memory rule '{match_str}' found injected in client_context rules."
+
+                    # Then check system_state applied rules (new observability)
+                    system_state = rec.get("system_state", {})
+                    applied_rules = system_state.get("memory_rules_applied", [])
+                    if applied_rules:
+                        for rule in applied_rules:
+                            if match_str.lower() in str(rule).lower():
+                                return True, f"Memory rule '{match_str}' found applied in system_state."
             except Exception as e:
                 pass
         return False, f"Memory rule '{match_str}' was NOT found injected into the context."

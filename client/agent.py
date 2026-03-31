@@ -75,7 +75,7 @@ ACTIVE_DOC_ID = None
 
 LOCAL_STATUS = {} # Dictionary to store local task statuses mapping doc_id to status
 
-def save_flight_record(doc_id: str, iteration: int, payload: dict, response: dict, action_executed: dict, screenshot_b64: str) -> None:
+def save_flight_record(doc_id: str, iteration: int, payload: dict, response: dict, action_executed: dict, screenshot_b64: str, system_state: dict = None) -> None:
     """Saves a timestamped record of the ReAct cycle locally for debugging."""
     try:
         user_data_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "RomyAgentBrowserData", "flight_records", doc_id)
@@ -90,6 +90,7 @@ def save_flight_record(doc_id: str, iteration: int, payload: dict, response: dic
             "timestamp": datetime.now().isoformat(),
             "doc_id": doc_id,
             "iteration": iteration,
+            "system_state": system_state or {},
             "prompt_payload": payload,
             "llm_response": response,
             "action_executed": action_executed
@@ -1541,7 +1542,12 @@ class AgentStateMachine:
                  payload={"command_text": self.command_text, "sub_task": current_sub_task},
                  response=self.ai_response,
                  action_executed=self.actions_to_execute,
-                 screenshot_b64=self.current_clean_screenshot
+                 screenshot_b64=self.current_clean_screenshot,
+                 system_state={
+                     "intent": getattr(self, "intent", "UNKNOWN"),
+                     "sub_task_iteration": self.sub_task_iteration,
+                     "memory_rules_applied": self.ai_response.get("memory_rules", []) if isinstance(self.ai_response, dict) else []
+                 }
              )
         except Exception as e:
              logging.error(f"Failed to save flight record: {e}")
@@ -2022,7 +2028,19 @@ def execute_voice_agent_loop() -> None:
                                 # to fail if the ID is missing. But let's verify if we need to bailout
                                 pass
 
-                            save_flight_record(doc_id, iteration, payload, backend_data, act, screenshot_base64)
+                            save_flight_record(
+                                doc_id,
+                                iteration,
+                                payload,
+                                backend_data,
+                                act,
+                                screenshot_base64,
+                                system_state={
+                                    "intent": "WEB",
+                                    "sub_task_iteration": sub_task_iteration,
+                                    "memory_rules_applied": backend_data.get("memory_rules", []) if isinstance(backend_data, dict) else []
+                                }
+                            )
                             if not isinstance(act, dict):
                                 logging.warning(f"Skipping invalid action type: {type(act)}")
                                 continue
@@ -2333,7 +2351,19 @@ def execute_voice_agent_loop() -> None:
                     except Exception:
                         os_screenshot_b64 = ""
 
-                    save_flight_record(doc_id, iteration, payload, backend_data, act, os_screenshot_b64)
+                    save_flight_record(
+                        doc_id,
+                        iteration,
+                        payload,
+                        backend_data,
+                        act,
+                        os_screenshot_b64,
+                        system_state={
+                            "intent": "OS",
+                            "sub_task_iteration": sub_task_iteration,
+                            "memory_rules_applied": backend_data.get("memory_rules", []) if isinstance(backend_data, dict) else []
+                        }
+                    )
 
                     if ABORT_AGENT:
                         logging.info("Emergency abort triggered during action sequence.")
