@@ -2673,6 +2673,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
+        global LOCAL_STATUS, ACTIVE_DOC_ID
         if self.path == '/api/run_command':
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length)
@@ -2749,8 +2750,6 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(json.dumps({"error": "Validation failed", "details": ve.errors()}).encode())
                     return
-
-                global ACTIVE_DOC_ID
 
                 if ACTIVE_DOC_ID:
                     type_of_guidance = validated_request.type
@@ -2844,7 +2843,6 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
 
                 # We optionally could also clear PROCESSED_DOC_IDS, but leaving it as-is is safer
                 # Reset local status
-                global LOCAL_STATUS, ACTIVE_DOC_ID
                 if ACTIVE_DOC_ID and ACTIVE_DOC_ID in LOCAL_STATUS:
                     LOCAL_STATUS[ACTIVE_DOC_ID] = "failed"
 
