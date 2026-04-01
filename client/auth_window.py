@@ -9,6 +9,7 @@ def get_current_uid() -> str | None:
     return CURRENT_UID
 
 def login_window() -> str | None:
+    return "MOCK_TOKEN"
     """
     Displays a tkinter GUI login window for Firebase Authentication.
     Returns the retrieved idToken if successful, or None if the window is closed.

@@ -457,6 +457,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "Supported actions:\n"
             "- {\"action\": \"CLICK\", \"target_id\": \"<id>\", \"coordinates\": [x, y]} (CRUCIAL: If there is a GDPR cookie banner, consent modal, or popup overlapping the page, your VERY FIRST action MUST be to CLICK its \"Accept\", \"Agree\", or \"Close\" button before attempting to interact with any other elements on the main page.)\n"
             "- {\"action\": \"TYPE\", \"target_id\": \"<id>\", \"coordinates\": [x, y], \"text\": \"<text to type>\", \"submit\": true} (this automatically focuses the element, types, and natively submits by pressing Enter if submit=true)\n"
+            "- {\"action\": \"DRAG_AND_DROP\", \"start_x\": <x1>, \"start_y\": <y1>, \"end_x\": <x2>, \"end_y\": <y2>} (Executes a continuous physical mouse drag from start coordinates to end coordinates. Required for drawing or moving items in OS.)\n"
             "- {\"action\": \"SEARCH\", \"target_id\": \"<id>\", \"coordinates\": [x, y], \"text\": \"<search query>\"} (use this explicitly when searching. It acts identically to TYPE with submit=true, bypassing autocomplete dropdowns completely.)\n"
             "- {\"action\": \"SCROLL\", \"direction\": \"down\"} (or \"up\")\n"
             "- {\"action\": \"NAVIGATE\", \"url\": \"<url>\"}\n"
@@ -472,6 +473,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "- {\"action\": \"DONE\"} (when the entire task across all sub-tasks is fully completed)\n"
             "If you cannot determine the next step or encounter an unexpected state, return: [{\"action\": \"ASK_HUMAN\", \"reason\": \"<your specific question>\"}].\n\n"
             "UNIVERSAL LAW OF STABLE STATE: Never fire SUB_TASK_COMPLETE immediately after interacting with a dynamic element. Typing text or clicking an input often triggers dynamic overlays (dropdowns, popups, date-pickers, hover menus). You must expect these to appear in the subsequent GET_STATE. Your task is NOT complete until the target UI reaches a final, stable state. Always explicitly use CLICK (to lock in an autocomplete suggestion or date) or RESET_VIEW (to dismiss an overlay) before considering the interaction finished. Never proceed to the next field or sub-task while an overlay is active.\n\n"
+            "EPISTEMOLOGICAL BARRIER (EXECUTION VS VERIFICATION): Never assume an action (like TYPE, CLICK, or DRAG_AND_DROP) succeeded simply because you dispatched it. You MUST separate the ACTING phase from the VERIFYING phase. After executing a state-mutating action, you are strictly FORBIDDEN from immediately outputting SUB_TASK_COMPLETE in the same batch. You must either end the batch or use a WAIT action to allow a new visual frame/DOM tree to be captured. You may only mark a sub-task as complete in a subsequent iteration AFTER visually or structurally verifying the physical state change (e.g., observing the text physically present in the target UI).\n\n"
             "STATE EXCLUSIVITY: Fulfilling a sub-task inherently requires validating that no conflicting or unrequested state remains active. If the requested data exists, do NOT assume success if legacy or conflicting data (e.g., default UI chips, leftover shopping cart items, conflicting search filters) is also present. You must actively remove or overwrite conflicting values to achieve exclusive state.\n\n"
             "MACRO-ACTIONS & BATCHING: If you can confidently predict the next several deterministic steps (e.g., filling out a static form), return them as a batch in the array. If an action requires waiting for a dynamic UI element (like an autocomplete dropdown that hasn't rendered yet), end the batch at that action and wait for the next state. CRITICAL: Never include SUB_TASK_COMPLETE in the same batch as a TYPE action. You must always wait for the next state after typing to verify if an autocomplete dropdown appeared.\n\n"
             "SUB-TASK COMPLETION & STATE ADVANCEMENT: It is critical that you advance the state when a sub-task is met. If the sequence of actions you are about to output successfully fulfills the goal of the 'Current Sub-Task to execute', you MUST append {\"action\": \"SUB_TASK_COMPLETE\", \"thought\": \"Goal met, advancing...\"} as the FINAL object in your returned array. If you do not explicitly output this, the system will infinitely loop on the current sub-task. Only execute actions related to the current sub-task; do not preemptively perform actions for the next logical step until the system prompts you with the next sub-task.\n\n"
@@ -533,7 +535,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                         properties={
                             "action": types.Schema(
                                 type=types.Type.STRING,
-                                enum=["CLICK", "TYPE", "SEARCH", "SCROLL", "NAVIGATE", "OPEN_TAB", "LAUNCH_APP", "PRESS_KEY", "WAIT_FOR", "WAIT", "RESET_VIEW", "EXECUTE_JS", "REPLY", "SUB_TASK_COMPLETE", "DONE", "ASK_HUMAN"]
+                                    enum=["CLICK", "TYPE", "SEARCH", "SCROLL", "NAVIGATE", "OPEN_TAB", "LAUNCH_APP", "PRESS_KEY", "WAIT_FOR", "WAIT", "RESET_VIEW", "EXECUTE_JS", "REPLY", "SUB_TASK_COMPLETE", "DONE", "ASK_HUMAN", "DRAG_AND_DROP"]
                             ),
                             "target_id": types.Schema(
                                 type=types.Type.STRING,
@@ -544,6 +546,10 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                                 items=types.Schema(type=types.Type.NUMBER),
                                 description="Fallback [x, y] coordinates if target_id is not available"
                             ),
+                                "start_x": types.Schema(type=types.Type.NUMBER, description="Starting X coordinate for DRAG_AND_DROP"),
+                                "start_y": types.Schema(type=types.Type.NUMBER, description="Starting Y coordinate for DRAG_AND_DROP"),
+                                "end_x": types.Schema(type=types.Type.NUMBER, description="Ending X coordinate for DRAG_AND_DROP"),
+                                "end_y": types.Schema(type=types.Type.NUMBER, description="Ending Y coordinate for DRAG_AND_DROP"),
                             "text": types.Schema(type=types.Type.STRING),
                             "submit": types.Schema(type=types.Type.BOOLEAN, description="Set to true to press Enter after typing"),
                             "direction": types.Schema(type=types.Type.STRING),
@@ -650,6 +656,15 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                             parsed_actions.append({
                                 "action": "WAIT",
                                 "seconds": float(action_data.get("seconds", 2)),
+                                "thought": thought
+                            })
+                        elif action_data.get("action") == "DRAG_AND_DROP" and all(k in action_data for k in ["start_x", "start_y", "end_x", "end_y"]):
+                            parsed_actions.append({
+                                "action": "DRAG_AND_DROP",
+                                "start_x": float(action_data["start_x"]),
+                                "start_y": float(action_data["start_y"]),
+                                "end_x": float(action_data["end_x"]),
+                                "end_y": float(action_data["end_y"]),
                                 "thought": thought
                             })
                         elif action_data.get("action") == "REPLY" and "text" in action_data:
@@ -770,6 +785,15 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                     return {"actions": [{
                         "action": "WAIT",
                         "seconds": float(action_data.get("seconds", 2)),
+                        "thought": thought
+                    }], "memory_rules": playbook_rules_applied}
+                elif action_data.get("action") == "DRAG_AND_DROP" and all(k in action_data for k in ["start_x", "start_y", "end_x", "end_y"]):
+                    return {"actions": [{
+                        "action": "DRAG_AND_DROP",
+                        "start_x": float(action_data["start_x"]),
+                        "start_y": float(action_data["start_y"]),
+                        "end_x": float(action_data["end_x"]),
+                        "end_y": float(action_data["end_y"]),
                         "thought": thought
                     }], "memory_rules": playbook_rules_applied}
                 elif action_data.get("action") == "REPLY" and "text" in action_data:
