@@ -491,6 +491,7 @@ class DesktopEnvironment:
     """Wrapper to handle thread-blocking OS automation tasks securely with a dedicated daemon thread."""
     def __init__(self):
         self.task_queue = queue.Queue()
+        self.native_controls = {}  # Store COM objects for setting focus
         self.daemon_thread = threading.Thread(target=self._worker_loop, daemon=True)
         self.daemon_thread.start()
 
@@ -564,6 +565,7 @@ class DesktopEnvironment:
         ui_elements = []
         memory_map = {}
         window_name = "OS_Environment"
+        self.native_controls.clear()
 
         try:
             # Enforce strict Active Window Pruning
@@ -621,6 +623,7 @@ class DesktopEnvironment:
                             }
                             ui_elements.append(el_data)
                             memory_map[element_str_id] = el_data
+                            self.native_controls[element_str_id] = control
                             element_id += 1
                     except Exception:
                         continue
@@ -648,11 +651,42 @@ class DesktopEnvironment:
         except Exception as e:
             logging.error(f"Error clicking at ({x}, {y}): {e}")
 
-    async def type(self, x: int, y: int, text: str, submit: bool = False):
-        await self._submit_task(self._sync_type, x, y, text, submit)
+    async def type(self, x: int, y: int, text: str, submit: bool = False, target_id: Optional[str] = None):
+        await self._submit_task(self._sync_type, x, y, text, submit, target_id)
 
-    def _sync_type(self, x, y, text, submit):
+    async def drag_and_drop(self, start_x: int, start_y: int, end_x: int, end_y: int):
+        await self._submit_task(self._sync_drag_and_drop, start_x, start_y, end_x, end_y)
+
+    def _sync_drag_and_drop(self, start_x: int, start_y: int, end_x: int, end_y: int):
         try:
+            if config.STEALTH_MODE:
+                tween = pyautogui.easeInOutQuad if hasattr(pyautogui, 'easeInOutQuad') else pyautogui.linear
+                pyautogui.moveTo(start_x, start_y, duration=random.uniform(0.15, 0.45), tween=tween)
+                time.sleep(random.uniform(0.05, 0.15))
+                pyautogui.mouseDown()
+                time.sleep(random.uniform(0.05, 0.1))
+                pyautogui.moveTo(end_x, end_y, duration=random.uniform(0.3, 0.8), tween=tween)
+                time.sleep(random.uniform(0.05, 0.1))
+                pyautogui.mouseUp()
+            else:
+                pyautogui.moveTo(start_x, start_y, duration=0.2)
+                pyautogui.mouseDown()
+                pyautogui.moveTo(end_x, end_y, duration=0.5)
+                pyautogui.mouseUp()
+        except Exception as e:
+            logging.error(f"Error executing drag and drop from ({start_x}, {start_y}) to ({end_x}, {end_y}): {e}")
+
+    def _sync_type(self, x, y, text, submit, target_id=None):
+        try:
+            if target_id and target_id in self.native_controls:
+                try:
+                    control = self.native_controls[target_id]
+                    control.SetFocus()
+                    logging.info(f"Programmatically focused OS control ID: {target_id}")
+                    time.sleep(0.1)
+                except Exception as e:
+                    logging.warning(f"Failed to programmatically focus control {target_id}: {e}")
+
             if config.STEALTH_MODE:
                 duration = random.uniform(0.15, 0.45)
                 tween = pyautogui.easeInOutQuad if hasattr(pyautogui, 'easeInOutQuad') else pyautogui.linear
@@ -1614,7 +1648,14 @@ class AgentStateMachine:
                          target_id = str(action_to_take["target_id"])
                          # Existence verified by context guard
                          el = getattr(self, "os_memory_map", {})[target_id]
-                         await desktop_env.type(el["center"]["x"], el["center"]["y"], action_to_take["text"], action_to_take.get("submit", False))
+                         await desktop_env.type(el["center"]["x"], el["center"]["y"], action_to_take["text"], action_to_take.get("submit", False), target_id=target_id)
+                     elif action_type == "DRAG_AND_DROP":
+                         start_x = action_to_take.get("start_x")
+                         start_y = action_to_take.get("start_y")
+                         end_x = action_to_take.get("end_x")
+                         end_y = action_to_take.get("end_y")
+                         if start_x is not None and start_y is not None and end_x is not None and end_y is not None:
+                             await desktop_env.drag_and_drop(int(start_x), int(start_y), int(end_x), int(end_y))
                      elif action_type in ["PRESS", "PRESS_KEY"]:
                          key = action_to_take.get("key", "")
                          if key:
@@ -2566,6 +2607,22 @@ def execute_voice_agent_loop() -> None:
                             pyautogui.write(text_to_type)
                         except Exception as type_e:
                             logging.error(f"Error executing type via PyAutoGUI: {type_e}.")
+
+                    elif action_upper == "DRAG_AND_DROP":
+                        start_x = act.get("start_x")
+                        start_y = act.get("start_y")
+                        end_x = act.get("end_x")
+                        end_y = act.get("end_y")
+                        if start_x is not None and start_y is not None and end_x is not None and end_y is not None:
+                             logging.info(f"Executing DRAG_AND_DROP from ({start_x}, {start_y}) to ({end_x}, {end_y})...")
+                             try:
+                                 # This is a synchronous function so we can't use await desktop_env.drag_and_drop, we execute pyautogui synchronously instead like the other actions in this method
+                                 pyautogui.moveTo(int(start_x), int(start_y), duration=0.2)
+                                 pyautogui.mouseDown()
+                                 pyautogui.moveTo(int(end_x), int(end_y), duration=0.5)
+                                 pyautogui.mouseUp()
+                             except Exception as drag_e:
+                                 logging.error(f"Error executing drag_and_drop: {drag_e}")
 
                     elif action_upper == "SCROLL" and "direction" in act:
                         direction = act["direction"].lower()
