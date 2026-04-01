@@ -2829,6 +2829,35 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}).encode())
+        elif self.path == '/api/reset':
+            # Handle clean state reset
+            try:
+                trigger_abort()
+
+                # Clear the COMMAND_QUEUE
+                while not COMMAND_QUEUE.empty():
+                    try:
+                        COMMAND_QUEUE.get_nowait()
+                        COMMAND_QUEUE.task_done()
+                    except queue.Empty:
+                        break
+
+                # We optionally could also clear PROCESSED_DOC_IDS, but leaving it as-is is safer
+                # Reset local status
+                global LOCAL_STATUS, ACTIVE_DOC_ID
+                if ACTIVE_DOC_ID and ACTIVE_DOC_ID in LOCAL_STATUS:
+                    LOCAL_STATUS[ACTIVE_DOC_ID] = "failed"
+
+                self.send_response(HTTPStatus.OK)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "reset"}).encode())
+            except Exception as e:
+                logging.error(f"Error handling /api/reset: {e}")
+                self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode())
         else:
             self.send_response(HTTPStatus.NOT_FOUND)
             self.send_header('Content-type', 'application/json')
@@ -2841,10 +2870,23 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
             doc_id = parsed_path.path.split('/')[-1]
             status = LOCAL_STATUS.get(doc_id, "unknown")
 
+            # Expose iteration count and state for active scenarios
+            iteration = 0
+            agent_state = "unknown"
+            global global_state_machine
+            if global_state_machine and getattr(global_state_machine, "doc_id", None) == doc_id:
+                iteration = getattr(global_state_machine, "iteration", 0)
+                agent_state = getattr(global_state_machine, "state", AgentState.TERMINATED).name
+
             self.send_response(HTTPStatus.OK)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps({"doc_id": doc_id, "status": status}).encode())
+            self.wfile.write(json.dumps({
+                "doc_id": doc_id,
+                "status": status,
+                "iteration": iteration,
+                "agent_state": agent_state
+            }).encode())
         elif parsed_path.path == '/api/ping':
             self.send_response(HTTPStatus.OK)
             self.send_header('Content-type', 'application/json')

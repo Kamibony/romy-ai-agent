@@ -232,6 +232,7 @@ def run_diagnostics(strict_autonomous=True):
 
         start_time = time.time()
         status = "failed (initialization)"
+        timeout_seconds = 300 # 5 minutes hard stop
 
         try:
             payload_dict = {
@@ -250,19 +251,56 @@ def run_diagnostics(strict_autonomous=True):
                 status = "failed (queue error)"
             else:
                 status = "pending"
+                last_iteration = -1
+                last_agent_state = "unknown"
+                stagnation_timer = time.time()
+                stagnation_timeout = 60 # 60 seconds without an iteration increment = stagnation
+
                 while status not in ["completed", "failed"]:
                     time.sleep(2)
+
+                    elapsed_total = time.time() - start_time
+                    if elapsed_total > timeout_seconds:
+                        print(f"WATCHDOG TRIGGERED: Global scenario timeout ({timeout_seconds}s) reached. Aborting scenario.")
+                        status = "failed (TIMEOUT)"
+                        try:
+                            urllib.request.urlopen(urllib.request.Request(f"{LOCAL_API_URL}/reset", method='POST'), timeout=2)
+                        except Exception as e:
+                            print(f"Failed to send reset command to agent: {e}")
+                        break
+
                     try:
                         status_req = urllib.request.Request(f"{LOCAL_API_URL}/status/{doc_id}")
                         status_response = urllib.request.urlopen(status_req)
                         status_data = json.loads(status_response.read().decode())
                         status = status_data.get("status", "unknown")
 
+                        iteration = status_data.get("iteration", 0)
+                        agent_state = status_data.get("agent_state", "unknown")
+
+                        # Stagnation check
+                        if iteration > last_iteration or agent_state != last_agent_state:
+                            last_iteration = iteration
+                            last_agent_state = agent_state
+                            stagnation_timer = time.time()
+                        elif time.time() - stagnation_timer > stagnation_timeout:
+                            print(f"WATCHDOG TRIGGERED: Stagnation detected ({stagnation_timeout}s without state or iteration progress). Agent stuck in state: {agent_state}, iteration: {iteration}. Aborting scenario.")
+                            status = "failed (STAGNATION/DEADLOCK)"
+                            try:
+                                urllib.request.urlopen(urllib.request.Request(f"{LOCAL_API_URL}/reset", method='POST'), timeout=2)
+                            except Exception as e:
+                                print(f"Failed to send reset command to agent: {e}")
+                            break
+
                         # Strict Autonomous Bypass Check
                         if status == "AWAITING_HUMAN_INPUT":
                             if strict_autonomous:
                                 print("HITL Suspension detected. Strict Autonomous Mode active -> Failing scenario immediately.")
                                 status = "failed (HITL bypassed)"
+                                try:
+                                    urllib.request.urlopen(urllib.request.Request(f"{LOCAL_API_URL}/reset", method='POST'), timeout=2)
+                                except Exception as e:
+                                    print(f"Failed to send reset command to agent: {e}")
                                 break
                             else:
                                 print("Waiting for human input...")
@@ -270,10 +308,18 @@ def run_diagnostics(strict_autonomous=True):
                     except Exception as e:
                         print(f"Failed to poll status: {e}")
                         status = "failed (poll error)"
+                        try:
+                            urllib.request.urlopen(urllib.request.Request(f"{LOCAL_API_URL}/reset", method='POST'), timeout=2)
+                        except Exception as inner_e:
+                            pass
                         break
         except Exception as e:
             print(f"Exception during scenario: {e}")
             status = f"failed (exception: {e})"
+            try:
+                urllib.request.urlopen(urllib.request.Request(f"{LOCAL_API_URL}/reset", method='POST'), timeout=2)
+            except Exception as inner_e:
+                pass
 
         elapsed = time.time() - start_time
 
