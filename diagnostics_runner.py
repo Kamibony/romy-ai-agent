@@ -276,10 +276,18 @@ def run_diagnostics(strict_autonomous=True):
             status = f"failed (exception: {e})"
 
         elapsed = time.time() - start_time
-        print(f"-> Finished in {elapsed:.2f}s. Final Status: {status}")
 
         # Analyze flight records
         analysis = analyze_flight_records(doc_id)
+
+        # Refactor Semantic Diagnostic Truthfulness
+        if status == "completed":
+            if analysis.get("circuit_breakers", 0) > 0:
+                status = "failed (circuit breaker triggered)"
+            elif analysis.get("errors"):
+                status = "failed (execution errors)"
+
+        print(f"-> Finished in {elapsed:.2f}s. Final Status: {status}")
 
         results.append({
             "name": name,

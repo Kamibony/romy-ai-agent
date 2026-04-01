@@ -461,6 +461,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "- {\"action\": \"SCROLL\", \"direction\": \"down\"} (or \"up\")\n"
             "- {\"action\": \"NAVIGATE\", \"url\": \"<url>\"}\n"
             "- {\"action\": \"OPEN_TAB\", \"url\": \"<url>\"}\n"
+            "- {\"action\": \"LAUNCH_APP\", \"app_name\": \"<executable_name>\"} (Deterministic OS app launch. Provide the core executable name, e.g., 'calc.exe', 'mspaint.exe', 'notepad.exe'. This action MUST be the final action in a batch, allowing the UI to stabilize and fetch the next state.)\n"
             "- {\"action\": \"PRESS_KEY\", \"key\": \"<key>\"}\n"
             "- {\"action\": \"WAIT_FOR\", \"selector\": \"<css_selector>\", \"max_wait_seconds\": 5}\n"
             "- {\"action\": \"WAIT\", \"seconds\": 2} (CRITICAL: Use this to explicitly self-regulate patience if you detect \"Skeleton UIs\", visible loading spinners, progress bars, or a half-loaded page. Do not attempt to click or read data until the data fetch finishes and the final UI is rendered.)\n"
@@ -532,7 +533,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                         properties={
                             "action": types.Schema(
                                 type=types.Type.STRING,
-                                enum=["CLICK", "TYPE", "SEARCH", "SCROLL", "NAVIGATE", "OPEN_TAB", "PRESS_KEY", "WAIT_FOR", "WAIT", "RESET_VIEW", "EXECUTE_JS", "REPLY", "SUB_TASK_COMPLETE", "DONE", "ASK_HUMAN"]
+                                enum=["CLICK", "TYPE", "SEARCH", "SCROLL", "NAVIGATE", "OPEN_TAB", "LAUNCH_APP", "PRESS_KEY", "WAIT_FOR", "WAIT", "RESET_VIEW", "EXECUTE_JS", "REPLY", "SUB_TASK_COMPLETE", "DONE", "ASK_HUMAN"]
                             ),
                             "target_id": types.Schema(
                                 type=types.Type.STRING,
@@ -547,6 +548,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                             "submit": types.Schema(type=types.Type.BOOLEAN, description="Set to true to press Enter after typing"),
                             "direction": types.Schema(type=types.Type.STRING),
                             "url": types.Schema(type=types.Type.STRING),
+                            "app_name": types.Schema(type=types.Type.STRING, description="The executable name of the app to launch (e.g., 'calc.exe')"),
                             "key": types.Schema(type=types.Type.STRING),
                             "selector": types.Schema(type=types.Type.STRING),
                             "max_wait_seconds": types.Schema(type=types.Type.NUMBER),
@@ -623,6 +625,12 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                             parsed_actions.append({
                                 "action": "OPEN_TAB",
                                 "url": str(action_data["url"]),
+                                "thought": thought
+                            })
+                        elif action_data.get("action") == "LAUNCH_APP" and "app_name" in action_data:
+                            parsed_actions.append({
+                                "action": "LAUNCH_APP",
+                                "app_name": str(action_data["app_name"]),
                                 "thought": thought
                             })
                         elif action_data.get("action") == "PRESS_KEY" and "key" in action_data:
@@ -737,6 +745,12 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                     return {"actions": [{
                         "action": "OPEN_TAB",
                         "url": str(action_data["url"]),
+                        "thought": thought
+                    }], "memory_rules": playbook_rules_applied}
+                elif action_data.get("action") == "LAUNCH_APP" and "app_name" in action_data:
+                    return {"actions": [{
+                        "action": "LAUNCH_APP",
+                        "app_name": str(action_data["app_name"]),
                         "thought": thought
                     }], "memory_rules": playbook_rules_applied}
                 elif action_data.get("action") == "PRESS_KEY" and "key" in action_data:
