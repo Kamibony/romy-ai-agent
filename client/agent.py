@@ -1545,6 +1545,20 @@ class AgentStateMachine:
              # Check if we should override routing to OS despite WEB intent
              # (e.g. for OS-specific hotkeys like Win or Meta that shouldn't go to Chrome CDP)
              force_os = False
+             # Execution Context Guarding for OS
+             if self.intent == "OS" and "target_id" in action_to_take:
+                 target_id = str(action_to_take["target_id"])
+                 if target_id not in getattr(self, "os_memory_map", {}):
+                     logging.error(f"Safety Bailout: Target ID {target_id} not found in OS memory map. The expected window might not be focused or ready. Aborting remaining batch actions.")
+                     try:
+                         firestore_update_document("remote_commands", self.doc_id, {
+                             "telemetry": f"Safety Bailout: Target ID {target_id} not found. Window state may have shifted. Retrying..."
+                         })
+                     except Exception as e:
+                         pass
+                     bail_out = True
+                     break
+
              if self.intent == "WEB" and action_type in ["PRESS", "PRESS_KEY"]:
                  key = action_to_take.get("key", "").lower()
                  if key in ["win", "windows", "meta", "command"]:
@@ -1578,20 +1592,29 @@ class AgentStateMachine:
              else:
                  # Execute via DesktopEnvironment
                  try:
-                     if action_type == "CLICK" and "target_id" in action_to_take:
+                     if action_type == "LAUNCH_APP" and "app_name" in action_to_take:
+                         app_name = action_to_take["app_name"]
+                         logging.info(f"Deterministically launching application: {app_name}")
+                         try:
+                             # Use os.startfile on Windows to allow app resolution from PATH (e.g. calc.exe, notepad.exe) safely
+                             os.startfile(app_name)
+                             # Give OS time to spawn the window so next state check sees it
+                             await asyncio.sleep(2)
+                             # Break batch to force a fresh GET_STATE of the new window
+                             bail_out = True
+                             break
+                         except Exception as e:
+                             logging.error(f"Failed to launch app {app_name}: {e}")
+                     elif action_type == "CLICK" and "target_id" in action_to_take:
                          target_id = str(action_to_take["target_id"])
-                         if target_id in getattr(self, "os_memory_map", {}):
-                             el = self.os_memory_map[target_id]
-                             await desktop_env.click(el["center"]["x"], el["center"]["y"])
-                         else:
-                             logging.warning(f"Target ID {target_id} not found in OS memory map.")
+                         # Existence verified by context guard
+                         el = getattr(self, "os_memory_map", {})[target_id]
+                         await desktop_env.click(el["center"]["x"], el["center"]["y"])
                      elif action_type == "TYPE" and "target_id" in action_to_take and "text" in action_to_take:
                          target_id = str(action_to_take["target_id"])
-                         if target_id in getattr(self, "os_memory_map", {}):
-                             el = self.os_memory_map[target_id]
-                             await desktop_env.type(el["center"]["x"], el["center"]["y"], action_to_take["text"], action_to_take.get("submit", False))
-                         else:
-                             logging.warning(f"Target ID {target_id} not found in OS memory map.")
+                         # Existence verified by context guard
+                         el = getattr(self, "os_memory_map", {})[target_id]
+                         await desktop_env.type(el["center"]["x"], el["center"]["y"], action_to_take["text"], action_to_take.get("submit", False))
                      elif action_type in ["PRESS", "PRESS_KEY"]:
                          key = action_to_take.get("key", "")
                          if key:
@@ -2473,6 +2496,19 @@ def execute_voice_agent_loop() -> None:
                                 break_outer = True
                                 break
 
+                    # Execution Context Guarding for OS inside Voice Loop
+                    if "target_id" in act:
+                        target_id = str(act["target_id"])
+                        if target_id not in memory_map:
+                            logging.error(f"Safety Bailout: Target ID {target_id} not found in OS memory map. The expected window might not be focused or ready.")
+                            try:
+                                firestore_update_document("remote_commands", doc_id, {
+                                    "telemetry": f"Safety Bailout: Target ID {target_id} not found. Window state may have shifted. Retrying..."
+                                })
+                            except Exception as e:
+                                pass
+                            break
+
                     if action_upper == "SUB_TASK_COMPLETE":
                         logging.info(f"Sub-task completed: {current_sub_task}")
                         had_terminal_action = True
@@ -2490,38 +2526,46 @@ def execute_voice_agent_loop() -> None:
                         had_terminal_action = True
                         break_outer = True
                         break
+                    elif action_upper == "LAUNCH_APP" and "app_name" in act:
+                        app_name = act["app_name"]
+                        logging.info(f"Deterministically launching application: {app_name}")
+                        try:
+                            # Use os.startfile on Windows to allow app resolution from PATH safely
+                            os.startfile(app_name)
+                            time.sleep(2)
+                            had_terminal_action = True
+                            break_outer = True
+                            break
+                        except Exception as e:
+                            logging.error(f"Failed to launch app {app_name}: {e}")
                     elif action_upper == "CLICK" and "target_id" in act:
                         target_id = str(act["target_id"])
-                        if target_id in memory_map:
-                            logging.info(f"Clicking element with ID {target_id} using PyAutoGUI...")
-                            try:
-                                x = memory_map[target_id]["x"]
-                                y = memory_map[target_id]["y"]
-                                pyautogui.moveTo(x, y, duration=0.5)
-                                pyautogui.click()
-                            except Exception as click_e:
-                                logging.error(f"Error executing click via PyAutoGUI: {click_e}.")
-                        else:
-                            logging.error(f"Error: target_id {target_id} not found in memory map.")
+                        # Existence verified by context guard
+                        logging.info(f"Clicking element with ID {target_id} using PyAutoGUI...")
+                        try:
+                            x = memory_map[target_id]["x"]
+                            y = memory_map[target_id]["y"]
+                            pyautogui.moveTo(x, y, duration=0.5)
+                            pyautogui.click()
+                        except Exception as click_e:
+                            logging.error(f"Error executing click via PyAutoGUI: {click_e}.")
 
                     elif action_upper == "TYPE" and "target_id" in act and "text" in act:
                         target_id = str(act["target_id"])
                         text_to_type = act["text"]
-                        if target_id in memory_map:
-                            logging.info(f"Typing '{text_to_type}' at element {target_id} using PyAutoGUI...")
-                            try:
-                                x = memory_map[target_id]["x"]
-                                y = memory_map[target_id]["y"]
-                                pyautogui.moveTo(x, y, duration=0.5)
-                                pyautogui.click()
-                                pyautogui.hotkey('ctrl', 'a')
-                                pyautogui.press('backspace')
-                                time.sleep(0.2)
-                                pyautogui.write(text_to_type)
-                            except Exception as type_e:
-                                logging.error(f"Error executing type via PyAutoGUI: {type_e}.")
-                        else:
-                            logging.error(f"Error: target_id {target_id} not found in memory map.")
+                        # Existence verified by context guard
+                        logging.info(f"Typing '{text_to_type}' at element {target_id} using PyAutoGUI...")
+                        try:
+                            x = memory_map[target_id]["x"]
+                            y = memory_map[target_id]["y"]
+                            pyautogui.moveTo(x, y, duration=0.5)
+                            pyautogui.click()
+                            pyautogui.hotkey('ctrl', 'a')
+                            pyautogui.press('backspace')
+                            time.sleep(0.2)
+                            pyautogui.write(text_to_type)
+                        except Exception as type_e:
+                            logging.error(f"Error executing type via PyAutoGUI: {type_e}.")
 
                     elif action_upper == "SCROLL" and "direction" in act:
                         direction = act["direction"].lower()
