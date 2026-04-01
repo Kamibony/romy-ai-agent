@@ -102,6 +102,7 @@ def analyze_flight_records(doc_id):
         "telemetry": [],
         "errors": [],
         "circuit_breakers": 0,
+        "any_subtask_failed": False,
         "final_url": "Unknown",
         "last_screenshot": None
     }
@@ -129,6 +130,9 @@ def analyze_flight_records(doc_id):
                 iteration = sys_state.get("sub_task_iteration", 0)
                 if iteration >= 3:
                     analysis["circuit_breakers"] += 1
+
+                if sys_state.get("any_subtask_failed"):
+                    analysis["any_subtask_failed"] = True
 
                 telemetry_entry = {
                     "iteration": idx,
@@ -274,6 +278,7 @@ def run_diagnostics(strict_autonomous=True):
                         status_response = urllib.request.urlopen(status_req)
                         status_data = json.loads(status_response.read().decode())
                         status = status_data.get("status", "unknown")
+                        any_subtask_failed = status_data.get("any_subtask_failed", False)
 
                         iteration = status_data.get("iteration", 0)
                         agent_state = status_data.get("agent_state", "unknown")
@@ -325,10 +330,12 @@ def run_diagnostics(strict_autonomous=True):
 
         # Analyze flight records
         analysis = analyze_flight_records(doc_id)
+        if any_subtask_failed:
+             analysis["any_subtask_failed"] = True
 
         # Refactor Semantic Diagnostic Truthfulness
         if status == "completed":
-            if analysis.get("circuit_breakers", 0) > 0:
+            if analysis.get("circuit_breakers", 0) > 0 or analysis.get("any_subtask_failed"):
                 status = "failed (circuit breaker triggered)"
             elif analysis.get("errors"):
                 status = "failed (execution errors)"

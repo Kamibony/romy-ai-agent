@@ -178,6 +178,36 @@ def get_resilient_session() -> requests.Session:
         _GLOBAL_SESSION.mount("http://", adapter)
     return _GLOBAL_SESSION
 
+def authenticated_request(method: str, url: str, **kwargs) -> requests.Response:
+    """Performs an authenticated request with silent token refresh on 401."""
+    session = get_resilient_session()
+
+    headers = kwargs.get('headers', {})
+    if "Authorization" not in headers and CURRENT_TOKEN:
+        headers["Authorization"] = f"Bearer {CURRENT_TOKEN}"
+    kwargs['headers'] = headers
+
+    response = session.request(method, url, **kwargs)
+
+    if response.status_code == 401:
+        logging.warning(f"Unauthorized (401) during {method} {url}. Attempting silent token refresh...")
+        try:
+            from local_bridge import bridge
+            new_token = bridge.request_fresh_token()
+            if new_token:
+                set_firebase_token(new_token)
+                headers["Authorization"] = f"Bearer {new_token}"
+                kwargs['headers'] = headers
+                logging.info("Token refreshed successfully. Retrying request...")
+                response = session.request(method, url, **kwargs)
+            else:
+                handle_token_expiry()
+        except Exception as e:
+            logging.error(f"Error during silent token refresh: {e}")
+            handle_token_expiry()
+
+    return response
+
 
 def firestore_update_document(collection: str, doc_id: str, updates: Dict[str, Any], delete_fields: list = None) -> None:
     """Updates a Firestore document using the REST API with retries for network resilience."""
@@ -237,9 +267,8 @@ def firestore_update_document(collection: str, doc_id: str, updates: Dict[str, A
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # Using resilient session for robust retries
-            session = get_resilient_session()
-            response = session.patch(url, json=payload, headers=headers, timeout=10)
+            # Using authenticated request for silent token refresh
+            response = authenticated_request("PATCH", url, json=payload, headers=headers, timeout=10)
             logging.info(f"Status update response for {doc_id}: {response.status_code}")
             response.raise_for_status()
             return  # Success, exit the function
@@ -267,8 +296,7 @@ def firestore_get_document(collection: str, doc_id: str) -> Dict[str, Any]:
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}"}
 
     try:
-        session = get_resilient_session()
-        response = session.get(url, headers=headers, timeout=10)
+        response = authenticated_request("GET", url, headers=headers, timeout=10)
         if response.status_code == 404:
             return {}
         response.raise_for_status()
@@ -853,8 +881,7 @@ def pre_flight_check(command_text: str) -> dict:
     payload = {"command_text": command_text}
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
     try:
-        session = get_resilient_session()
-        response = session.post(url, json=payload, headers=headers, timeout=(10, 20))
+        response = authenticated_request("POST", url, json=payload, headers=headers, timeout=(10, 20))
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -870,8 +897,7 @@ def supervisor_plan(command_text: str) -> list:
     payload = {"command_text": command_text}
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
     try:
-        session = get_resilient_session()
-        response = session.post(url, json=payload, headers=headers, timeout=(10, 30))
+        response = authenticated_request("POST", url, json=payload, headers=headers, timeout=(10, 30))
         response.raise_for_status()
         return response.json().get("sub_tasks", [])
     except Exception as e:
@@ -902,9 +928,8 @@ def evaluate_plan_progress(command_text: str, current_sub_task: str, remaining_p
     }
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
     try:
-        # Use the global resilient session to leverage Keep-Alive and retry mechanisms
-        session = get_resilient_session()
-        response = session.post(url, json=payload, headers=headers, timeout=(10, 20))
+        # Use authenticated request for silent token refresh
+        response = authenticated_request("POST", url, json=payload, headers=headers, timeout=(10, 20))
         response.raise_for_status()
         return response.json()
     except requests.exceptions.ChunkedEncodingError as e:
@@ -1008,8 +1033,7 @@ def critic_verify(sub_task: str, action_taken: dict, before_state: dict, after_s
     }
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
     try:
-        session = get_resilient_session()
-        response = session.post(url, json=payload, headers=headers, timeout=(10, 30))
+        response = authenticated_request("POST", url, json=payload, headers=headers, timeout=(10, 30))
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -1039,8 +1063,7 @@ def classify_intent(command_text: str, audio_b64: str) -> Tuple[str, str]:
     }
 
     try:
-        session = get_resilient_session()
-        response = session.post(url, json=payload, headers=headers, timeout=(10, 20))
+        response = authenticated_request("POST", url, json=payload, headers=headers, timeout=(10, 20))
         response.raise_for_status()
         data = response.json()
 
@@ -1083,6 +1106,7 @@ class AgentStateMachine:
         self.previous_state_metadata = None
         self.previous_state_ui = None
         self.max_sub_task_iterations = 3
+        self.any_subtask_failed = False
 
     async def run(self, doc_id, command_text, audio_b64="", client_context=None):
         global ACTIVE_DOC_ID
@@ -1221,6 +1245,7 @@ class AgentStateMachine:
         if self.sub_task_iteration >= self.max_sub_task_iterations:
             current_sub_task = self.sub_tasks[self.current_sub_task_index]
             logging.warning(f"Circuit Breaker triggered: Max iterations ({self.max_sub_task_iterations}) reached for sub-task '{current_sub_task}'. Marking as FAILED and advancing.")
+            self.any_subtask_failed = True
 
             try:
                 firestore_update_document("remote_commands", self.doc_id, {
@@ -1368,10 +1393,9 @@ class AgentStateMachine:
 
         logging.info("Sending state to backend for decision...")
         try:
-            session = get_resilient_session()
             headers = {"Authorization": f"Bearer {CURRENT_TOKEN}"}
             backend_url = config.GET_COMMAND_ENDPOINT
-            response = session.post(backend_url, json=payload, headers=headers)
+            response = authenticated_request("POST", backend_url, json=payload, headers=headers)
             response.raise_for_status()
             try:
                 self.ai_response = response.json()
@@ -1686,6 +1710,7 @@ class AgentStateMachine:
                  system_state={
                      "intent": getattr(self, "intent", "UNKNOWN"),
                      "sub_task_iteration": self.sub_task_iteration,
+                     "any_subtask_failed": self.any_subtask_failed,
                      "memory_rules_applied": self.ai_response.get("memory_rules", []) if isinstance(self.ai_response, dict) else []
                  }
              )
@@ -1764,7 +1789,6 @@ class AgentStateMachine:
 
                 logging.info("Sending HITL learning package to Synthesizer Agent...")
                 try:
-                    session = get_resilient_session()
                     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}"}
                     client_id = self.client_context.get("client_id", "default") if self.client_context else "default"
 
@@ -1782,7 +1806,8 @@ class AgentStateMachine:
                     }
 
                     synth_url = config.SYNTHESIZE_PLAYBOOK_ENDPOINT
-                    response = session.post(synth_url, json=synth_payload, headers=headers)
+                    response = authenticated_request("POST", synth_url, json=synth_payload, headers=headers)
+
                     if response.ok:
                         logging.info("Synthesizer Agent successfully generated a new Playbook Rule!")
                     else:
@@ -1818,7 +1843,6 @@ class AgentStateMachine:
 
                     # Generate playbook rule for semantic guidance
                     try:
-                        session = get_resilient_session()
                         headers = {"Authorization": f"Bearer {CURRENT_TOKEN}"}
                         client_id = self.client_context.get("client_id", "default") if self.client_context else "default"
 
@@ -1835,7 +1859,7 @@ class AgentStateMachine:
                         }
 
                         synth_url = config.SYNTHESIZE_PLAYBOOK_ENDPOINT
-                        response = session.post(synth_url, json=synth_payload, headers=headers)
+                        response = authenticated_request("POST", synth_url, json=synth_payload, headers=headers)
                         if response.ok:
                             logging.info("Synthesizer Agent successfully generated a new Playbook Rule for semantic guidance!")
                         else:
@@ -2126,12 +2150,14 @@ def execute_voice_agent_loop() -> None:
                         retry_delay = 5
                         for attempt in range(max_retries):
                             try:
-                                session = get_resilient_session()
-                                response = session.post(config.GET_COMMAND_ENDPOINT, json=payload, headers=headers, timeout=(15, 60))
+                                response = authenticated_request("POST", config.GET_COMMAND_ENDPOINT, json=payload, headers=headers, timeout=(15, 60))
                                 response.raise_for_status()
                                 backend_data = response.json()
                                 break
                             except requests.exceptions.RequestException as req_err:
+                                if isinstance(req_err, requests.exceptions.HTTPError) and req_err.response.status_code == 401:
+                                    # Already tried refreshing above, if it still fails 401, bail
+                                    raise
                                 logging.warning(f"Network error on attempt {attempt + 1}/{max_retries}: {req_err}")
                                 if attempt < max_retries - 1:
                                     time.sleep(retry_delay)
@@ -2451,12 +2477,13 @@ def execute_voice_agent_loop() -> None:
                 retry_delay = 5
                 for attempt in range(max_retries):
                     try:
-                        session = get_resilient_session()
-                        response = session.post(config.GET_COMMAND_ENDPOINT, json=payload, headers=headers, timeout=(15, 60))
+                        response = authenticated_request("POST", config.GET_COMMAND_ENDPOINT, json=payload, headers=headers, timeout=(15, 60))
                         response.raise_for_status()
                         backend_data = response.json()
                         break
                     except requests.exceptions.RequestException as req_err:
+                        if isinstance(req_err, requests.exceptions.HTTPError) and req_err.response.status_code == 401:
+                             raise
                         logging.warning(f"Network error on attempt {attempt + 1}/{max_retries}: {req_err}")
                         if attempt < max_retries - 1:
                             time.sleep(retry_delay)
@@ -2928,10 +2955,12 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
             # Expose iteration count and state for active scenarios
             iteration = 0
             agent_state = "unknown"
+            any_subtask_failed = False
             global global_state_machine
             if global_state_machine and getattr(global_state_machine, "doc_id", None) == doc_id:
                 iteration = getattr(global_state_machine, "iteration", 0)
                 agent_state = getattr(global_state_machine, "state", AgentState.TERMINATED).name
+                any_subtask_failed = getattr(global_state_machine, "any_subtask_failed", False)
 
             self.send_response(HTTPStatus.OK)
             self.send_header('Content-type', 'application/json')
@@ -2940,7 +2969,8 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 "doc_id": doc_id,
                 "status": status,
                 "iteration": iteration,
-                "agent_state": agent_state
+                "agent_state": agent_state,
+                "any_subtask_failed": any_subtask_failed
             }).encode())
         elif parsed_path.path == '/api/ping':
             self.send_response(HTTPStatus.OK)
@@ -2977,8 +3007,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
             }
 
             try:
-                session = get_resilient_session()
-                response = session.get(backend_url, headers=headers, timeout=10)
+                response = authenticated_request("GET", backend_url, headers=headers, timeout=10)
                 response.raise_for_status()
 
                 self.send_response(HTTPStatus.OK)

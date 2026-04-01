@@ -117,6 +117,12 @@ function connectLocalBridge() {
                             if (ws.readyState === WebSocket.OPEN) {
                                 ws.send(JSON.stringify({ type: 'result', payload: result }));
                             }
+                        } else if (cmd.action_type === 'GET_FRESH_TOKEN') {
+                            const token = await getAuthToken();
+                            result = { success: !!token, token: token };
+                            if (ws.readyState === WebSocket.OPEN) {
+                                ws.send(JSON.stringify({ type: 'result', payload: result }));
+                            }
                         } else {
                             result = { success: false, error: "Unknown action_type." };
                             if (ws.readyState === WebSocket.OPEN) {

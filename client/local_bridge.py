@@ -239,6 +239,15 @@ class LocalBridgeManager:
         self.result_event.clear()
         return res
 
+    def request_fresh_token(self, timeout=30):
+        """Requests a fresh Firebase token from the Chrome Extension."""
+        logging.info("Requesting fresh token from Chrome Extension via local bridge...")
+        payload = {"action_type": "GET_FRESH_TOKEN"}
+        res = self.delegate_command(payload, timeout=timeout)
+        if res.get("success") and "token" in res:
+            return res["token"]
+        return None
+
     def receive_result(self, result: dict):
         self.result = result
         self.result_event.set()
