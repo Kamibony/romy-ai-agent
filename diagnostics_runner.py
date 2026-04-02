@@ -335,7 +335,9 @@ def run_diagnostics(strict_autonomous=True):
 
         # Refactor Semantic Diagnostic Truthfulness
         if status == "completed":
-            if analysis.get("circuit_breakers", 0) > 0 or analysis.get("any_subtask_failed"):
+            if analysis.get("error"):
+                status = f"failed (diagnostic analysis error: {analysis.get('error')})"
+            elif analysis.get("circuit_breakers", 0) > 0 or analysis.get("any_subtask_failed"):
                 status = "failed (circuit breaker triggered)"
             elif analysis.get("errors"):
                 status = "failed (execution errors)"

@@ -35,11 +35,22 @@ def main() -> None:
     try:
         logging.info("Starting B2B AI Agent MVP Client...")
 
-        # Show login window and get token
-        token = login_window()
-        if not token:
-            logging.info("Login failed or window closed. Exiting...")
-            sys.exit(0)
+        # Start local bridge for Chrome Extension early to try silent token refresh
+        from local_bridge import bridge
+        bridge.start()
+
+        # Try to get a fresh token silently
+        token = bridge.request_fresh_token(timeout=5)
+
+        if token:
+            logging.info("Silent auth successful via Chrome Extension token.")
+        else:
+            logging.info("Silent auth failed or timed out. Showing login window.")
+            # Show login window and get token
+            token = login_window()
+            if not token:
+                logging.info("Login failed or window closed. Exiting...")
+                sys.exit(0)
 
         # Set the token for the agent
         set_firebase_token(token)
@@ -75,10 +86,6 @@ def main() -> None:
             daemon=True
         )
         tray_thread.start()
-
-        # Start local bridge for Chrome Extension
-        from local_bridge import bridge
-        bridge.start()
 
         # Start local API for E2E testing
         from agent import start_local_api
