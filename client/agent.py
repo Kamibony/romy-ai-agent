@@ -84,16 +84,20 @@ def save_flight_record(doc_id: str, iteration: int, payload: dict, response: dic
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         record_file = os.path.join(user_data_dir, f"record_{iteration}_{timestamp}.json")
 
-        # Don't save the full screenshot in the prompt payload or response to avoid huge json files if we also save the image itself,
-        # but let's just save everything as requested. We can save the screenshot as a separate file if it exists.
+        # Fallbacks for missing/uninitialized attributes
+        safe_payload = payload if payload is not None else {}
+        safe_response = response if response is not None else {}
+        safe_action = action_executed if action_executed is not None else {}
+        safe_system_state = system_state if system_state is not None else {}
+
         record_data = {
             "timestamp": datetime.now().isoformat(),
             "doc_id": doc_id,
             "iteration": iteration,
-            "system_state": system_state or {},
-            "prompt_payload": payload,
-            "llm_response": response,
-            "action_executed": action_executed
+            "system_state": safe_system_state,
+            "prompt_payload": safe_payload,
+            "llm_response": safe_response,
+            "action_executed": safe_action
         }
 
         with open(record_file, "w", encoding="utf-8") as f:
@@ -1739,18 +1743,21 @@ class AgentStateMachine:
              self.previous_state_ui = self.current_ui_elements
 
         try:
+             safe_ai_response = getattr(self, 'ai_response', {})
+             safe_actions = getattr(self, 'actions_to_execute', [])
+             safe_screenshot = getattr(self, 'current_clean_screenshot', "")
              save_flight_record(
                  doc_id=self.doc_id,
                  iteration=self.iteration,
                  payload={"command_text": self.command_text, "sub_task": current_sub_task},
-                 response=self.ai_response,
-                 action_executed=self.actions_to_execute,
-                 screenshot_b64=self.current_clean_screenshot,
+                 response=safe_ai_response,
+                 action_executed=safe_actions,
+                 screenshot_b64=safe_screenshot,
                  system_state={
                      "intent": getattr(self, "intent", "UNKNOWN"),
                      "sub_task_iteration": self.sub_task_iteration,
                      "any_subtask_failed": self.any_subtask_failed,
-                     "memory_rules_applied": self.ai_response.get("memory_rules", []) if isinstance(self.ai_response, dict) else []
+                     "memory_rules_applied": safe_ai_response.get("memory_rules", []) if isinstance(safe_ai_response, dict) else []
                  }
              )
         except Exception as e:
