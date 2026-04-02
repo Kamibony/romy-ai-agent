@@ -576,6 +576,7 @@ async function handleGetState(payload) {
     let screenshotBase64 = null;
     let uiElements = [];
     let dpr = 1.0;
+    let clipboardStatus = "unknown";
 
     try {
         await cdpManager.attach(tab.id);
@@ -620,6 +621,26 @@ async function handleGetState(payload) {
             sendTelemetryLog(`Warning: Failed to extract UI elements via scripting: ${domErr.message}. Falling back to empty array.`);
         }
 
+        // 4. Try to fetch clipboard status (Requires document focus/permissions)
+        try {
+            const clipResults = await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                func: async () => {
+                    try {
+                        const text = await navigator.clipboard.readText();
+                        return text ? "contains text" : "empty";
+                    } catch (e) {
+                        return "unknown"; // Might not have permission, or not text
+                    }
+                }
+            });
+            if (clipResults && clipResults[0] && clipResults[0].result) {
+                clipboardStatus = clipResults[0].result;
+            }
+        } catch (clipErr) {
+            sendTelemetryLog(`Warning: Failed to extract clipboard status: ${clipErr.message}`);
+        }
+
     } catch (e) {
         sendTelemetryLog(`CDP Screenshot Error: ${e.message}`);
         throw e;
@@ -627,7 +648,7 @@ async function handleGetState(payload) {
         await cdpManager.detach(tab.id);
     }
 
-    return { success: true, ui_elements: uiElements, screenshot_base64: screenshotBase64, tabId: tab.id, url: tab.url, dpr: dpr };
+    return { success: true, ui_elements: uiElements, screenshot_base64: screenshotBase64, tabId: tab.id, url: tab.url, dpr: dpr, clipboard_status: clipboardStatus };
 }
 
 async function handleExecuteNativeAction(payload) {

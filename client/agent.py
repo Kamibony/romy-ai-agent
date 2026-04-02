@@ -606,10 +606,10 @@ class DesktopEnvironment:
         self.task_queue.put((func, args, kwargs, sync_future))
         return future
 
-    async def scan_ui_elements(self) -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]], str]:
+    async def scan_ui_elements(self) -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]], str, str]:
         return await self._submit_task(self._sync_scan)
 
-    def _sync_scan(self) -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]], str]:
+    def _sync_scan(self) -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]], str, str]:
         ui_elements = []
         memory_map = {}
         window_name = "OS_Environment"
@@ -680,7 +680,31 @@ class DesktopEnvironment:
         except Exception as e:
             logging.error(f"Error scanning OS UI tree: {e}")
 
-        return ui_elements, memory_map, window_name
+        clipboard_status = "empty"
+        try:
+            # Avoid focus-stealing by using ctypes to check clipboard without creating a GUI window
+            import ctypes
+            user32 = ctypes.windll.user32
+            if user32.OpenClipboard(0):
+                # Format 1 is CF_TEXT, 13 is CF_UNICODETEXT
+                if user32.IsClipboardFormatAvailable(13) or user32.IsClipboardFormatAvailable(1):
+                    clipboard_status = "contains text"
+                elif user32.CountClipboardFormats() > 0:
+                    clipboard_status = "contains data (non-text)"
+                user32.CloseClipboard()
+        except Exception as e:
+            logging.debug(f"Failed to read clipboard status via ctypes: {e}")
+            # Fallback to pyperclip if installed, which might use different mechanisms
+            try:
+                import pyperclip
+                if pyperclip.paste():
+                    clipboard_status = "contains text"
+                else:
+                    clipboard_status = "empty or non-text"
+            except Exception:
+                clipboard_status = "unknown"
+
+        return ui_elements, memory_map, window_name, clipboard_status
 
     async def click(self, x: int, y: int):
         await self._submit_task(self._sync_click, x, y)
@@ -1037,8 +1061,8 @@ def verify_action_natively(action, before_state, after_state):
         # If state didn't change significantly (or we can't be sure), fallback to LLM Critic
         return {"success": False, "reason": "No deterministic UI or Context change natively detected after click."}
 
-    elif action_type in ["RESET_VIEW", "SCROLL", "PRESS_ENTER", "PRESS", "PRESS_KEY", "HOVER", "REPLY", "LAUNCH_APP", "DRAG_AND_DROP"]:
-        return {"success": True, "reason": f"{action_type} natively verified."}
+    elif action_type in ["RESET_VIEW", "SCROLL", "PRESS_ENTER", "PRESS", "PRESS_KEY", "HOVER", "REPLY", "LAUNCH_APP", "DRAG_AND_DROP", "EXECUTE_JS"]:
+        return {"success": True, "reason": f"{action_type} natively verified as NON_VISUAL or inherently self-resolving."}
 
     # For other actions or complex semantic checks, return False to fallback to LLM Critic
     return {"success": False, "reason": "Action cannot be verified natively."}
@@ -1358,9 +1382,10 @@ class AgentStateMachine:
             self.current_ui_elements = state_result.get("ui_elements", [])
             self.current_url = state_result.get("url", "")
             self.current_dpr = state_result.get("dpr", 1.0)
+            self.clipboard_status = state_result.get("clipboard_status", "unknown")
         else:
             logging.info("Requesting GET_STATE from Desktop Environment...")
-            ui_elements, memory_map, window_name = await desktop_env.scan_ui_elements()
+            ui_elements, memory_map, window_name, clipboard_status = await desktop_env.scan_ui_elements()
             screenshot = await desktop_env.screenshot()
 
             self.current_ui_elements = ui_elements
@@ -1368,6 +1393,7 @@ class AgentStateMachine:
             self.current_clean_screenshot = screenshot
             # For OS, we identify apps by window name or just OS
             self.current_url = window_name
+            self.clipboard_status = clipboard_status
             self.current_dpr = 1.0
         self.current_annotated_screenshot = annotate_image_with_som(
             self.current_clean_screenshot,
@@ -1421,7 +1447,8 @@ class AgentStateMachine:
             "history": self.history,
             "iteration": self.iteration,
             "screenshot_base64": getattr(self, "current_annotated_screenshot", self.current_clean_screenshot),
-            "client_context": self.client_context
+            "client_context": self.client_context,
+            "clipboard_status": getattr(self, "clipboard_status", "unknown")
         }
 
         logging.info("Sending state to backend for decision...")
@@ -2524,7 +2551,7 @@ def execute_voice_agent_loop() -> None:
                 logging.error(f"Error checking human response: {e}")
 
             # 3. Scan UI Elements
-            ui_elements, memory_map, window_name = desktop_env._sync_scan()
+            ui_elements, memory_map, window_name, clipboard_status = desktop_env._sync_scan()
 
             # 4. Construct JSON payload
             payload = {
@@ -2533,7 +2560,8 @@ def execute_voice_agent_loop() -> None:
                 "command_text": command_text,
                 "current_sub_task": current_sub_task,
                 "client_context": client_context,
-                "current_url": window_name
+                "current_url": window_name,
+                "clipboard_status": clipboard_status
             }
             if sub_task_iteration == 0 and sub_task_idx == 0 and audio_b64:
                 payload["audio_base64"] = audio_b64
