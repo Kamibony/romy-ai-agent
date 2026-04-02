@@ -726,15 +726,8 @@ class DesktopEnvironment:
 
     def _sync_type(self, x, y, text, submit, target_id=None):
         try:
-            if target_id and target_id in self.native_controls:
-                try:
-                    control = self.native_controls[target_id]
-                    control.SetFocus()
-                    logging.info(f"Programmatically focused OS control ID: {target_id}")
-                    time.sleep(0.1)
-                except Exception as e:
-                    logging.warning(f"Failed to programmatically focus control {target_id}: {e}")
-
+            # Kinematic Fix: Physical click is mandatory to guarantee focus before typing,
+            # especially since programmatic SetFocus() often fails on complex OS UI frameworks.
             if config.STEALTH_MODE:
                 duration = random.uniform(0.15, 0.45)
                 tween = pyautogui.easeInOutQuad if hasattr(pyautogui, 'easeInOutQuad') else pyautogui.linear
@@ -744,6 +737,17 @@ class DesktopEnvironment:
                 pyautogui.moveTo(x, y, duration=0.2)
 
             pyautogui.click()
+            time.sleep(0.1) # Short physical cooldown after click
+
+            if target_id and target_id in self.native_controls:
+                try:
+                    control = self.native_controls[target_id]
+                    control.SetFocus()
+                    logging.info(f"Programmatically focused OS control ID: {target_id} as secondary fallback.")
+                    time.sleep(0.1)
+                except Exception as e:
+                    logging.warning(f"Failed to programmatically focus control {target_id}: {e}")
+
             pyautogui.hotkey('ctrl', 'a')
             pyautogui.press('backspace')
             time.sleep(0.1)
@@ -1315,20 +1319,29 @@ class AgentStateMachine:
                 "audioBase64": self.audio_b64 if self.iteration == 0 else "",
                 "iteration": self.iteration
             }
-            state_result = bridge.delegate_command(state_payload)
+
+            try:
+                state_result = await asyncio.wait_for(
+                    asyncio.to_thread(bridge.delegate_command, state_payload, 60),
+                    timeout=65
+                )
+            except asyncio.TimeoutError:
+                logging.error("Bridge communication timeout during GET_STATE. Triggering fallback recovery.")
+                state_result = {"success": False, "error": "WebSocket Timeout"}
+
             if not state_result.get("success"):
                 error_msg = state_result.get('error', 'Unknown error')
                 logging.error(f"Failed to get state from extension: {error_msg}")
 
                 # Treat environment failures (like detached tabs) as a retryable/failing sub-task rather than full agent crash
-                if "Session detached" in error_msg or "No active tab" in error_msg or "closed" in error_msg.lower():
+                if "Session detached" in error_msg or "No active tab" in error_msg or "closed" in error_msg.lower() or "Timeout" in error_msg:
                      logging.warning("Environment volatility detected. Triggering retry or failure logic.")
                      self.sub_task_iteration += 1
                      if self.sub_task_iteration >= self.max_sub_task_iterations:
                           try:
                               firestore_update_document("remote_commands", self.doc_id, {
                                   "status": "AWAITING_HUMAN_INPUT",
-                                  "help_reason": f"Environment failure (e.g., target tab closed): {error_msg}"
+                                  "help_reason": f"Environment failure (e.g., target tab closed or timeout): {error_msg}"
                               })
                           except Exception as fs_e:
                               logging.error(f"Error saving help request: {fs_e}")
@@ -1632,19 +1645,6 @@ class AgentStateMachine:
              # Check if we should override routing to OS despite WEB intent
              # (e.g. for OS-specific hotkeys like Win or Meta that shouldn't go to Chrome CDP)
              force_os = False
-             # Execution Context Guarding for OS
-             if self.intent == "OS" and "target_id" in action_to_take:
-                 target_id = str(action_to_take["target_id"])
-                 if target_id not in getattr(self, "os_memory_map", {}):
-                     logging.error(f"Safety Bailout: Target ID {target_id} not found in OS memory map. The expected window might not be focused or ready. Aborting remaining batch actions.")
-                     try:
-                         firestore_update_document("remote_commands", self.doc_id, {
-                             "telemetry": f"Safety Bailout: Target ID {target_id} not found. Window state may have shifted. Retrying..."
-                         })
-                     except Exception as e:
-                         pass
-                     bail_out = True
-                     break
 
              if self.intent == "WEB" and action_type in ["PRESS", "PRESS_KEY"]:
                  key = action_to_take.get("key", "").lower()
@@ -1653,17 +1653,26 @@ class AgentStateMachine:
                      force_os = True
                      self.intent = "OS"
 
+             # Execution Strategy Routing
              if self.intent == "WEB" and not force_os:
-                 # Pass down STEALTH_MODE config
+                 # === Web Execution Strategy ===
                  action_to_take["stealth_mode"] = config.STEALTH_MODE
                  exec_payload = {"action_type": "EXECUTE_ACTION", "action": action_to_take, "iteration": self.iteration}
-                 exec_result = bridge.delegate_command(exec_payload)
+
+                 # Wrap bridge call to make it non-blocking and timeout-aware
+                 try:
+                     exec_result = await asyncio.wait_for(
+                         asyncio.to_thread(bridge.delegate_command, exec_payload, 60),
+                         timeout=65
+                     )
+                 except asyncio.TimeoutError:
+                     logging.error("Bridge communication timeout during execution. Triggering fallback recovery.")
+                     exec_result = {"success": False, "error": "WebSocket Timeout"}
 
                  if not exec_result.get("success"):
                      error_msg = exec_result.get('error', 'Unknown error')
                      logging.warning(f"Macro-action execution failed via bridge: {error_msg}. Bailing out of batch.")
 
-                     # Environmental chaos handler for EXECUTE_ACTION
                      if "Session detached" in error_msg or "No active tab" in error_msg or "closed" in error_msg.lower():
                          logging.warning("Environment volatility detected during action execution.")
 
@@ -1672,13 +1681,27 @@ class AgentStateMachine:
                              "telemetry": f"Macro-action '{action_type}' failed: {error_msg}. Retrying..."
                          })
                      except Exception as e:
-                         logging.error(f"Failed to update telemetry for action failure: {e}")
+                         pass
                      self.command_text += f"\n[System Note: Last action {action_type} failed: {error_msg}]"
                      bail_out = True
                      break
              else:
-                 # Execute via DesktopEnvironment
+                 # === OS Execution Strategy ===
                  try:
+                     # Execution Context Guarding for OS (Graceful Degradation)
+                     if "target_id" in action_to_take and action_type in ["CLICK", "TYPE"]:
+                         target_id = str(action_to_take["target_id"])
+                         if target_id not in getattr(self, "os_memory_map", {}):
+                             logging.warning(f"Kinematic Wait: Target ID {target_id} not found in OS memory map. UI may be rendering. Bailing batch to re-evaluate.")
+                             try:
+                                 firestore_update_document("remote_commands", self.doc_id, {
+                                     "telemetry": f"Waiting for target {target_id} to render..."
+                                 })
+                             except Exception:
+                                 pass
+                             bail_out = True
+                             break # Exit batch cleanly to force GET_STATE cycle
+
                      if action_type == "LAUNCH_APP":
                          app_name = action_to_take.get("app_name")
                          if not app_name:
@@ -1687,31 +1710,21 @@ class AgentStateMachine:
                          try:
                              # Use os.startfile on Windows to allow app resolution from PATH (e.g. calc.exe, notepad.exe) safely
                              os.startfile(app_name)
-                             # Give OS time to spawn the window so next state check sees it
-                             await asyncio.sleep(2)
-                             # Break batch to force a fresh GET_STATE of the new window
+                             # Break batch to force a fresh GET_STATE of the new window, letting ReAct loop wait for it natively
                              bail_out = True
                              break
                          except Exception as e:
                              logging.error(f"Failed to launch app {app_name}: {e}")
                              raise
                      elif action_type == "CLICK":
-                         target_id = action_to_take.get("target_id")
-                         if not target_id:
-                             raise ValueError("Missing 'target_id' for CLICK action.")
-                         target_id = str(target_id)
-                         # Existence verified by context guard
+                         target_id = str(action_to_take.get("target_id"))
                          el = getattr(self, "os_memory_map", {})[target_id]
                          await desktop_env.click(el["center"]["x"], el["center"]["y"])
                      elif action_type == "TYPE":
-                         target_id = action_to_take.get("target_id")
+                         target_id = str(action_to_take.get("target_id"))
                          text = action_to_take.get("text")
-                         if not target_id:
-                             raise ValueError("Missing 'target_id' for TYPE action.")
                          if text is None:
                              raise ValueError("Missing 'text' for TYPE action.")
-                         target_id = str(target_id)
-                         # Existence verified by context guard
                          el = getattr(self, "os_memory_map", {})[target_id]
                          await desktop_env.type(el["center"]["x"], el["center"]["y"], text, action_to_take.get("submit", False), target_id=target_id)
                      elif action_type == "DRAG_AND_DROP":
@@ -1731,7 +1744,6 @@ class AgentStateMachine:
                          if key.lower() in ["meta", "command", "win", "windows"]:
                              key = "win"
                          pyautogui.press(key)
-                     # Other actions like SCROLL can also be added here
                  except Exception as e:
                      logging.error(f"Desktop execution failed: {e}")
                      self.command_text += f"\n[System Note: Desktop action {action_type} failed: {e}]"
