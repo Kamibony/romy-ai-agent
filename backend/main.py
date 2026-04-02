@@ -22,6 +22,7 @@ class AgentCommandRequest(BaseModel):
     screenshot_base64: Optional[str] = None
     current_url: Optional[str] = None
     client_context: Optional[Dict[str, Any]] = None
+    clipboard_status: Optional[str] = "unknown"
 
 class ClassifyIntentRequest(BaseModel):
     command_text: Optional[str] = None
@@ -240,7 +241,8 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
             screenshot_base64=request.screenshot_base64,
             current_sub_task=request.current_sub_task,
             current_url=request.current_url,
-            client_context=request.client_context
+            client_context=request.client_context,
+            clipboard_status=request.clipboard_status
         )
         print(f"Gemini action list: {action_list}")
 
