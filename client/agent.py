@@ -179,7 +179,7 @@ def get_resilient_session() -> requests.Session:
     return _GLOBAL_SESSION
 
 def authenticated_request(method: str, url: str, **kwargs) -> requests.Response:
-    """Performs an authenticated request with silent token refresh on 401."""
+    """Performs an authenticated request with silent token refresh on 401 and exponential backoff for connection errors."""
     session = get_resilient_session()
 
     headers = kwargs.get('headers', {})
@@ -187,26 +187,42 @@ def authenticated_request(method: str, url: str, **kwargs) -> requests.Response:
         headers["Authorization"] = f"Bearer {CURRENT_TOKEN}"
     kwargs['headers'] = headers
 
-    response = session.request(method, url, **kwargs)
+    max_retries = 3
+    retry_delay = 2
 
-    if response.status_code == 401:
-        logging.warning(f"Unauthorized (401) during {method} {url}. Attempting silent token refresh...")
+    for attempt in range(max_retries):
         try:
-            from local_bridge import bridge
-            new_token = bridge.request_fresh_token()
-            if new_token:
-                set_firebase_token(new_token)
-                headers["Authorization"] = f"Bearer {new_token}"
-                kwargs['headers'] = headers
-                logging.info("Token refreshed successfully. Retrying request...")
-                response = session.request(method, url, **kwargs)
-            else:
-                handle_token_expiry()
-        except Exception as e:
-            logging.error(f"Error during silent token refresh: {e}")
-            handle_token_expiry()
+            response = session.request(method, url, **kwargs)
 
-    return response
+            if response.status_code == 401:
+                logging.warning(f"Unauthorized (401) during {method} {url}. Attempting silent token refresh...")
+                try:
+                    from local_bridge import bridge
+                    new_token = bridge.request_fresh_token()
+                    if new_token:
+                        set_firebase_token(new_token)
+                        headers["Authorization"] = f"Bearer {new_token}"
+                        kwargs['headers'] = headers
+                        logging.info("Token refreshed successfully. Retrying request...")
+                        response = session.request(method, url, **kwargs)
+                    else:
+                        handle_token_expiry()
+                        return response
+                except Exception as e:
+                    logging.error(f"Error during silent token refresh: {e}")
+                    handle_token_expiry()
+                    return response
+
+            return response
+        except requests.exceptions.ConnectionError as e:
+            logging.warning(f"ConnectionError during {method} {url} on attempt {attempt+1}: {e}")
+            if attempt < max_retries - 1:
+                logging.info(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+                retry_delay *= 2
+            else:
+                logging.error(f"Max retries reached for ConnectionError on {method} {url}.")
+                raise
 
 
 def firestore_update_document(collection: str, doc_id: str, updates: Dict[str, Any], delete_fields: list = None) -> None:
@@ -1013,7 +1029,7 @@ def verify_action_natively(action, before_state, after_state):
         # If state didn't change significantly (or we can't be sure), fallback to LLM Critic
         return {"success": False, "reason": "No deterministic UI or Context change natively detected after click."}
 
-    elif action_type in ["RESET_VIEW", "SCROLL", "PRESS_ENTER", "PRESS", "PRESS_KEY", "HOVER", "REPLY"]:
+    elif action_type in ["RESET_VIEW", "SCROLL", "PRESS_ENTER", "PRESS", "PRESS_KEY", "HOVER", "REPLY", "LAUNCH_APP", "DRAG_AND_DROP"]:
         return {"success": True, "reason": f"{action_type} natively verified."}
 
     # For other actions or complex semantic checks, return False to fallback to LLM Critic
@@ -1538,6 +1554,8 @@ class AgentStateMachine:
     async def state_acting(self, bridge):
         current_sub_task = self.sub_tasks[self.current_sub_task_index]
         bail_out = False
+        has_mutated_state = False
+        mutating_actions = {"CLICK", "TYPE", "PRESS", "PRESS_KEY", "PRESS_ENTER", "DRAG_AND_DROP", "SCROLL", "LAUNCH_APP", "EXECUTE_JS", "NAVIGATE", "OPEN_TAB"}
 
         for action_idx, action_to_take in enumerate(self.actions_to_execute):
              if self.interrupt_event.is_set():
@@ -1545,14 +1563,22 @@ class AgentStateMachine:
                  bail_out = True
                  break
 
-             if action_to_take.get("action") == "SUB_TASK_COMPLETE":
-                 logging.info(f"Sub-Task '{current_sub_task}' marked as complete by AI.")
-                 self.current_sub_task_index += 1
-                 self.sub_task_iteration = 0
-                 self.previous_action = None
-                 self.history.clear()
+             action_type = str(action_to_take.get("action", "")).upper()
+
+             if action_type == "SUB_TASK_COMPLETE":
+                 if has_mutated_state:
+                     logging.warning("Systemic Safety Intercept: Dropping SUB_TASK_COMPLETE because a state-mutating action occurred in this batch. Forcing a state check for dynamic overlays (Stable State Law).")
+                 else:
+                     logging.info(f"Sub-Task '{current_sub_task}' marked as complete by AI.")
+                     self.current_sub_task_index += 1
+                     self.sub_task_iteration = 0
+                     self.previous_action = None
+                     self.history.clear()
                  bail_out = True
                  break
+
+             if action_type in mutating_actions:
+                 has_mutated_state = True
 
              if action_to_take.get("action") == "WAIT":
                  wait_time = action_to_take.get("seconds", action_to_take.get("wait_time", 2))
@@ -1563,8 +1589,7 @@ class AgentStateMachine:
                  self.sub_task_iteration -= 1
                  break
 
-             logging.info(f"Executing Macro-Action {action_idx + 1}/{len(self.actions_to_execute)}: {action_to_take.get('action')}")
-             action_type = action_to_take.get("action")
+             logging.info(f"Executing Macro-Action {action_idx + 1}/{len(self.actions_to_execute)}: {action_type}")
 
              if action_type in ["ERROR", "API_ERROR", "PARSE_ERROR", "PIPELINE_ERROR"]:
                  error_msg = action_to_take.get("error", action_to_take.get("raw_response", "Unknown error"))
@@ -1650,8 +1675,10 @@ class AgentStateMachine:
              else:
                  # Execute via DesktopEnvironment
                  try:
-                     if action_type == "LAUNCH_APP" and "app_name" in action_to_take:
-                         app_name = action_to_take["app_name"]
+                     if action_type == "LAUNCH_APP":
+                         app_name = action_to_take.get("app_name")
+                         if not app_name:
+                             raise ValueError("Missing 'app_name' for LAUNCH_APP action.")
                          logging.info(f"Deterministically launching application: {app_name}")
                          try:
                              # Use os.startfile on Windows to allow app resolution from PATH (e.g. calc.exe, notepad.exe) safely
@@ -1663,31 +1690,43 @@ class AgentStateMachine:
                              break
                          except Exception as e:
                              logging.error(f"Failed to launch app {app_name}: {e}")
-                     elif action_type == "CLICK" and "target_id" in action_to_take:
-                         target_id = str(action_to_take["target_id"])
+                             raise
+                     elif action_type == "CLICK":
+                         target_id = action_to_take.get("target_id")
+                         if not target_id:
+                             raise ValueError("Missing 'target_id' for CLICK action.")
+                         target_id = str(target_id)
                          # Existence verified by context guard
                          el = getattr(self, "os_memory_map", {})[target_id]
                          await desktop_env.click(el["center"]["x"], el["center"]["y"])
-                     elif action_type == "TYPE" and "target_id" in action_to_take and "text" in action_to_take:
-                         target_id = str(action_to_take["target_id"])
+                     elif action_type == "TYPE":
+                         target_id = action_to_take.get("target_id")
+                         text = action_to_take.get("text")
+                         if not target_id:
+                             raise ValueError("Missing 'target_id' for TYPE action.")
+                         if text is None:
+                             raise ValueError("Missing 'text' for TYPE action.")
+                         target_id = str(target_id)
                          # Existence verified by context guard
                          el = getattr(self, "os_memory_map", {})[target_id]
-                         await desktop_env.type(el["center"]["x"], el["center"]["y"], action_to_take["text"], action_to_take.get("submit", False), target_id=target_id)
+                         await desktop_env.type(el["center"]["x"], el["center"]["y"], text, action_to_take.get("submit", False), target_id=target_id)
                      elif action_type == "DRAG_AND_DROP":
                          start_x = action_to_take.get("start_x")
                          start_y = action_to_take.get("start_y")
                          end_x = action_to_take.get("end_x")
                          end_y = action_to_take.get("end_y")
-                         if start_x is not None and start_y is not None and end_x is not None and end_y is not None:
-                             await desktop_env.drag_and_drop(int(start_x), int(start_y), int(end_x), int(end_y))
+                         if start_x is None or start_y is None or end_x is None or end_y is None:
+                             raise ValueError("Missing one or more coordinates (start_x, start_y, end_x, end_y) for DRAG_AND_DROP.")
+                         await desktop_env.drag_and_drop(int(start_x), int(start_y), int(end_x), int(end_y))
                      elif action_type in ["PRESS", "PRESS_KEY"]:
-                         key = action_to_take.get("key", "")
-                         if key:
-                             logging.info(f"Executing OS hotkey via PyAutoGUI: {key}")
-                             # Map generic meta to windows key
-                             if key.lower() in ["meta", "command", "win", "windows"]:
-                                 key = "win"
-                             pyautogui.press(key)
+                         key = action_to_take.get("key")
+                         if not key:
+                             raise ValueError(f"Missing 'key' for {action_type} action.")
+                         logging.info(f"Executing OS hotkey via PyAutoGUI: {key}")
+                         # Map generic meta to windows key
+                         if key.lower() in ["meta", "command", "win", "windows"]:
+                             key = "win"
+                         pyautogui.press(key)
                      # Other actions like SCROLL can also be added here
                  except Exception as e:
                      logging.error(f"Desktop execution failed: {e}")
