@@ -1653,6 +1653,18 @@ class AgentStateMachine:
                      force_os = True
                      self.intent = "OS"
 
+             # Universal Execution Router: Dynamic Domain Switching
+             # Force domain switch based on explicit action types even within a batch
+             if action_type == "LAUNCH_APP":
+                 logging.info(f"Universal Execution Router: Action {action_type} detected. Forcing execution domain to OS.")
+                 self.intent = "OS"
+                 force_os = True
+
+             if action_type in ["NAVIGATE", "OPEN_TAB"]:
+                 logging.info(f"Universal Execution Router: Action {action_type} detected. Forcing execution domain to WEB.")
+                 self.intent = "WEB"
+                 force_os = False
+
              # Execution Strategy Routing
              if self.intent == "WEB" and not force_os:
                  # === Web Execution Strategy ===
@@ -1683,6 +1695,11 @@ class AgentStateMachine:
                      except Exception as e:
                          pass
                      self.command_text += f"\n[System Note: Last action {action_type} failed: {error_msg}]"
+                     bail_out = True
+                     break
+
+                 if action_type in ["NAVIGATE", "OPEN_TAB"]:
+                     # Cleanly break batch so next GET_STATE natively reads the new WEB domain.
                      bail_out = True
                      break
              else:
