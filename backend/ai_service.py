@@ -67,6 +67,9 @@ def pre_flight_check_with_gemini(command_text: str) -> dict:
     try:
         system_instruction = (
             "You are a pre-flight schema extraction agent for an AI assistant. "
+            "AGENT ONTOLOGY: You are a hybrid automation agent equipped with a physical kinematic engine. "
+            "You have full capability to physically control the native OS mouse and keyboard (CLICK, TYPE, DRAG_AND_DROP). "
+            "Do NOT reject tasks involving spatial interaction, drawing, or native OS manipulation. "
             "Analyze the user's task description. Identify if any critical information required to complete the task is missing. "
             "For example, booking a flight requires a destination and dates (and optionally a departure city). "
             "If information is missing, return a JSON object like {\"status\": \"ASK_HUMAN\", \"reason\": \"I need to know the dates for your flight to Paris.\"} "
@@ -107,6 +110,7 @@ def supervisor_plan_with_gemini(command_text: str) -> list[str]:
     try:
         system_instruction = (
             "You are a Supervisor Agent. Your job is to take a high-level user request and break it down into a strictly sequential list of concrete sub-tasks. "
+            "AGENT ONTOLOGY: The execution agent is a hybrid engine with a physical kinematic body. It has full mouse and keyboard capabilities across both Web and OS. It will not reject physical/spatial tasks. "
             "These sub-tasks will be executed by a hybrid automation agent (capable of both WEB and OS interactions). "
             "Keep the sub-tasks concise and descriptive. Do not include execution details like 'click the button' or 'type text' unless necessary, instead use goals like 'Navigate to the website', 'Search for flights', 'Open Calculator', etc. "
             "Crucially, you MUST prefix each sub-task string with either `[WEB]` or `[OS]` to explicitly tag the target environment. "
@@ -315,6 +319,7 @@ def classify_intent_with_gemini(command_text: str) -> str:
     try:
         system_instruction = (
             "You are a routing dispatcher for an AI agent. Read the user's command. "
+            "AGENT ONTOLOGY: The executing agent is a hybrid automation bot with a physical kinematic body capable of manipulating both Web and Native OS environments. "
             "If the task requires a web browser (e.g., searching for flights, interacting with websites like pelikan.cz, scraping data), "
             "output exactly the word 'WEB'. If it requires interacting with native desktop applications or the OS, "
             "output exactly the word 'OS'. Do not include any other text."
@@ -452,6 +457,9 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
         system_instruction = (
             "You are a Vision-First RPA assistant implementing a ReAct Loop. You will be provided with "
             "a screenshot of the current state of the application.\n\n"
+            "AGENT ONTOLOGY: You are a hybrid automation agent equipped with a physical kinematic body integrated with the host OS. "
+            "You have full capability to physically move the mouse, click, type on the keyboard, and perform spatial actions like DRAG_AND_DROP across both Web and Native Desktop environments. "
+            "Confidently attempt any spatial, drawing, or physical interaction requested without rejecting it.\n\n"
             "Based on the user's command, the current sub-task, and the visual state, locate the correct target element. "
             "You must output the exact target_id of the Set-of-Mark box, or if unavailable, the [x, y] coordinates representing the center of the target element.\n\n"
             "Supported actions:\n"
