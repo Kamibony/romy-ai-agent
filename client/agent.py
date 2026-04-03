@@ -706,11 +706,12 @@ class DesktopEnvironment:
 
         return ui_elements, memory_map, window_name, clipboard_status
 
-    async def click(self, x: int, y: int):
-        await self._submit_task(self._sync_click, x, y)
+    async def click(self, x: int, y: int, dpr: float = 1.0):
+        await self._submit_task(self._sync_click, x, y, dpr)
 
-    def _sync_click(self, x, y):
+    def _sync_click(self, x, y, dpr=1.0):
         try:
+            x, y = int(x * dpr), int(y * dpr)
             if config.STEALTH_MODE:
                 duration = random.uniform(0.15, 0.45)
                 # Use a basic tween if available, otherwise default
@@ -723,14 +724,16 @@ class DesktopEnvironment:
         except Exception as e:
             logging.error(f"Error clicking at ({x}, {y}): {e}")
 
-    async def type(self, x: int, y: int, text: str, submit: bool = False, target_id: Optional[str] = None):
-        await self._submit_task(self._sync_type, x, y, text, submit, target_id)
+    async def type(self, x: int, y: int, text: str, submit: bool = False, target_id: Optional[str] = None, dpr: float = 1.0):
+        await self._submit_task(self._sync_type, x, y, text, submit, target_id, dpr)
 
-    async def drag_and_drop(self, start_x: int, start_y: int, end_x: int, end_y: int):
-        await self._submit_task(self._sync_drag_and_drop, start_x, start_y, end_x, end_y)
+    async def drag_and_drop(self, start_x: int, start_y: int, end_x: int, end_y: int, dpr: float = 1.0):
+        await self._submit_task(self._sync_drag_and_drop, start_x, start_y, end_x, end_y, dpr)
 
-    def _sync_drag_and_drop(self, start_x: int, start_y: int, end_x: int, end_y: int):
+    def _sync_drag_and_drop(self, start_x: int, start_y: int, end_x: int, end_y: int, dpr: float = 1.0):
         try:
+            start_x, start_y = int(start_x * dpr), int(start_y * dpr)
+            end_x, end_y = int(end_x * dpr), int(end_y * dpr)
             if config.STEALTH_MODE:
                 tween = pyautogui.easeInOutQuad if hasattr(pyautogui, 'easeInOutQuad') else pyautogui.linear
                 pyautogui.moveTo(start_x, start_y, duration=random.uniform(0.15, 0.45), tween=tween)
@@ -748,8 +751,9 @@ class DesktopEnvironment:
         except Exception as e:
             logging.error(f"Error executing drag and drop from ({start_x}, {start_y}) to ({end_x}, {end_y}): {e}")
 
-    def _sync_type(self, x, y, text, submit, target_id=None):
+    def _sync_type(self, x, y, text, submit, target_id=None, dpr=1.0):
         try:
+            x, y = int(x * dpr), int(y * dpr)
             # Kinematic Fix: Physical click is mandatory to guarantee focus before typing,
             # especially since programmatic SetFocus() often fails on complex OS UI frameworks.
             if config.STEALTH_MODE:
@@ -1736,19 +1740,24 @@ class AgentStateMachine:
                  try:
                      # Execution Context Guarding for OS (Graceful Degradation)
                      if action_type in ["CLICK", "TYPE"]:
-                         if "target_id" not in action_to_take:
-                             raise ValueError(f"Missing 'target_id' for {action_type} action.")
-                         target_id = str(action_to_take["target_id"])
-                         if target_id not in getattr(self, "os_memory_map", {}):
-                             logging.warning(f"Kinematic Wait: Target ID {target_id} not found in OS memory map. UI may be rendering. Bailing batch to re-evaluate.")
-                             try:
-                                 await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
-                                     "telemetry": f"Waiting for target {target_id} to render..."
-                                 })
-                             except Exception:
-                                 pass
-                             bail_out = True
-                             break # Exit batch cleanly to force GET_STATE cycle
+                         if "target_id" in action_to_take:
+                             target_id = str(action_to_take["target_id"])
+                             if target_id not in getattr(self, "os_memory_map", {}):
+                                 logging.warning(f"Kinematic Wait: Target ID {target_id} not found in OS memory map. UI may be rendering. Bailing batch to re-evaluate.")
+                                 try:
+                                     await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
+                                         "telemetry": f"Waiting for target {target_id} to render..."
+                                     })
+                                 except Exception:
+                                     pass
+                                 bail_out = True
+                                 break # Exit batch cleanly to force GET_STATE cycle
+                         else:
+                             # Spatial Fallback Execution Routing
+                             if action_type == "CLICK" and ("x" not in action_to_take or "y" not in action_to_take):
+                                 raise ValueError(f"Missing 'target_id' or spatial coordinates (x, y) for {action_type} action.")
+                             if action_type == "TYPE" and ("x" not in action_to_take or "y" not in action_to_take):
+                                 raise ValueError(f"Missing 'target_id' or spatial coordinates (x, y) for {action_type} action.")
 
                      if action_type == "LAUNCH_APP":
                          app_name = action_to_take.get("app_name")
@@ -1756,9 +1765,31 @@ class AgentStateMachine:
                              raise ValueError("Missing 'app_name' for LAUNCH_APP action.")
                          logging.info(f"Deterministically launching application: {app_name}")
                          try:
+                             # Capture active window before launch
+                             initial_window_name = "Unknown"
+                             try:
+                                 active_window = auto.GetForegroundControl()
+                                 if active_window:
+                                     initial_window_name = active_window.Name
+                             except Exception:
+                                 pass
+
                              # Use os.startfile on Windows to allow app resolution from PATH (e.g. calc.exe, notepad.exe) safely
                              os.startfile(app_name)
-                             await asyncio.sleep(2.0)
+
+                             # Kinematic Quiescence Polling
+                             poll_interval = 0.5
+                             max_polls = 20  # Max 10 seconds wait
+                             for i in range(max_polls):
+                                 await asyncio.sleep(poll_interval)
+                                 try:
+                                     current_window = auto.GetForegroundControl()
+                                     if current_window and current_window.Name != initial_window_name:
+                                         logging.info(f"OS Quiescence Reached: Foreground window changed from '{initial_window_name}' to '{current_window.Name}'.")
+                                         break
+                                 except Exception:
+                                     pass
+
                              # Break batch to force a fresh GET_STATE of the new window, letting ReAct loop wait for it natively
                              bail_out = True
                              break
@@ -1766,16 +1797,22 @@ class AgentStateMachine:
                              logging.error(f"Failed to launch app {app_name}: {e}")
                              raise
                      elif action_type == "CLICK":
-                         target_id = str(action_to_take.get("target_id"))
-                         el = getattr(self, "os_memory_map", {})[target_id]
-                         await desktop_env.click(el["center"]["x"], el["center"]["y"])
+                         if "target_id" in action_to_take:
+                             target_id = str(action_to_take.get("target_id"))
+                             el = getattr(self, "os_memory_map", {})[target_id]
+                             await desktop_env.click(el["center"]["x"], el["center"]["y"])
+                         else:
+                             await desktop_env.click(int(action_to_take["x"]), int(action_to_take["y"]), getattr(self, 'current_dpr', 1.0))
                      elif action_type == "TYPE":
-                         target_id = str(action_to_take.get("target_id"))
                          text = action_to_take.get("text")
                          if text is None:
                              raise ValueError("Missing 'text' for TYPE action.")
-                         el = getattr(self, "os_memory_map", {})[target_id]
-                         await desktop_env.type(el["center"]["x"], el["center"]["y"], text, action_to_take.get("submit", False), target_id=target_id)
+                         if "target_id" in action_to_take:
+                             target_id = str(action_to_take.get("target_id"))
+                             el = getattr(self, "os_memory_map", {})[target_id]
+                             await desktop_env.type(el["center"]["x"], el["center"]["y"], text, action_to_take.get("submit", False), target_id=target_id)
+                         else:
+                             await desktop_env.type(int(action_to_take["x"]), int(action_to_take["y"]), text, action_to_take.get("submit", False), target_id=None, dpr=getattr(self, 'current_dpr', 1.0))
                      elif action_type == "DRAG_AND_DROP":
                          start_x = action_to_take.get("start_x")
                          start_y = action_to_take.get("start_y")
@@ -1783,7 +1820,10 @@ class AgentStateMachine:
                          end_y = action_to_take.get("end_y")
                          if start_x is None or start_y is None or end_x is None or end_y is None:
                              raise ValueError("Missing one or more coordinates (start_x, start_y, end_x, end_y) for DRAG_AND_DROP.")
-                         await desktop_env.drag_and_drop(int(start_x), int(start_y), int(end_x), int(end_y))
+                         if "target_id" not in action_to_take:
+                             await desktop_env.drag_and_drop(int(start_x), int(start_y), int(end_x), int(end_y), getattr(self, 'current_dpr', 1.0))
+                         else:
+                             await desktop_env.drag_and_drop(int(start_x), int(start_y), int(end_x), int(end_y))
                      elif action_type in ["PRESS", "PRESS_KEY"]:
                          key = action_to_take.get("key")
                          if not key:
@@ -2674,25 +2714,25 @@ def execute_voice_agent_loop() -> None:
 
                     # Execution Context Guarding for OS inside Voice Loop
                     if action_upper in ["CLICK", "TYPE"]:
-                        if "target_id" not in act:
-                            logging.error(f"Safety Bailout: Missing 'target_id' for {action_upper} action. Re-evaluating...")
-                            try:
-                                firestore_update_document("remote_commands", doc_id, {
-                                    "telemetry": f"Safety Bailout: Missing 'target_id' for {action_upper} action. Retrying..."
-                                })
-                            except Exception as e:
-                                pass
-                            break
-                        target_id = str(act["target_id"])
-                        if target_id not in memory_map:
-                            logging.error(f"Safety Bailout: Target ID {target_id} not found in OS memory map. The expected window might not be focused or ready.")
-                            try:
-                                firestore_update_document("remote_commands", doc_id, {
-                                    "telemetry": f"Safety Bailout: Target ID {target_id} not found. Window state may have shifted. Retrying..."
-                                })
-                            except Exception as e:
-                                pass
-                            break
+                        if "target_id" in act:
+                            target_id = str(act["target_id"])
+                            if target_id not in memory_map:
+                                logging.error(f"Safety Bailout: Target ID {target_id} not found in OS memory map. The expected window might not be focused or ready.")
+                                try:
+                                    firestore_update_document("remote_commands", doc_id, {
+                                        "telemetry": f"Safety Bailout: Target ID {target_id} not found. Window state may have shifted. Retrying..."
+                                    })
+                                except Exception as e:
+                                    pass
+                                break
+                        else:
+                            # Spatial Fallback Execution Routing
+                            if action_upper == "CLICK" and ("x" not in act or "y" not in act):
+                                logging.error(f"Safety Bailout: Missing 'target_id' or spatial coordinates (x, y) for {action_upper} action.")
+                                break
+                            if action_upper == "TYPE" and ("x" not in act or "y" not in act):
+                                logging.error(f"Safety Bailout: Missing 'target_id' or spatial coordinates (x, y) for {action_upper} action.")
+                                break
 
                     if action_upper == "SUB_TASK_COMPLETE":
                         logging.info(f"Sub-task completed: {current_sub_task}")
@@ -2715,34 +2755,66 @@ def execute_voice_agent_loop() -> None:
                         app_name = act["app_name"]
                         logging.info(f"Deterministically launching application: {app_name}")
                         try:
+                            # Capture active window before launch
+                            initial_window_name = "Unknown"
+                            try:
+                                import uiautomation as local_auto
+                                active_window = local_auto.GetForegroundControl()
+                                if active_window:
+                                    initial_window_name = active_window.Name
+                            except Exception:
+                                pass
+
                             # Use os.startfile on Windows to allow app resolution from PATH safely
                             os.startfile(app_name)
-                            time.sleep(2)
+
+                            # Kinematic Quiescence Polling
+                            poll_interval = 0.5
+                            max_polls = 20  # Max 10 seconds wait
+                            for i in range(max_polls):
+                                time.sleep(poll_interval)
+                                try:
+                                    import uiautomation as local_auto
+                                    current_window = local_auto.GetForegroundControl()
+                                    if current_window and current_window.Name != initial_window_name:
+                                        logging.info(f"OS Quiescence Reached: Foreground window changed from '{initial_window_name}' to '{current_window.Name}'.")
+                                        break
+                                except Exception:
+                                    pass
+
                             had_terminal_action = True
                             break_outer = True
                             break
                         except Exception as e:
                             logging.error(f"Failed to launch app {app_name}: {e}")
                     elif action_upper == "CLICK":
-                        target_id = str(act["target_id"])
-                        # Existence verified by context guard
-                        logging.info(f"Clicking element with ID {target_id} using PyAutoGUI...")
                         try:
-                            x = memory_map[target_id]["x"]
-                            y = memory_map[target_id]["y"]
+                            if "target_id" in act:
+                                target_id = str(act["target_id"])
+                                logging.info(f"Clicking element with ID {target_id} using PyAutoGUI...")
+                                x = memory_map[target_id]["x"]
+                                y = memory_map[target_id]["y"]
+                            else:
+                                logging.info(f"Clicking coordinate ({act['x']}, {act['y']}) using PyAutoGUI...")
+                                x = int(act["x"])
+                                y = int(act["y"])
                             pyautogui.moveTo(x, y, duration=0.5)
                             pyautogui.click()
                         except Exception as click_e:
                             logging.error(f"Error executing click via PyAutoGUI: {click_e}.")
 
                     elif action_upper == "TYPE":
-                        target_id = str(act["target_id"])
                         text_to_type = act.get("text", "")
-                        # Existence verified by context guard
-                        logging.info(f"Typing '{text_to_type}' at element {target_id} using PyAutoGUI...")
                         try:
-                            x = memory_map[target_id]["x"]
-                            y = memory_map[target_id]["y"]
+                            if "target_id" in act:
+                                target_id = str(act["target_id"])
+                                logging.info(f"Typing '{text_to_type}' at element {target_id} using PyAutoGUI...")
+                                x = memory_map[target_id]["x"]
+                                y = memory_map[target_id]["y"]
+                            else:
+                                logging.info(f"Typing '{text_to_type}' at coordinate ({act['x']}, {act['y']}) using PyAutoGUI...")
+                                x = int(act["x"])
+                                y = int(act["y"])
                             pyautogui.moveTo(x, y, duration=0.5)
                             pyautogui.click()
                             pyautogui.hotkey('ctrl', 'a')
