@@ -1735,7 +1735,9 @@ class AgentStateMachine:
                  # === OS Execution Strategy ===
                  try:
                      # Execution Context Guarding for OS (Graceful Degradation)
-                     if "target_id" in action_to_take and action_type in ["CLICK", "TYPE"]:
+                     if action_type in ["CLICK", "TYPE"]:
+                         if "target_id" not in action_to_take:
+                             raise ValueError(f"Missing 'target_id' for {action_type} action.")
                          target_id = str(action_to_take["target_id"])
                          if target_id not in getattr(self, "os_memory_map", {}):
                              logging.warning(f"Kinematic Wait: Target ID {target_id} not found in OS memory map. UI may be rendering. Bailing batch to re-evaluate.")
@@ -1756,6 +1758,7 @@ class AgentStateMachine:
                          try:
                              # Use os.startfile on Windows to allow app resolution from PATH (e.g. calc.exe, notepad.exe) safely
                              os.startfile(app_name)
+                             await asyncio.sleep(2.0)
                              # Break batch to force a fresh GET_STATE of the new window, letting ReAct loop wait for it natively
                              bail_out = True
                              break
@@ -2670,7 +2673,16 @@ def execute_voice_agent_loop() -> None:
                                 break
 
                     # Execution Context Guarding for OS inside Voice Loop
-                    if "target_id" in act:
+                    if action_upper in ["CLICK", "TYPE"]:
+                        if "target_id" not in act:
+                            logging.error(f"Safety Bailout: Missing 'target_id' for {action_upper} action. Re-evaluating...")
+                            try:
+                                firestore_update_document("remote_commands", doc_id, {
+                                    "telemetry": f"Safety Bailout: Missing 'target_id' for {action_upper} action. Retrying..."
+                                })
+                            except Exception as e:
+                                pass
+                            break
                         target_id = str(act["target_id"])
                         if target_id not in memory_map:
                             logging.error(f"Safety Bailout: Target ID {target_id} not found in OS memory map. The expected window might not be focused or ready.")
@@ -2711,7 +2723,7 @@ def execute_voice_agent_loop() -> None:
                             break
                         except Exception as e:
                             logging.error(f"Failed to launch app {app_name}: {e}")
-                    elif action_upper == "CLICK" and "target_id" in act:
+                    elif action_upper == "CLICK":
                         target_id = str(act["target_id"])
                         # Existence verified by context guard
                         logging.info(f"Clicking element with ID {target_id} using PyAutoGUI...")
@@ -2723,9 +2735,9 @@ def execute_voice_agent_loop() -> None:
                         except Exception as click_e:
                             logging.error(f"Error executing click via PyAutoGUI: {click_e}.")
 
-                    elif action_upper == "TYPE" and "target_id" in act and "text" in act:
+                    elif action_upper == "TYPE":
                         target_id = str(act["target_id"])
-                        text_to_type = act["text"]
+                        text_to_type = act.get("text", "")
                         # Existence verified by context guard
                         logging.info(f"Typing '{text_to_type}' at element {target_id} using PyAutoGUI...")
                         try:
