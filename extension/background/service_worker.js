@@ -220,11 +220,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             handleGhostClick(request.payload);
             return false;
 
-        // Future OS actions handler (Phase 2)
-        // case MESSAGE_TYPES.OS_NATIVE_ACTION:
-        //     chrome.runtime.sendNativeMessage('com.romy.nativehost', request.payload, ...);
-        //     return true;
-
         default:
             console.warn(`Unknown message type: ${request.type}`);
     }
