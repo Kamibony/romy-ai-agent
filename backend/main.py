@@ -53,10 +53,22 @@ class SynthesizePlaybookRequest(BaseModel):
     client_id: Optional[str] = None
     failed_sub_task: Optional[str] = None
 
-# Allow all origins, methods, and headers for CORS (adjust as needed in production)
+# Restricted CORS policy for production security
+origins = [
+    "https://romy-ai-agent.web.app",
+    "https://romy-ai-agent.firebaseapp.com",
+    "http://localhost",
+    "http://127.0.0.1",
+    "http://localhost:3000",
+    "http://localhost:8000",
+    "http://localhost:8764",
+    "http://127.0.0.1:8764",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
+    allow_origin_regex="chrome-extension://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
