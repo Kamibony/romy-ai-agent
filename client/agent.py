@@ -1600,6 +1600,7 @@ class AgentStateMachine:
         bail_out = False
         has_mutated_state = False
         mutating_actions = {"CLICK", "TYPE", "PRESS", "PRESS_KEY", "PRESS_ENTER", "DRAG_AND_DROP", "SCROLL", "LAUNCH_APP", "EXECUTE_JS", "NAVIGATE", "OPEN_TAB"}
+        non_visual_actions = {"RESET_VIEW", "SCROLL", "PRESS_ENTER", "PRESS", "PRESS_KEY", "HOVER", "REPLY", "LAUNCH_APP", "DRAG_AND_DROP", "EXECUTE_JS"}
 
         for action_idx, action_to_take in enumerate(self.actions_to_execute):
              if self.interrupt_event.is_set():
@@ -1609,9 +1610,9 @@ class AgentStateMachine:
 
              action_type = str(action_to_take.get("action", "")).upper()
 
-             if action_type == "SUB_TASK_COMPLETE":
+             if action_type == "SUB_TASK_COMPLETE" or action_type == "DONE":
                  if has_mutated_state:
-                     logging.warning("Systemic Safety Intercept: Dropping SUB_TASK_COMPLETE because a state-mutating action occurred in this batch. Forcing a state check for dynamic overlays (Stable State Law).")
+                     logging.warning("Systemic Safety Intercept: Dropping SUB_TASK_COMPLETE because a state-mutating visual action occurred in this batch. Forcing a state check for dynamic overlays (Stable State Law).")
                  else:
                      logging.info(f"Sub-Task '{current_sub_task}' marked as complete by AI.")
                      self.current_sub_task_index += 1
@@ -1622,7 +1623,8 @@ class AgentStateMachine:
                  break
 
              if action_type in mutating_actions:
-                 has_mutated_state = True
+                 if action_type not in non_visual_actions:
+                     has_mutated_state = True
 
              if action_to_take.get("action") == "WAIT":
                  wait_time = action_to_take.get("seconds", action_to_take.get("wait_time", 2))
