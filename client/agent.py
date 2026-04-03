@@ -1172,7 +1172,7 @@ class AgentStateMachine:
             # We attempt to fetch the profile by ID if we somehow knew it, but for now we'll default to 'sreality'
             # since we don't have a global settings config storing the "active" one locally anymore.
             # In a robust setup, the dashboard would pass the active client_id in the /run_command payload.
-            self.client_context = load_client_profile("sreality")
+            self.client_context = await asyncio.to_thread(load_client_profile, "sreality")
 
         self.state = AgentState.INITIALIZING
         self.iteration = 0
@@ -1197,7 +1197,7 @@ class AgentStateMachine:
             # Check if there is a manual human_response update via Firebase (for mobile semantic interrupts)
             if self.doc_id and loop_counter % 20 == 0:  # Check every ~2 seconds
                 try:
-                    doc_data = firestore_get_document("remote_commands", self.doc_id)
+                    doc_data = await asyncio.to_thread(firestore_get_document, "remote_commands", self.doc_id)
                     if doc_data and doc_data.get("human_response"):
                         human_resp = doc_data.get("human_response")
                         logging.info(f"Detected semantic guidance from Firestore: {human_resp}")
@@ -1212,7 +1212,7 @@ class AgentStateMachine:
 
                         # Clear it from Firestore
                         try:
-                            firestore_update_document("remote_commands", self.doc_id, {}, delete_fields=["human_response"])
+                            await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {}, delete_fields=["human_response"])
                         except Exception as e:
                             logging.error(f"Failed to clear human_response: {e}")
                 except Exception as e:
@@ -1264,7 +1264,7 @@ class AgentStateMachine:
             reason = pre_flight.get("reason", "Missing required information.")
             logging.info(f"Pre-flight failed: {reason}")
             try:
-                firestore_update_document("remote_commands", self.doc_id, {
+                await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
                     "status": "AWAITING_HUMAN_INPUT",
                     "help_reason": reason
                 })
@@ -1287,7 +1287,7 @@ class AgentStateMachine:
         if self.current_sub_task_index >= len(self.sub_tasks):
             logging.info("All sub-tasks completed.")
             self.state = AgentState.TERMINATED
-            firestore_update_document("remote_commands", self.doc_id, {"status": "completed"})
+            await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {"status": "completed"})
             return
 
         if self.sub_task_iteration >= self.max_sub_task_iterations:
@@ -1296,7 +1296,7 @@ class AgentStateMachine:
             self.any_subtask_failed = True
 
             try:
-                firestore_update_document("remote_commands", self.doc_id, {
+                await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
                     "telemetry": f"Circuit Breaker triggered: Max retries ({self.max_sub_task_iterations}) reached for sub-task '{current_sub_task}'. Moving to next sub-task."
                 })
             except Exception as e:
@@ -1329,7 +1329,7 @@ class AgentStateMachine:
 
         if self.sub_task_iteration > 0:
             try:
-                firestore_update_document("remote_commands", self.doc_id, {
+                await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
                     "telemetry": f"Retrying sub-task '{current_sub_task}' (Attempt {self.sub_task_iteration + 1}/{self.max_sub_task_iterations})."
                 })
             except Exception as e:
@@ -1363,7 +1363,7 @@ class AgentStateMachine:
                      self.sub_task_iteration += 1
                      if self.sub_task_iteration >= self.max_sub_task_iterations:
                           try:
-                              firestore_update_document("remote_commands", self.doc_id, {
+                              await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
                                   "status": "AWAITING_HUMAN_INPUT",
                                   "help_reason": f"Environment failure (e.g., target tab closed or timeout): {error_msg}"
                               })
@@ -1519,7 +1519,7 @@ class AgentStateMachine:
             self.sub_task_iteration += 1
             if self.sub_task_iteration >= self.max_sub_task_iterations:
                 try:
-                    firestore_update_document("remote_commands", self.doc_id, {
+                    await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
                         "status": "AWAITING_HUMAN_INPUT",
                         "help_reason": f"System error parsing AI response after retries. Payload: {resp_str}"
                     })
@@ -1537,7 +1537,7 @@ class AgentStateMachine:
                  contextual_help_reason = f"{help_reason} | Stuck trying to execute: [{current_sub_task}]"
                  logging.info(f"AI requested human help: {contextual_help_reason}")
                  try:
-                     firestore_update_document("remote_commands", self.doc_id, {
+                     await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
                          "status": "AWAITING_HUMAN_INPUT",
                          "help_reason": contextual_help_reason
                      })
@@ -1559,7 +1559,7 @@ class AgentStateMachine:
             if self.action_stuck_counter >= max_stuck_actions:
                 logging.warning("Action Stuck detector triggered! AI repeatedly issuing identical cyclical actions.")
                 try:
-                    firestore_update_document("remote_commands", self.doc_id, {
+                    await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
                         "status": "AWAITING_HUMAN_INPUT",
                         "help_reason": f"Cyclical loop detected (Semantic Blindness). Repeating same action: {current_actions_str[:100]}"
                     })
@@ -1577,7 +1577,7 @@ class AgentStateMachine:
             if self.stuck_counter >= max_stuck_visual:
                  logging.warning("Visual Stuck detector triggered! Same visual state for 5 iterations.")
                  try:
-                     firestore_update_document("remote_commands", self.doc_id, {
+                     await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
                          "status": "AWAITING_HUMAN_INPUT",
                          "help_reason": f"I am stuck in a visual loop trying to execute: [{current_sub_task}]"
                      })
@@ -1641,7 +1641,7 @@ class AgentStateMachine:
                  self.sub_task_iteration += 1
                  if self.sub_task_iteration >= self.max_sub_task_iterations:
                      try:
-                         firestore_update_document("remote_commands", self.doc_id, {
+                         await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
                              "status": "AWAITING_HUMAN_INPUT",
                              "help_reason": f"System error: {action_type}. {error_msg}"
                          })
@@ -1716,7 +1716,7 @@ class AgentStateMachine:
                          logging.warning("Environment volatility detected during action execution.")
 
                      try:
-                         firestore_update_document("remote_commands", self.doc_id, {
+                         await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
                              "telemetry": f"Macro-action '{action_type}' failed: {error_msg}. Retrying..."
                          })
                      except Exception as e:
@@ -1738,7 +1738,7 @@ class AgentStateMachine:
                          if target_id not in getattr(self, "os_memory_map", {}):
                              logging.warning(f"Kinematic Wait: Target ID {target_id} not found in OS memory map. UI may be rendering. Bailing batch to re-evaluate.")
                              try:
-                                 firestore_update_document("remote_commands", self.doc_id, {
+                                 await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
                                      "telemetry": f"Waiting for target {target_id} to render..."
                                  })
                              except Exception:
@@ -1970,7 +1970,7 @@ class AgentStateMachine:
                         logging.error(f"Error calling Synthesizer API for semantic guidance: {e}")
 
             try:
-                firestore_update_document("remote_commands", self.doc_id, {
+                await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
                     "status": "in_progress"
                 }, delete_fields=["human_response", "help_reason"])
             except Exception as e:
