@@ -194,6 +194,10 @@ def authenticated_request(method: str, url: str, **kwargs) -> requests.Response:
     max_retries = 3
     retry_delay = 2
 
+    # Add a global timeout if not explicitly provided
+    if 'timeout' not in kwargs:
+        kwargs['timeout'] = (10, 60) # (connect timeout, read timeout)
+
     for attempt in range(max_retries):
         try:
             response = session.request(method, url, **kwargs)
@@ -218,14 +222,14 @@ def authenticated_request(method: str, url: str, **kwargs) -> requests.Response:
                     return response
 
             return response
-        except requests.exceptions.ConnectionError as e:
-            logging.warning(f"ConnectionError during {method} {url} on attempt {attempt+1}: {e}")
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            logging.warning(f"Network error (Connection/Timeout) during {method} {url} on attempt {attempt+1}: {e}")
             if attempt < max_retries - 1:
                 logging.info(f"Retrying in {retry_delay} seconds...")
                 time.sleep(retry_delay)
                 retry_delay *= 2
             else:
-                logging.error(f"Max retries reached for ConnectionError on {method} {url}.")
+                logging.error(f"Max retries reached for {method} {url}.")
                 raise
 
 
@@ -1189,73 +1193,86 @@ class AgentStateMachine:
 
         loop_counter = 0
         while self.state != AgentState.TERMINATED:
-            loop_counter += 1
-            if ABORT_AGENT:
-                logging.info("Emergency abort triggered. Stopping state machine.")
+            try:
+                loop_counter += 1
+                if ABORT_AGENT:
+                    logging.info("Emergency abort triggered. Stopping state machine.")
+                    self.state = AgentState.TERMINATED
+                    break
+                if PAUSE_AGENT:
+                    await asyncio.sleep(1)
+                    continue
+
+                # Check if there is a manual human_response update via Firebase (for mobile semantic interrupts)
+                if self.doc_id and loop_counter % 20 == 0:  # Check every ~2 seconds
+                    try:
+                        doc_data = await asyncio.to_thread(firestore_get_document, "remote_commands", self.doc_id)
+                        if doc_data and doc_data.get("human_response"):
+                            human_resp = doc_data.get("human_response")
+                            logging.info(f"Detected semantic guidance from Firestore: {human_resp}")
+                            # Process the human response as an interrupt
+                            self.hitl_action = {"type": "SEMANTIC", "xpath": human_resp}
+
+                            # Only interrupt if we are actively executing, otherwise it's just handled when suspended
+                            if self.state != AgentState.SUSPENDED_HITL:
+                                self.interrupt_event.set()
+                            else:
+                                self.hitl_event.set()
+
+                            # Clear it from Firestore
+                            try:
+                                await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {}, delete_fields=["human_response"])
+                            except Exception as e:
+                                logging.error(f"Failed to clear human_response: {e}")
+                    except Exception as e:
+                        logging.error(f"Error checking for semantic interrupts: {e}")
+
+                if self.interrupt_event.is_set():
+                    logging.info("Asynchronous interrupt detected!")
+                    self.interrupt_event.clear()
+                    if self.hitl_action:
+                        # Spatial interrupt (CLICK)
+                        if self.hitl_action.get("type") == "CLICK" or (self.hitl_action.get("x") is not None and self.hitl_action.get("y") is not None):
+                            logging.info("Processing asynchronous spatial interrupt (Ghost Click).")
+                            self.state = AgentState.LEARNING_ROUTINE
+                            continue
+                        # Semantic interrupt
+                        elif "xpath" in self.hitl_action:
+                            semantic_guidance = self.hitl_action.get("xpath", "")
+                            if semantic_guidance:
+                                logging.info(f"Processing asynchronous semantic guidance: {semantic_guidance}")
+                                self.command_text += f"\n[System Note: Immediate Human Override Received: '{semantic_guidance}'. Adjust your execution plan accordingly.]"
+                                self.sub_task_iteration = 0
+                                self.state = AgentState.EVALUATING
+                                self.hitl_action = None
+                                continue
+
+                if self.state == AgentState.INITIALIZING:
+                    await self.state_initializing()
+                elif self.state == AgentState.EVALUATING:
+                    await self.state_evaluating(bridge)
+                elif self.state == AgentState.THINKING:
+                    await self.state_thinking(bridge)
+                elif self.state == AgentState.ACTING:
+                    await self.state_acting(bridge)
+                elif self.state == AgentState.SUSPENDED_HITL:
+                    await self.state_suspended_hitl()
+                elif self.state == AgentState.LEARNING_ROUTINE:
+                    await self.state_learning_routine()
+
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                logging.error(f"Catastrophic failure in AgentStateMachine loop: {e}\n{traceback.format_exc()}")
+                self.any_subtask_failed = True
+                try:
+                    await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
+                        "status": "failed",
+                        "error": f"Agent crashed unexpectedly: {str(e)}"
+                    })
+                except Exception as fs_e:
+                    logging.error(f"Failed to update task status after catastrophic crash: {fs_e}")
                 self.state = AgentState.TERMINATED
                 break
-            if PAUSE_AGENT:
-                await asyncio.sleep(1)
-                continue
-
-            # Check if there is a manual human_response update via Firebase (for mobile semantic interrupts)
-            if self.doc_id and loop_counter % 20 == 0:  # Check every ~2 seconds
-                try:
-                    doc_data = await asyncio.to_thread(firestore_get_document, "remote_commands", self.doc_id)
-                    if doc_data and doc_data.get("human_response"):
-                        human_resp = doc_data.get("human_response")
-                        logging.info(f"Detected semantic guidance from Firestore: {human_resp}")
-                        # Process the human response as an interrupt
-                        self.hitl_action = {"type": "SEMANTIC", "xpath": human_resp}
-
-                        # Only interrupt if we are actively executing, otherwise it's just handled when suspended
-                        if self.state != AgentState.SUSPENDED_HITL:
-                            self.interrupt_event.set()
-                        else:
-                            self.hitl_event.set()
-
-                        # Clear it from Firestore
-                        try:
-                            await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {}, delete_fields=["human_response"])
-                        except Exception as e:
-                            logging.error(f"Failed to clear human_response: {e}")
-                except Exception as e:
-                    logging.error(f"Error checking for semantic interrupts: {e}")
-
-            if self.interrupt_event.is_set():
-                logging.info("Asynchronous interrupt detected!")
-                self.interrupt_event.clear()
-                if self.hitl_action:
-                    # Spatial interrupt (CLICK)
-                    if self.hitl_action.get("type") == "CLICK" or (self.hitl_action.get("x") is not None and self.hitl_action.get("y") is not None):
-                        logging.info("Processing asynchronous spatial interrupt (Ghost Click).")
-                        self.state = AgentState.LEARNING_ROUTINE
-                        continue
-                    # Semantic interrupt
-                    elif "xpath" in self.hitl_action:
-                        semantic_guidance = self.hitl_action.get("xpath", "")
-                        if semantic_guidance:
-                            logging.info(f"Processing asynchronous semantic guidance: {semantic_guidance}")
-                            self.command_text += f"\n[System Note: Immediate Human Override Received: '{semantic_guidance}'. Adjust your execution plan accordingly.]"
-                            self.sub_task_iteration = 0
-                            self.state = AgentState.EVALUATING
-                            self.hitl_action = None
-                            continue
-
-            if self.state == AgentState.INITIALIZING:
-                await self.state_initializing()
-            elif self.state == AgentState.EVALUATING:
-                await self.state_evaluating(bridge)
-            elif self.state == AgentState.THINKING:
-                await self.state_thinking(bridge)
-            elif self.state == AgentState.ACTING:
-                await self.state_acting(bridge)
-            elif self.state == AgentState.SUSPENDED_HITL:
-                await self.state_suspended_hitl()
-            elif self.state == AgentState.LEARNING_ROUTINE:
-                await self.state_learning_routine()
-
-            await asyncio.sleep(0.1)
 
     async def state_initializing(self):
         intent, cmd_text = classify_intent(self.command_text, self.audio_b64)
