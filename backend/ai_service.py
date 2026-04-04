@@ -373,6 +373,62 @@ def classify_intent_with_gemini(command_text: str) -> str:
         print(f"Error classifying intent: {e}")
         return "OS"
 
+def compile_sop_with_gemini(domain: str, raw_sop: str, client_id: str = None, target_sub_task: str = None) -> Optional[str]:
+    """
+    SOP Compiler Pipeline: Takes raw human SOP text and translates it into an agent-friendly
+    playbook rule, checking for existing rules to consolidate.
+    """
+    if not raw_sop or gemini_client is None:
+        return None
+
+    try:
+        existing_rules = []
+        if target_sub_task:
+            existing_rules = get_playbook_rules(domain, client_id=client_id, goal=target_sub_task)
+
+        system_instruction = (
+            "You are an SOP Compiler Agent. A human operator has provided raw text outlining a "
+            "Standard Operating Procedure (SOP). Your job is to translate this human text into a strict, "
+            "universal playbook rule that an automated RPA agent can reliably follow.\n"
+            "Format the rule clearly, typically as 'Condition -> Action'. Ensure it uses the agent's ontology "
+            "(CLICK, TYPE, etc.)."
+        )
+
+        if existing_rules:
+            system_instruction += (
+                "\nCRITICAL: There are existing rules for this domain. "
+                "Analyze the new SOP AND the existing rules. Generate a NEW, updated rule that "
+                "incorporates the human SOP and safely replaces the old ones without losing critical context."
+            )
+
+        system_instruction += (
+            "\nReturn ONLY the final compiled rule string."
+        )
+
+        prompt = f"Domain: {domain}\nRaw Human SOP:\n{raw_sop}"
+        if target_sub_task:
+            prompt += f"\nTarget Sub-task: {target_sub_task}"
+        if existing_rules:
+            prompt += f"\n\n[EXISTING RULES]:\n" + "\n".join(existing_rules)
+
+        response = gemini_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[prompt],
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.1,
+            )
+        )
+
+        rule = response.text.strip()
+        if rule:
+            save_playbook_rule(domain, rule, client_id=client_id, goal=target_sub_task, source="manual_sop")
+            return rule
+        return None
+    except Exception as e:
+        print(f"Error compiling SOP: {e}")
+        return None
+
 def synthesize_playbook_rule_with_gemini(domain: str, execution_telemetry: str, client_id: str = None, failed_sub_task: str = None) -> Optional[str]:
     """
     Synthesizer Agent (Sleep Cycle): Reviews execution telemetry or human correction for a domain and extracts a universal rule.

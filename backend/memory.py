@@ -15,35 +15,117 @@ except Exception as e:
     chroma_client = None
     playbook_collection = None
 
-def save_playbook_rule(domain: str, rule: str, client_id: str = None, goal: str = None):
-    """Saves a playbook rule for a specific domain and goal to the vector database."""
-    if not playbook_collection:
-        print("ChromaDB not initialized, cannot save rule.")
-        return
+from firebase_admin import firestore
+from datetime import datetime, timezone
 
+def save_playbook_rule(domain: str, rule: str, client_id: str = None, goal: str = None, source: str = "synthesizer"):
+    """Saves a playbook rule using a dual-write architecture to both ChromaDB and Firestore."""
+
+    # 1. Generate Deterministic ID
     try:
-        # If a goal is provided, use it to create a deterministic ID so we overwrite old rules for that sub-task
         if goal:
             goal_hash = hashlib.sha256(goal.encode()).hexdigest()
             doc_id = f"{domain}_{client_id}_{goal_hash}" if client_id else f"{domain}_{goal_hash}"
         else:
             rule_hash = hashlib.sha256(rule.encode()).hexdigest()
             doc_id = f"{domain}_{client_id}_{rule_hash}" if client_id else f"{domain}_{rule_hash}"
-
-        metadata = {"domain": domain}
-        if client_id:
-            metadata["client_id"] = client_id
-        if goal:
-            metadata["goal"] = goal
-
-        playbook_collection.upsert(
-            documents=[rule],
-            metadatas=[metadata],
-            ids=[doc_id]
-        )
-        print(f"Saved playbook rule for {domain} (client: {client_id}): {rule}")
     except Exception as e:
-        print(f"Error saving playbook rule: {e}")
+        print(f"Error generating ID for playbook rule: {e}")
+        return
+
+    # 2. Write to ChromaDB (for vector search)
+    if playbook_collection:
+        try:
+            metadata = {"domain": domain}
+            if client_id:
+                metadata["client_id"] = client_id
+            if goal:
+                metadata["goal"] = goal
+
+            playbook_collection.upsert(
+                documents=[rule],
+                metadatas=[metadata],
+                ids=[doc_id]
+            )
+            print(f"Saved playbook rule to ChromaDB for {domain} (client: {client_id}): {rule}")
+        except Exception as e:
+            print(f"Error saving playbook rule to ChromaDB: {e}")
+    else:
+        print("ChromaDB not initialized, skipping ChromaDB save.")
+
+    # 3. Write to Firestore (for Dashboard UI & CRUD)
+    try:
+        db = firestore.client()
+
+        # We structure this by tenant if client_id is present, otherwise in a global collection
+        payload = {
+            "id": doc_id,
+            "domain": domain,
+            "rule": rule,
+            "goal": goal,
+            "source": source,
+            "updated_at": datetime.now(timezone.utc),
+            "success_rate": 1.0, # Initial success rate
+            "success_count": 0,
+            "fail_count": 0
+        }
+
+        if client_id:
+            payload["client_id"] = client_id
+            collection_ref = db.collection("tenants").document(client_id).collection("memory_rules")
+        else:
+            collection_ref = db.collection("global_memory_rules")
+
+        collection_ref.document(doc_id).set(payload, merge=True)
+        print(f"Saved playbook rule to Firestore (client: {client_id}, doc_id: {doc_id})")
+    except Exception as e:
+        print(f"Error saving playbook rule to Firestore: {e}")
+
+def delete_playbook_rule(doc_id: str, client_id: str = None) -> bool:
+    """Deletes a playbook rule from both ChromaDB and Firestore."""
+    success = True
+
+    # 1. Delete from ChromaDB
+    if playbook_collection:
+        try:
+            playbook_collection.delete(ids=[doc_id])
+            print(f"Deleted playbook rule {doc_id} from ChromaDB")
+        except Exception as e:
+            print(f"Error deleting playbook rule {doc_id} from ChromaDB: {e}")
+            success = False
+
+    # 2. Delete from Firestore
+    try:
+        db = firestore.client()
+        if client_id:
+            db.collection("tenants").document(client_id).collection("memory_rules").document(doc_id).delete()
+        else:
+            db.collection("global_memory_rules").document(doc_id).delete()
+        print(f"Deleted playbook rule {doc_id} from Firestore")
+    except Exception as e:
+        print(f"Error deleting playbook rule {doc_id} from Firestore: {e}")
+        success = False
+
+    return success
+
+def list_playbook_rules_from_firestore(client_id: str = None):
+    """Lists playbook rules from Firestore (fast, no vector search)."""
+    try:
+        db = firestore.client()
+        rules = []
+        if client_id:
+            docs = db.collection("tenants").document(client_id).collection("memory_rules").stream()
+        else:
+            docs = db.collection("global_memory_rules").stream()
+
+        for doc in docs:
+            rule_data = doc.to_dict()
+            rule_data["id"] = doc.id
+            rules.append(rule_data)
+        return rules
+    except Exception as e:
+        print(f"Error listing playbook rules from Firestore: {e}")
+        return []
 
 def get_playbook_rules(domain: str, query: str = "", n_results: int = 3, client_id: str = None, goal: str = None) -> List[str]:
     """Retrieves relevant playbook rules for a domain and an optional goal."""
