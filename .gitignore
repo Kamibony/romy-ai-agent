@@ -206,3 +206,23 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 backend/chroma_db/
+
+# Flutter project ignores
+dashboard/
+!dashboard/pubspec.yaml
+!dashboard/pubspec.lock
+!dashboard/lib/
+!dashboard/android/
+!dashboard/ios/
+!dashboard/linux/
+!dashboard/macos/
+!dashboard/windows/
+!dashboard/web/
+!dashboard/test/
+!dashboard/.metadata
+
+# Specifically ignore flutter build artifacts within dashboard
+dashboard/build/
+dashboard/.dart_tool/
+dashboard/.flutter-plugins
+dashboard/.flutter-plugins-dependencies
