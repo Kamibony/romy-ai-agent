@@ -1102,11 +1102,20 @@ def classify_intent(command_text: str, audio_b64: str) -> Tuple[str, str]:
         return "OS", command_text
 
 def load_client_profile(client_id: str = "default") -> Dict[str, Any]:
-    """Loads the client profile from Firestore instead of a local file."""
+    """Loads the client profile config from Firestore (Phase 6 Architecture)."""
     try:
-        profile_data = firestore_get_document("client_profiles", client_id)
+        # Phase 6: We use the new multi-tenant structure: tenants/{client_id}/config/main
+        profile_data = firestore_get_document(f"tenants/{client_id}/config", "main")
         if profile_data:
+            # Inject the client_id back in for downstream compatibility
+            profile_data["client_id"] = client_id
             return profile_data
+
+        # Fallback to old collection if new tenant structure doesn't exist yet
+        profile_data_fallback = firestore_get_document("client_profiles", client_id)
+        if profile_data_fallback:
+            return profile_data_fallback
+
     except Exception as e:
         logging.error(f"Failed to load client profile '{client_id}' from Firestore: {e}")
     return {"client_id": client_id, "rules": []}

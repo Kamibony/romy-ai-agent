@@ -5,8 +5,8 @@ from typing import Optional, List, Dict, Any
 
 from auth import verify_firebase_token
 from db import check_user_license, get_task_session, update_task_session, create_task_session
-from ai_service import process_with_gemini, transcribe_audio_with_gemini, classify_intent_with_gemini, pre_flight_check_with_gemini, supervisor_plan_with_gemini, critic_verify_with_gemini, synthesize_playbook_rule_with_gemini
-from memory import get_playbook_rules
+from ai_service import process_with_gemini, transcribe_audio_with_gemini, classify_intent_with_gemini, pre_flight_check_with_gemini, supervisor_plan_with_gemini, critic_verify_with_gemini, synthesize_playbook_rule_with_gemini, compile_sop_with_gemini
+from memory import get_playbook_rules, list_playbook_rules_from_firestore, delete_playbook_rule
 from firebase_admin import firestore
 
 app = FastAPI(title="ROMY AI Agent Backend")
@@ -54,6 +54,12 @@ class SynthesizePlaybookRequest(BaseModel):
     execution_telemetry: str
     client_id: Optional[str] = None
     failed_sub_task: Optional[str] = None
+
+class InjectSOPRequest(BaseModel):
+    domain: str
+    raw_sop: str
+    client_id: Optional[str] = None
+    target_sub_task: Optional[str] = None
 
 # Restricted CORS policy for production security
 origins = [
@@ -181,6 +187,61 @@ def synthesize_playbook(request: SynthesizePlaybookRequest, uid: str = Depends(v
 
     rule = synthesize_playbook_rule_with_gemini(request.domain, request.execution_telemetry, client_id=request.client_id, failed_sub_task=request.failed_sub_task)
     return {"status": "ok", "rule": rule}
+
+@app.post("/api/v1/memory/inject_sop")
+def inject_sop(request: InjectSOPRequest, uid: str = Depends(verify_firebase_token)):
+    """
+    Endpoint for B2B clients to manually inject a text-based SOP.
+    The SOP Compiler translates it into an agent-friendly rule and saves it.
+    """
+    if not check_user_license(uid):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User license is not active.",
+        )
+
+    rule = compile_sop_with_gemini(request.domain, request.raw_sop, client_id=request.client_id, target_sub_task=request.target_sub_task)
+    if rule:
+        return {"status": "ok", "rule": rule}
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to compile SOP.",
+        )
+
+@app.get("/api/v1/memory/rules")
+def get_dashboard_rules(client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token)):
+    """
+    Endpoint for Dashboard to fetch all memory rules from Firestore (fast, no vector search).
+    """
+    if not check_user_license(uid):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User license is not active.",
+        )
+
+    rules = list_playbook_rules_from_firestore(client_id=client_id)
+    return {"status": "ok", "rules": rules}
+
+@app.delete("/api/v1/memory/rules/{rule_id}")
+def delete_dashboard_rule(rule_id: str, client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token)):
+    """
+    Endpoint for Dashboard to delete a memory rule from both ChromaDB and Firestore.
+    """
+    if not check_user_license(uid):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User license is not active.",
+        )
+
+    success = delete_playbook_rule(rule_id, client_id=client_id)
+    if success:
+        return {"status": "ok"}
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete playbook rule.",
+        )
 
 @app.post("/api/classify_intent")
 
