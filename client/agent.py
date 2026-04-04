@@ -4,6 +4,7 @@ import io
 import time
 import os
 import re
+import hashlib
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -804,12 +805,16 @@ class DesktopEnvironment:
     def _sync_screenshot(self):
         try:
             screenshot = pyautogui.screenshot()
+            if screenshot.width > 1920:
+                new_width = 1920
+                new_height = int(screenshot.height * (1920 / screenshot.width))
+                screenshot = screenshot.resize((new_width, new_height), Image.Resampling.LANCZOS)
             buffered = io.BytesIO()
-            screenshot.save(buffered, format="PNG")
-            return base64.b64encode(buffered.getvalue()).decode()
+            screenshot.convert("RGB").save(buffered, format="JPEG", quality=60)
+            return buffered.getvalue()
         except Exception as e:
             logging.error(f"Error capturing OS screenshot: {e}")
-            return ""
+            return b""
 
     def close(self):
         self.task_queue.put(None)
@@ -818,42 +823,11 @@ class DesktopEnvironment:
 desktop_env = DesktopEnvironment()
 
 
-def annotate_image_with_crosshair(base64_img: str, x: int, y: int) -> str:
-    """Draws a green crosshair on the raw un-tagged coordinate."""
-    try:
-        if base64_img.startswith('data:image'):
-            img_data = base64.b64decode(base64_img.split(',')[1])
-            prefix = base64_img.split(',')[0] + ','
-        else:
-            img_data = base64.b64decode(base64_img)
-            prefix = "data:image/png;base64,"
-
-        image = Image.open(io.BytesIO(img_data)).convert("RGBA")
-        draw = ImageDraw.Draw(image)
-
-        # Draw crosshair
-        r = 15
-        draw.ellipse((x-r, y-r, x+r, y+r), outline=(0, 255, 0, 255), width=3)
-        draw.line((x-r-5, y, x+r+5, y), fill=(0, 255, 0, 255), width=3)
-        draw.line((x, y-r-5, x, y+r+5), fill=(0, 255, 0, 255), width=3)
-
-        buffered = io.BytesIO()
-        image.save(buffered, format="PNG")
-        return prefix + base64.b64encode(buffered.getvalue()).decode("utf-8")
-    except Exception as e:
-        logging.error(f"Failed to apply crosshair annotation: {e}")
-        return base64_img
-
-def annotate_image_with_som(base64_img: str, ui_elements: list, dpr: float = 1.0) -> str:
+def annotate_image_with_som(img_data: bytes, ui_elements: list, dpr: float = 1.0) -> bytes:
     """Draws Set-of-Mark numbered bounding boxes over interactive elements."""
+    if not img_data:
+        return b""
     try:
-        if base64_img.startswith('data:image'):
-            img_data = base64.b64decode(base64_img.split(',')[1])
-            prefix = base64_img.split(',')[0] + ','
-        else:
-            img_data = base64.b64decode(base64_img)
-            prefix = "data:image/png;base64,"
-
         image = Image.open(io.BytesIO(img_data)).convert("RGBA")
         draw = ImageDraw.Draw(image)
 
@@ -897,22 +871,17 @@ def annotate_image_with_som(base64_img: str, ui_elements: list, dpr: float = 1.0
                     logging.warning(f"Error drawing SoM box for ID {target_id}: {e}")
 
         buffered = io.BytesIO()
-        image.save(buffered, format="PNG")
-        return prefix + base64.b64encode(buffered.getvalue()).decode("utf-8")
+        image.convert("RGB").save(buffered, format="JPEG", quality=60)
+        return buffered.getvalue()
     except Exception as e:
         logging.error(f"Failed to apply SoM annotation: {e}")
-        return base64_img
+        return img_data
 
-def annotate_image_with_crosshair(base64_img: str, x: int, y: int) -> str:
+def annotate_image_with_crosshair(img_data: bytes, x: int, y: int) -> bytes:
     """Draws a green crosshair on the raw un-tagged coordinate."""
+    if not img_data:
+        return b""
     try:
-        if base64_img.startswith('data:image'):
-            img_data = base64.b64decode(base64_img.split(',')[1])
-            prefix = base64_img.split(',')[0] + ','
-        else:
-            img_data = base64.b64decode(base64_img)
-            prefix = "data:image/png;base64,"
-
         image = Image.open(io.BytesIO(img_data)).convert("RGBA")
         draw = ImageDraw.Draw(image)
 
@@ -922,11 +891,11 @@ def annotate_image_with_crosshair(base64_img: str, x: int, y: int) -> str:
         draw.line((x, y-r-5, x, y+r+5), fill=(0, 255, 0, 255), width=3)
 
         buffered = io.BytesIO()
-        image.save(buffered, format="PNG")
-        return prefix + base64.b64encode(buffered.getvalue()).decode("utf-8")
+        image.convert("RGB").save(buffered, format="JPEG", quality=60)
+        return buffered.getvalue()
     except Exception as e:
         logging.error(f"Failed to apply crosshair annotation: {e}")
-        return base64_img
+        return img_data
 
 def pre_flight_check(command_text: str) -> dict:
     if not CURRENT_TOKEN:
@@ -1399,7 +1368,13 @@ class AgentStateMachine:
                 self.state = AgentState.TERMINATED
                 return
 
-            self.current_clean_screenshot = state_result.get("screenshot_base64", "")
+            b64_str = state_result.get("screenshot_base64", "")
+            if b64_str.startswith('data:image'):
+                b64_str = b64_str.split(',')[1]
+            try:
+                self.current_clean_screenshot = base64.b64decode(b64_str) if b64_str else b""
+            except Exception:
+                self.current_clean_screenshot = b""
             self.current_ui_elements = state_result.get("ui_elements", [])
             self.current_url = state_result.get("url", "")
             self.current_dpr = state_result.get("dpr", 1.0)
@@ -1416,11 +1391,15 @@ class AgentStateMachine:
             self.current_url = window_name
             self.clipboard_status = clipboard_status
             self.current_dpr = 1.0
-        self.current_annotated_screenshot = annotate_image_with_som(
-            self.current_clean_screenshot,
-            self.current_ui_elements,
-            self.current_dpr
-        )
+        try:
+            self.current_annotated_screenshot = annotate_image_with_som(
+                self.current_clean_screenshot,
+                self.current_ui_elements,
+                self.current_dpr
+            )
+        except Exception as e:
+            logging.error(f"Error annotating image with SoM: {e}")
+            self.current_annotated_screenshot = self.current_clean_screenshot
 
         if self.previous_action:
             logging.info("Attempting Orchestrator-Level Native Verification of previous action...")
@@ -1443,7 +1422,7 @@ class AgentStateMachine:
                 command_text=self.command_text,
                 current_sub_task=current_sub_task,
                 remaining_plan=self.sub_tasks[self.current_sub_task_index:],
-                screenshot_base64=self.current_clean_screenshot,
+                screenshot_base64=base64.b64encode(self.current_clean_screenshot).decode('utf-8') if self.current_clean_screenshot else "",
                 ui_elements=self.current_ui_elements
             )
             if eval_res.get("is_accomplished"):
@@ -1460,19 +1439,56 @@ class AgentStateMachine:
 
     async def state_thinking(self, bridge):
         current_sub_task = self.sub_tasks[self.current_sub_task_index]
+
+        # Trim raw_ui_elements for payload size reduction (Phase 3 Optimization)
+        trimmed_ui_elements = []
+        for el in self.current_ui_elements[:100]:
+            trimmed_el = {
+                "target_id": el.get("target_id", el.get("id")),
+                "type": el.get("type", ""),
+            }
+            if "text" in el:
+                trimmed_el["text"] = str(el["text"])[:50]
+            if "bounds" in el:
+                # keep coarse bounds
+                trimmed_el["bounds"] = el["bounds"]
+            trimmed_ui_elements.append(trimmed_el)
+
+        # Phase 3: Differential Passing (Structural Hashing)
+        # We hash the trimmed structure + URL to detect if visually nothing meaningful changed
+        # We explicitly omit bounding boxes from the hash as they might slightly jitter
+        structure_to_hash = [{"id": el.get("target_id"), "type": el.get("type"), "text": el.get("text")} for el in trimmed_ui_elements]
+        current_state_hash = hashlib.md5(json.dumps({
+            "url": self.current_url,
+            "ui": structure_to_hash
+        }, sort_keys=True).encode('utf-8')).hexdigest()
+
+        # Check if we should omit the image payload
+        omit_image = False
+        mutating_actions_that_require_new_image = {"CLICK", "TYPE", "PRESS", "PRESS_KEY", "PRESS_ENTER", "DRAG_AND_DROP", "SCROLL", "LAUNCH_APP", "EXECUTE_JS", "NAVIGATE", "OPEN_TAB"}
+        last_action_type = str(self.previous_action.get("action", "")).upper() if self.previous_action else ""
+
+        if hasattr(self, 'previous_state_hash') and self.previous_state_hash == current_state_hash:
+            if last_action_type not in mutating_actions_that_require_new_image:
+                logging.info(f"Differential Passing: Structural hash matched ({current_state_hash}) and last action ({last_action_type}) was non-mutating. Omitting image payload.")
+                omit_image = True
+
+        self.previous_state_hash = current_state_hash
+
         payload = {
             "ui_elements": [], # Stripped out to enforce Vision-First SoM reasoning
-            "raw_ui_elements": self.current_ui_elements,
+            "raw_ui_elements": trimmed_ui_elements,
             "command_text": self.command_text,
             "current_sub_task": current_sub_task,
             "history": self.history,
             "iteration": self.iteration,
-            "screenshot_base64": getattr(self, "current_annotated_screenshot", self.current_clean_screenshot),
+            "screenshot_base64": "" if omit_image else (base64.b64encode(getattr(self, "current_annotated_screenshot", self.current_clean_screenshot)).decode('utf-8') if getattr(self, "current_annotated_screenshot", self.current_clean_screenshot) else ""),
             "client_context": self.client_context,
-            "clipboard_status": getattr(self, "clipboard_status", "unknown")
+            "clipboard_status": getattr(self, "clipboard_status", "unknown"),
+            "differential_passing_active": omit_image
         }
 
-        logging.info("Sending state to backend for decision...")
+        logging.info(f"Sending state to backend for decision (Image omitted: {omit_image})...")
         try:
             headers = {"Authorization": f"Bearer {CURRENT_TOKEN}"}
             backend_url = config.GET_COMMAND_ENDPOINT
@@ -1878,7 +1894,8 @@ class AgentStateMachine:
         try:
              safe_ai_response = getattr(self, 'ai_response', {})
              safe_actions = getattr(self, 'actions_to_execute', [])
-             safe_screenshot = getattr(self, 'current_clean_screenshot', "")
+             safe_screenshot_bytes = getattr(self, 'current_clean_screenshot', b"")
+             safe_screenshot = base64.b64encode(safe_screenshot_bytes).decode('utf-8') if safe_screenshot_bytes else ""
              save_flight_record(
                  doc_id=self.doc_id,
                  iteration=self.iteration,
@@ -1953,7 +1970,8 @@ class AgentStateMachine:
                                    f"You failed to execute this step correctly in the previous iteration. "
                                    f"Analyze the visual features and semantic context of Box [{target_id}] "
                                    f"and generate a universal visual rule for the Playbook.")
-                    image_to_send = getattr(self, "current_annotated_screenshot", self.current_clean_screenshot)
+                    image_to_send_bytes = getattr(self, "current_annotated_screenshot", self.current_clean_screenshot)
+                    image_to_send = base64.b64encode(image_to_send_bytes).decode('utf-8') if image_to_send_bytes else ""
                 else:
                     logging.info(f"HITL click at ({css_x}, {css_y}) did not intersect any SoM Box.")
                     prompt_text = (f"The human operator intervened and clicked exactly at coordinates (X: {css_x}, Y: {css_y}). "
@@ -1964,7 +1982,12 @@ class AgentStateMachine:
                     current_dpr = getattr(self, "current_dpr", 1.0)
                     phys_x = int(css_x * current_dpr)
                     phys_y = int(css_y * current_dpr)
-                    image_to_send = annotate_image_with_crosshair(self.current_clean_screenshot, phys_x, phys_y)
+                    try:
+                        image_to_send_bytes = annotate_image_with_crosshair(self.current_clean_screenshot, phys_x, phys_y)
+                        image_to_send = base64.b64encode(image_to_send_bytes).decode('utf-8') if image_to_send_bytes else ""
+                    except Exception as e:
+                         logging.error(f"Error drawing crosshair: {e}")
+                         image_to_send = base64.b64encode(self.current_clean_screenshot).decode('utf-8') if self.current_clean_screenshot else ""
 
                 logging.info("Sending HITL learning package to Synthesizer Agent...")
                 try:

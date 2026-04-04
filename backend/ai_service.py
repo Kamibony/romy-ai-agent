@@ -177,10 +177,17 @@ def evaluate_plan_progress_with_gemini(command_text: str, current_sub_task: str,
                 _, screenshot_base64 = screenshot_base64.split(",", 1)
             img_data = base64.b64decode(screenshot_base64)
             contents.append("Current State Screenshot:")
+
+            mime_type = "image/webp"
+            if img_data.startswith(b'\xff\xd8\xff'):
+                mime_type = "image/jpeg"
+            elif img_data.startswith(b'\x89PNG\r\n\x1a\n'):
+                mime_type = "image/png"
+
             contents.append(
                 types.Part.from_bytes(
                     data=img_data,
-                    mime_type="image/webp"
+                    mime_type=mime_type
                 )
             )
         except Exception as e:
@@ -241,10 +248,17 @@ def _run_critic_verification(sub_task: str, action_taken: dict, before_state: di
                     _, before_screenshot = before_screenshot.split(",", 1)
                 img_data = base64.b64decode(before_screenshot)
                 contents.append("Before State Screenshot:")
+
+                mime_type = "image/webp"
+                if img_data.startswith(b'\xff\xd8\xff'):
+                    mime_type = "image/jpeg"
+                elif img_data.startswith(b'\x89PNG\r\n\x1a\n'):
+                    mime_type = "image/png"
+
                 contents.append(
                     types.Part.from_bytes(
                         data=img_data,
-                        mime_type="image/webp"
+                        mime_type=mime_type
                     )
                 )
             except Exception as e:
@@ -257,10 +271,17 @@ def _run_critic_verification(sub_task: str, action_taken: dict, before_state: di
                     _, after_screenshot = after_screenshot.split(",", 1)
                 img_data = base64.b64decode(after_screenshot)
                 contents.append("After State Screenshot:")
+
+                mime_type = "image/webp"
+                if img_data.startswith(b'\xff\xd8\xff'):
+                    mime_type = "image/jpeg"
+                elif img_data.startswith(b'\x89PNG\r\n\x1a\n'):
+                    mime_type = "image/png"
+
                 contents.append(
                     types.Part.from_bytes(
                         data=img_data,
-                        mime_type="image/webp"
+                        mime_type=mime_type
                     )
                 )
             except Exception as e:
@@ -402,7 +423,7 @@ def synthesize_playbook_rule_with_gemini(domain: str, execution_telemetry: str, 
         print(f"Error synthesizing playbook rule: {e}")
         return None
 
-def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[str] = None, command_text: Optional[str] = None, thread_history: str = "", screenshot_base64: Optional[str] = None, current_sub_task: Optional[str] = None, current_url: Optional[str] = None, client_context: Optional[Dict[str, Any]] = None, clipboard_status: Optional[str] = "unknown") -> Dict[str, Any]:
+def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[str] = None, command_text: Optional[str] = None, thread_history: str = "", screenshot_base64: Optional[str] = None, current_sub_task: Optional[str] = None, current_url: Optional[str] = None, client_context: Optional[Dict[str, Any]] = None, clipboard_status: Optional[str] = "unknown", differential_passing_active: bool = False) -> Dict[str, Any]:
     """
     Uses Gemini 2.5 Flash to process audio/text commands, a visual screenshot, and UI elements, returning an array of one or more actions.
     """
@@ -435,10 +456,18 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                 if "," in screenshot_base64:
                     _, screenshot_base64 = screenshot_base64.split(",", 1)
                 img_data = base64.b64decode(screenshot_base64)
+
+                # Detect mime type from magic bytes
+                mime_type = "image/webp" # default
+                if img_data.startswith(b'\xff\xd8\xff'):
+                    mime_type = "image/jpeg"
+                elif img_data.startswith(b'\x89PNG\r\n\x1a\n'):
+                    mime_type = "image/png"
+
                 contents.append(
                     types.Part.from_bytes(
                         data=img_data,
-                        mime_type="image/webp"
+                        mime_type=mime_type
                     )
                 )
             except Exception as e:
@@ -525,6 +554,9 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                 print(f"Error fetching playbook rules for {current_url}: {e}")
 
         prompt = f"Determine the correct target element from the image and output the JSON array of actions using target_id or [x, y] coordinates."
+
+        if differential_passing_active:
+             prompt += "\n\nNote: The visual state has not changed meaningfully since the last action. The screenshot has been omitted to save bandwidth. Please refer to your previous visual analysis or rely on the text/DOM structure to determine the next step."
 
         if current_sub_task:
             prompt += f"\n\nCurrent Sub-Task to execute: {current_sub_task}"

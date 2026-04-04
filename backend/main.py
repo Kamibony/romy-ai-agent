@@ -15,6 +15,7 @@ from typing import Optional, List, Dict, Any
 
 class AgentCommandRequest(BaseModel):
     ui_elements: List[Dict[str, Any]]
+    raw_ui_elements: Optional[List[Dict[str, Any]]] = None
     audio_base64: Optional[str] = None
     command_text: Optional[str] = None
     session_id: Optional[str] = None
@@ -23,6 +24,7 @@ class AgentCommandRequest(BaseModel):
     current_url: Optional[str] = None
     client_context: Optional[Dict[str, Any]] = None
     clipboard_status: Optional[str] = "unknown"
+    differential_passing_active: Optional[bool] = False
 
 class ClassifyIntentRequest(BaseModel):
     command_text: Optional[str] = None
@@ -245,6 +247,8 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
                     # but if we get a request, maybe the client is re-syncing
                     pass
 
+        differential_passing_active = getattr(request, 'differential_passing_active', False)
+
         action_list = process_with_gemini(
             ui_elements=request.ui_elements,
             audio_b64=request.audio_base64,
@@ -254,7 +258,8 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
             current_sub_task=request.current_sub_task,
             current_url=request.current_url,
             client_context=request.client_context,
-            clipboard_status=request.clipboard_status
+            clipboard_status=request.clipboard_status,
+            differential_passing_active=differential_passing_active
         )
         print(f"Gemini action list: {action_list}")
 
