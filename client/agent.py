@@ -1756,8 +1756,6 @@ class AgentStateMachine:
                              # Spatial Fallback Execution Routing
                              if action_type == "CLICK" and ("x" not in action_to_take or "y" not in action_to_take):
                                  raise ValueError(f"Missing 'target_id' or spatial coordinates (x, y) for {action_type} action.")
-                             if action_type == "TYPE" and ("x" not in action_to_take or "y" not in action_to_take):
-                                 raise ValueError(f"Missing 'target_id' or spatial coordinates (x, y) for {action_type} action.")
 
                      if action_type == "LAUNCH_APP":
                          app_name = action_to_take.get("app_name")
@@ -1786,6 +1784,9 @@ class AgentStateMachine:
                                      current_window = auto.GetForegroundControl()
                                      if current_window and current_window.Name != initial_window_name:
                                          logging.info(f"OS Quiescence Reached: Foreground window changed from '{initial_window_name}' to '{current_window.Name}'.")
+                                         success_msg = f"Action LAUNCH_APP natively verified. Active window is now {current_window.Name}"
+                                         self.history.append(success_msg)
+                                         self.command_text += f"\n[System Note: {success_msg}]"
                                          break
                                  except Exception:
                                      pass
@@ -1811,8 +1812,22 @@ class AgentStateMachine:
                              target_id = str(action_to_take.get("target_id"))
                              el = getattr(self, "os_memory_map", {})[target_id]
                              await desktop_env.type(el["center"]["x"], el["center"]["y"], text, action_to_take.get("submit", False), target_id=target_id)
-                         else:
+                         elif "x" in action_to_take and "y" in action_to_take:
                              await desktop_env.type(int(action_to_take["x"]), int(action_to_take["y"]), text, action_to_take.get("submit", False), target_id=None, dpr=getattr(self, 'current_dpr', 1.0))
+                         else:
+                             logging.info("TYPE action missing target_id and coordinates. Using Active Window Center Fallback.")
+                             active_window = auto.GetForegroundControl()
+                             if not active_window:
+                                 active_window = auto.GetRootControl()
+                             rect = active_window.BoundingRectangle
+                             if rect and rect.width() > 0 and rect.height() > 0:
+                                 center_x = rect.left + rect.width() // 2
+                                 center_y = rect.top + rect.height() // 2
+                                 await desktop_env.type(center_x, center_y, text, action_to_take.get("submit", False), target_id=None, dpr=1.0)
+                             else:
+                                 logging.warning("Active Window Center Fallback failed (no bounding rectangle). Bailing out.")
+                                 bail_out = True
+                                 break
                      elif action_type == "DRAG_AND_DROP":
                          start_x = action_to_take.get("start_x")
                          start_y = action_to_take.get("start_y")
