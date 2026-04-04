@@ -21,10 +21,10 @@ if genai is not None:
         # Configure the Gemini client with a systemic timeout
         # http_options is used to set the timeout on the underlying httpx client
         http_options = genai.types.HttpOptions(
-            timeout=60,
-            client_args={'timeout': 60},
-            async_client_args={'timeout': 60}
-        ) # 60 seconds total timeout
+            timeout=120000,
+            client_args={'timeout': 120},
+            async_client_args={'timeout': 120}
+        ) # 120 seconds total timeout
         gemini_client = genai.Client(
             api_key=os.environ.get("GEMINI_API_KEY"),
             http_options=http_options
