@@ -16,7 +16,20 @@ from memory import save_playbook_rule, get_playbook_rules
 # Initialize clients globally if possible
 gemini_client = None
 
-if genai is not None:
+def get_gemini_client():
+    global gemini_client
+
+    if gemini_client is not None:
+        return gemini_client
+
+    if genai is None:
+        return None
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        print("WARNING: GEMINI_API_KEY environment variable is missing. AI functionality will be severely limited or return mock responses.")
+        return None
+
     try:
         # Configure the Gemini client with a systemic timeout
         # http_options is used to set the timeout on the underlying httpx client
@@ -26,17 +39,23 @@ if genai is not None:
             async_client_args={'timeout': 120}
         ) # 120 seconds total timeout
         gemini_client = genai.Client(
-            api_key=os.environ.get("GEMINI_API_KEY"),
+            api_key=api_key,
             http_options=http_options
         )
+        return gemini_client
     except Exception as e:
         print(f"Failed to initialize Gemini client: {e}")
+        return None
+
+# Attempt to initialize immediately if the key is already present
+get_gemini_client()
 
 def transcribe_audio_with_gemini(audio_b64: str) -> str:
     """
     Transcribes audio to text using Gemini 2.5 Flash.
     """
-    if not audio_b64 or gemini_client is None:
+    client = get_gemini_client()
+    if not audio_b64 or client is None:
         return ""
 
     try:
@@ -54,7 +73,7 @@ def transcribe_audio_with_gemini(audio_b64: str) -> str:
             "Transcribe this audio. Return ONLY the transcribed text without any extra explanation or formatting."
         ]
 
-        response = gemini_client.models.generate_content(
+        response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=contents,
             config=types.GenerateContentConfig(
@@ -71,7 +90,8 @@ def pre_flight_check_with_gemini(command_text: str) -> dict:
     Checks if a given command has missing necessary information (like dates, cities).
     Returns {"status": "ok"} if all good, or {"status": "ASK_HUMAN", "reason": "..."} if missing info.
     """
-    if not command_text or gemini_client is None:
+    client = get_gemini_client()
+    if not command_text or client is None:
         return {"status": "ok"}
 
     try:
@@ -86,7 +106,7 @@ def pre_flight_check_with_gemini(command_text: str) -> dict:
             "If the task seems fully specified or if it's a general task that doesn't need specific structured data, return strictly {\"status\": \"ok\"}."
         )
 
-        response = gemini_client.models.generate_content(
+        response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=[command_text],
             config=types.GenerateContentConfig(
@@ -114,7 +134,8 @@ def supervisor_plan_with_gemini(command_text: str) -> list[str]:
     Breaks down a given task into sequential sub-tasks.
     Returns a list of strings representing the sub-tasks.
     """
-    if not command_text or gemini_client is None:
+    client = get_gemini_client()
+    if not command_text or client is None:
         return []
 
     try:
@@ -128,7 +149,7 @@ def supervisor_plan_with_gemini(command_text: str) -> list[str]:
             "Example output: [\"[WEB] Navigate to pelikan.cz\", \"[WEB] Enter origin city\", \"[OS] Open Calculator\", \"[WEB] Select departure date\"]"
         )
 
-        response = gemini_client.models.generate_content(
+        response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=[command_text],
             config=types.GenerateContentConfig(
@@ -155,7 +176,8 @@ def evaluate_plan_progress_with_gemini(command_text: str, current_sub_task: str,
     """
     Evaluates if the current sub-task is already accomplished based on the current UI state.
     """
-    if gemini_client is None:
+    client = get_gemini_client()
+    if client is None:
         return {"is_accomplished": False, "reason": "Gemini client not initialized"}
 
     system_instruction = (
@@ -200,7 +222,7 @@ def evaluate_plan_progress_with_gemini(command_text: str, current_sub_task: str,
     contents.append(prompt)
 
     try:
-        response = gemini_client.models.generate_content(
+        response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=contents,
             config=types.GenerateContentConfig(
@@ -223,7 +245,8 @@ def evaluate_plan_progress_with_gemini(command_text: str, current_sub_task: str,
         return {"is_accomplished": False, "reason": str(e)}
 
 def _run_critic_verification(sub_task: str, action_taken: dict, before_state: dict, after_state: dict, include_images: bool) -> dict:
-    if gemini_client is None:
+    client = get_gemini_client()
+    if client is None:
         return {"success": False, "reason": "Gemini client not initialized"}
 
     system_instruction = (
@@ -293,7 +316,7 @@ def _run_critic_verification(sub_task: str, action_taken: dict, before_state: di
 
     contents.append(prompt)
 
-    response = gemini_client.models.generate_content(
+    response = client.models.generate_content(
         model='gemini-2.5-flash',
         contents=contents,
         config=types.GenerateContentConfig(
@@ -344,7 +367,8 @@ def classify_intent_with_gemini(command_text: str) -> str:
     """
     Classifies the user intent strictly as 'WEB' or 'OS' using Gemini 2.5 Flash.
     """
-    if not command_text or gemini_client is None:
+    client = get_gemini_client()
+    if not command_text or client is None:
         return "OS"
 
     try:
@@ -356,7 +380,7 @@ def classify_intent_with_gemini(command_text: str) -> str:
             "output exactly the word 'OS'. Do not include any other text."
         )
 
-        response = gemini_client.models.generate_content(
+        response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=[command_text],
             config=types.GenerateContentConfig(
@@ -378,7 +402,8 @@ def compile_sop_with_gemini(domain: str, raw_sop: str, client_id: str = None, ta
     SOP Compiler Pipeline: Takes raw human SOP text and translates it into an agent-friendly
     playbook rule, checking for existing rules to consolidate.
     """
-    if not raw_sop or gemini_client is None:
+    client = get_gemini_client()
+    if not raw_sop or client is None:
         return None
 
     try:
@@ -411,7 +436,7 @@ def compile_sop_with_gemini(domain: str, raw_sop: str, client_id: str = None, ta
         if existing_rules:
             prompt += f"\n\n[EXISTING RULES]:\n" + "\n".join(existing_rules)
 
-        response = gemini_client.models.generate_content(
+        response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=[prompt],
             config=types.GenerateContentConfig(
@@ -435,7 +460,8 @@ def synthesize_playbook_rule_with_gemini(domain: str, execution_telemetry: str, 
     Implements Memory Lifecycle Management: if old rules exist for the subtask, updates/replaces them.
     Saves the rule to ChromaDB if found.
     """
-    if not execution_telemetry or gemini_client is None:
+    client = get_gemini_client()
+    if not execution_telemetry or client is None:
         return None
 
     try:
@@ -465,7 +491,7 @@ def synthesize_playbook_rule_with_gemini(domain: str, execution_telemetry: str, 
         if existing_rules:
             prompt += f"\n\n[EXISTING STALE RULES TO REPLACE]:\n" + "\n".join(existing_rules)
 
-        response = gemini_client.models.generate_content(
+        response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=[prompt],
             config=types.GenerateContentConfig(
@@ -490,9 +516,10 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
     if not audio_b64 and not command_text:
         return {"actions": [{"action": "ASK_HUMAN", "reason": "EMPTY_AUDIO"}], "memory_rules": []}
 
-    if gemini_client is None:
+    client = get_gemini_client()
+    if client is None:
         print("Gemini client not initialized.")
-        return {"actions": [{"action": "API_ERROR", "error": "Gemini client not initialized."}], "memory_rules": []}
+        return {"actions": [{"action": "API_ERROR", "error": "Gemini client not initialized (missing API Key)."}], "memory_rules": []}
 
     try:
         from firebase_admin import firestore
@@ -505,8 +532,6 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                 global_prompt = settings_doc.to_dict().get("prompt", "")
         except Exception as e:
             print(f"Error reading global prompt from Firestore: {e}")
-
-        client = gemini_client
 
         contents = []
 
