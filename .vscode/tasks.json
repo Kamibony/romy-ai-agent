@@ -116,7 +116,7 @@
       "args": [
         "run",
         "-d",
-        "web",
+        "chrome",
         "--web-port",
         "3000"
       ],
