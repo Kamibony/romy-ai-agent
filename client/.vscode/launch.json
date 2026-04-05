@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "E2E: Client",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true,
+      "preLaunchTask": "Root: Setup Dev Environment"
+    }
+  ]
+}

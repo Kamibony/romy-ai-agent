@@ -1,17 +1,19 @@
 {
-    "version": "0.2.0",
-    "configurations": [
-        {
-            "name": "dashboard (web port 3000)",
-            "request": "launch",
-            "type": "dart",
-            "program": "lib/main.dart",
-            "args": [
-                "-d",
-                "chrome",
-                "--web-port",
-                "3000"
-            ]
-        }
-    ]
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "E2E: Dashboard",
+      "request": "launch",
+      "type": "dart",
+      "program": "${workspaceFolder}/lib/main.dart",
+      "cwd": "${workspaceFolder}",
+      "args": [
+        "-d",
+        "web",
+        "--web-port",
+        "3000"
+      ],
+      "preLaunchTask": "Root: Setup Dev Environment"
+    }
+  ]
 }
