@@ -1,10 +1,30 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import 'ui/mission_control/mission_control_screen.dart';
 import 'ui/sop_studio/sop_studio_screen.dart';
 import 'ui/memory_manager/memory_manager_screen.dart';
 
+// Provides the initialization state of Firebase using a FutureProvider
+final firebaseInitProvider = FutureProvider<bool>((ref) async {
+  try {
+    await Firebase.initializeApp();
+    return true;
+  } catch (e) {
+    debugPrint('Firebase initialization warning: $e');
+    return false;
+  }
+});
+
 void main() {
-  runApp(const DashboardApp());
+  WidgetsFlutterBinding.ensureInitialized();
+
+  runApp(
+    const ProviderScope(
+      child: DashboardApp(),
+    ),
+  );
 }
 
 class DashboardApp extends StatelessWidget {
