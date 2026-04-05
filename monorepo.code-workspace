@@ -1,0 +1,35 @@
+{
+  "folders": [
+    {
+      "path": "backend",
+      "name": "Backend"
+    },
+    {
+      "path": "client",
+      "name": "Client"
+    },
+    {
+      "path": "dashboard",
+      "name": "Dashboard"
+    },
+    {
+      "path": ".",
+      "name": "Root"
+    }
+  ],
+  "settings": {},
+  "launch": {
+    "version": "0.2.0",
+    "compounds": [
+      {
+        "name": "Start Monorepo E2E",
+        "configurations": [
+          "E2E: Backend",
+          "E2E: Client",
+          "E2E: Dashboard"
+        ],
+        "stopAll": true
+      }
+    ]
+  }
+}
