@@ -1,0 +1,150 @@
+import os
+import sys
+import subprocess
+import threading
+import time
+import signal
+import platform
+import argparse
+from pathlib import Path
+
+# Paths
+ROOT_DIR = Path(__file__).resolve().parent
+BACKEND_DIR = ROOT_DIR / "backend"
+CLIENT_DIR = ROOT_DIR / "client"
+DASHBOARD_DIR = ROOT_DIR / "dashboard"
+
+BACKEND_VENV = BACKEND_DIR / "venv"
+CLIENT_VENV = CLIENT_DIR / "venv"
+
+# Commands
+def get_python_cmd(venv_dir):
+    if platform.system() == "Windows":
+        return str(venv_dir / "Scripts" / "python.exe")
+    return str(venv_dir / "bin" / "python")
+
+def get_pip_cmd(venv_dir):
+    if platform.system() == "Windows":
+        return str(venv_dir / "Scripts" / "pip.exe")
+    return str(venv_dir / "bin" / "pip")
+
+def setup_venv(venv_dir, req_file):
+    if not venv_dir.exists():
+        print(f"[SETUP] Creating virtual environment at {venv_dir}...")
+        subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
+
+    pip_cmd = get_pip_cmd(venv_dir)
+    print(f"[SETUP] Installing requirements from {req_file}...")
+    subprocess.run([pip_cmd, "install", "-r", str(req_file)], check=True)
+
+def setup_all():
+    print("=== Starting Setup ===")
+    setup_venv(BACKEND_VENV, BACKEND_DIR / "requirements.txt")
+    setup_venv(CLIENT_VENV, CLIENT_DIR / "requirements.txt")
+    print("=== Setup Complete ===")
+
+processes = []
+
+def run_process(name, cmd, cwd, color_code):
+    print(f"\033[{color_code}m[{name}] Starting: {' '.join(cmd)}\033[0m")
+
+    # Use shell=True on Windows for flutter if it's a batch file, but generally subprocess list is fine
+    # For flutter, if it's Windows, we might need 'flutter.bat'
+    is_windows = platform.system() == "Windows"
+    if is_windows and cmd[0] == "flutter":
+        cmd[0] = "flutter.bat"
+
+    try:
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(cwd),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+        processes.append((name, process))
+
+        for line in iter(process.stdout.readline, ''):
+            if line:
+                print(f"\033[{color_code}m[{name}]\033[0m {line.strip()}")
+
+        process.stdout.close()
+        process.wait()
+    except Exception as e:
+        print(f"\033[{color_code}m[{name}] Error: {e}\033[0m")
+
+def terminate_processes(signum, frame):
+    print("\n[SYSTEM] Shutting down all processes gracefully...")
+    for name, p in processes:
+        if p.poll() is None:
+            print(f"[SYSTEM] Terminating {name} (PID: {p.pid})...")
+            # Try gentle terminate first
+            p.terminate()
+
+    time.sleep(1)
+
+    # Force kill if still running
+    for name, p in processes:
+        if p.poll() is None:
+            print(f"[SYSTEM] Killing {name} (PID: {p.pid})...")
+            p.kill()
+
+    print("[SYSTEM] Shutdown complete.")
+    sys.exit(0)
+
+def main():
+    parser = argparse.ArgumentParser(description="Monorepo E2E Local Dev Environment Runner")
+    parser.add_argument("--setup-only", action="store_true", help="Only setup virtual environments and exit")
+    args = parser.parse_args()
+
+    # Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, terminate_processes)
+    signal.signal(signal.SIGTERM, terminate_processes)
+
+    # 1. Setup Phase
+    setup_all()
+
+    if args.setup_only:
+        print("Setup complete. Exiting.")
+        return
+
+    # 2. Run Phase
+    print("\n=== Starting Monorepo E2E Environment ===")
+    print("Press Ctrl+C to stop all services\n")
+
+    backend_python = get_python_cmd(BACKEND_VENV)
+    client_python = get_python_cmd(CLIENT_VENV)
+
+    # Commands
+    # Backend on port 8000
+    backend_cmd = [backend_python, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000", "--reload"]
+
+    # Client agent (Client sets up its own server internally)
+    client_cmd = [client_python, "main.py"]
+
+    # Flutter Dashboard on port 3000
+    dashboard_cmd = ["flutter", "run", "-d", "web", "--web-port", "3000"]
+
+    # Colors: 36=Cyan, 32=Green, 35=Magenta
+    threads = [
+        threading.Thread(target=run_process, args=("BACKEND", backend_cmd, BACKEND_DIR, "36")),
+        threading.Thread(target=run_process, args=("CLIENT", client_cmd, CLIENT_DIR, "32")),
+        threading.Thread(target=run_process, args=("DASHBOARD", dashboard_cmd, DASHBOARD_DIR, "35"))
+    ]
+
+    for t in threads:
+        t.daemon = True
+        t.start()
+        time.sleep(1) # Slight stagger to avoid console output clashing
+
+    try:
+        # Keep main thread alive
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass # Caught by signal handler
+
+if __name__ == "__main__":
+    main()

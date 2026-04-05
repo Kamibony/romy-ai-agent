@@ -1,0 +1,129 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Setup Dev Environment",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "dev_runner.py",
+        "--setup-only"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run Backend Server",
+      "type": "shell",
+      "command": "${workspaceFolder}/backend/venv/Scripts/python",
+      "args": [
+        "-m",
+        "uvicorn",
+        "main:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000",
+        "--reload"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "isBackground": true,
+      "presentation": {
+        "reveal": "always",
+        "panel": "new",
+        "group": "e2e"
+      },
+      "problemMatcher": {
+        "pattern": [
+          {
+            "regexp": ".",
+            "file": 1,
+            "location": 2,
+            "message": 3
+          }
+        ],
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*",
+          "endsPattern": "Application startup complete"
+        }
+      },
+      "dependsOn": "Setup Dev Environment"
+    },
+    {
+      "label": "Run Local Agent Client",
+      "type": "shell",
+      "command": "${workspaceFolder}/client/venv/Scripts/python",
+      "args": [
+        "main.py"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/client"
+      },
+      "isBackground": true,
+      "presentation": {
+        "reveal": "always",
+        "panel": "new",
+        "group": "e2e"
+      },
+      "problemMatcher": {
+        "pattern": [
+          {
+            "regexp": ".",
+            "file": 1,
+            "location": 2,
+            "message": 3
+          }
+        ],
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*",
+          "endsPattern": ".*Starting B2B AI Agent MVP Client.*"
+        }
+      },
+      "dependsOn": "Setup Dev Environment"
+    },
+    {
+      "label": "Run Dashboard",
+      "type": "shell",
+      "command": "flutter",
+      "args": [
+        "run",
+        "-d",
+        "web",
+        "--web-port",
+        "3000"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/dashboard"
+      },
+      "isBackground": true,
+      "presentation": {
+        "reveal": "always",
+        "panel": "new",
+        "group": "e2e"
+      },
+      "problemMatcher": {
+        "pattern": [
+          {
+            "regexp": ".",
+            "file": 1,
+            "location": 2,
+            "message": 3
+          }
+        ],
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*",
+          "endsPattern": ".*Application finished.*"
+        }
+      },
+      "dependsOn": "Setup Dev Environment"
+    }
+  ]
+}
