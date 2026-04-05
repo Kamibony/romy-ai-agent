@@ -17,7 +17,9 @@
       "name": "Root"
     }
   ],
-  "settings": {},
+  "settings": {
+    "python.defaultInterpreterPath": "${workspaceFolder}/venv"
+  },
   "launch": {
     "version": "0.2.0",
     "compounds": [
