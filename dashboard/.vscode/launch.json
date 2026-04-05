@@ -9,7 +9,7 @@
       "cwd": "${workspaceFolder}",
       "args": [
         "-d",
-        "web",
+        "chrome",
         "--web-port",
         "3000"
       ],
