@@ -611,6 +611,32 @@ class DesktopEnvironment:
         self.task_queue.put((func, args, kwargs, sync_future))
         return future
 
+    async def check_occlusion(self) -> dict:
+        return await self._submit_task(self._sync_check_occlusion)
+
+    def _sync_check_occlusion(self) -> dict:
+        try:
+            active_window = auto.GetForegroundControl()
+            if not active_window:
+                return {"occluded": False}
+            name = active_window.Name
+            class_name = active_window.ClassName
+
+            # Detect native OS dialogs or popups that block the main browser window
+            is_dialog = False
+            # #32770 is the standard Win32 dialog box class (File Open/Save, Print, Alerts)
+            if class_name == '#32770':
+                is_dialog = True
+            # Chrome native popups (Print, Open, Save) sometimes appear as Chrome_WidgetWin_1
+            elif class_name == 'Chrome_WidgetWin_1' and name in ['Open', 'Save As', 'Print']:
+                is_dialog = True
+
+            if is_dialog:
+                return {"occluded": True, "name": name, "class_name": class_name}
+        except Exception as e:
+            logging.debug(f"Error checking occlusion: {e}")
+        return {"occluded": False}
+
     async def scan_ui_elements(self) -> Tuple[list[Dict[str, Any]], Dict[str, Dict[str, int]], str, str]:
         return await self._submit_task(self._sync_scan)
 
@@ -1333,6 +1359,15 @@ class AgentStateMachine:
                 })
             except Exception as e:
                 logging.error(f"Failed to update telemetry for retry: {e}")
+
+        # Cross-Boundary Handoff: Detect if the Web environment is occluded by a native OS window
+        if self.intent == "WEB":
+            occlusion_status = await desktop_env.check_occlusion()
+            if occlusion_status.get("occluded"):
+                window_name = occlusion_status.get("name", "Unknown Window")
+                logging.warning(f"Cross-Boundary Handoff Triggered: Web intent occluded by native OS window '{window_name}'. Forcing execution domain to OS.")
+                self.intent = "OS"
+                self.command_text += f"\n[System Note: A native OS window or dialog ('{window_name}') has appeared and is blocking the browser. You MUST resolve this native window before returning to the web task.]"
 
         if self.intent == "WEB":
             logging.info("Requesting GET_STATE from bridge...")
