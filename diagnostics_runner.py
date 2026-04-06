@@ -32,14 +32,14 @@ def check_local_api_running():
 def get_chaos_scenarios():
     return [
         {
-            "name": "Chaos: Dynamic Web Resilience (Aggressive Overlays & JS)",
-            "command_text": "Navigate to www.alza.cz. Reject or accept all pop-ups (cookies, discounts, notifications). Find the cheapest notebook and add it to the cart. Then go to the cart and tell me the total price.",
+            "name": "Scenario A (Web-Only Chaos): Heavy SPA Navigation",
+            "command_text": "Navigate to www.alza.cz. Explicitly trigger the cookie popup and reject or accept it. Find the cheapest notebook, wait for the page to hydrate, and add it to the cart. Go to the cart and tell me the total price.",
             "client_context": {
                 "client_id": "chaos_web_resilience",
                 "rules": [
+                    "Wait for hydration delays when loading dynamic content.",
                     "Dismiss any GDPR or discount modals immediately before proceeding.",
                     "Search for 'notebook'.",
-                    "Sort by cheapest if possible.",
                     "Add the first item to the cart.",
                     "Navigate to the cart.",
                     "Read the total price."
@@ -47,30 +47,42 @@ def get_chaos_scenarios():
             }
         },
         {
-            "name": "Chaos: Spatial OS Interaction (Continuous Drag/Draw)",
-            "command_text": "Open the Paint application (MS Paint) in Windows. Draw a square or circle in the middle of the canvas using the mouse. Then open the Notepad application and write 'Drawing completed' into it.",
+            "name": "Scenario B (Native Windows OS): Notepad Manipulation",
+            "command_text": "Open the Notepad application in Windows. Type the string 'Diagnostic Test B Successful' into the empty document. Then, use the file menu to save the file as 'diagnostic_b.txt' in the Documents folder.",
             "client_context": {
-                "client_id": "chaos_os_spatial",
+                "client_id": "chaos_os_notepad",
                 "rules": [
-                    "Open MS Paint.",
-                    "Click and drag on the canvas to draw something.",
                     "Open Notepad.",
-                    "Type 'Drawing completed'."
+                    "Type the required string exactly.",
+                    "Save the file using the native OS Save dialog."
                 ]
             }
         },
         {
-            "name": "Chaos: Rapid Context Ping-Pong (Web -> OS -> Web)",
-            "command_text": "Navigate to google.com/finance and find the current price of Apple stock (AAPL). Copy this value. Open the Calculator application in Windows and multiply this value by 10. Copy the result. Go back to the browser to google.com, paste the result into the search bar, and hit search.",
+            "name": "Scenario C (The Cross-Boundary Handoff): Browser Download to OS Explorer",
+            "command_text": "Navigate to https://filesamples.com/formats/txt in the browser and download the first sample TXT file. Once downloaded, open Windows Explorer, navigate to the Downloads folder, find the downloaded file, and rename it to 'cross_boundary_success.txt'.",
             "client_context": {
-                "client_id": "chaos_ping_pong",
+                "client_id": "chaos_cross_boundary",
                 "rules": [
-                    "Extract AAPL stock price from Google Finance.",
-                    "Open Windows Calculator.",
-                    "Multiply the price by 10.",
-                    "Copy the calculated result.",
-                    "Navigate to Google.com in the browser.",
-                    "Paste the result and search."
+                    "Download the sample text file using the browser.",
+                    "Wait for the download to complete.",
+                    "Open Windows Explorer.",
+                    "Navigate to the Downloads directory.",
+                    "Rename the downloaded file."
+                ]
+            }
+        },
+        {
+            "name": "Scenario D (The Engineer's Wildcard): Native File Upload Dialog Deadlock",
+            "command_text": "Navigate to https://the-internet.herokuapp.com/upload in the browser. Click the 'Choose File' button to trigger the native Windows File Upload dialog. The agent must seamlessly switch from Web to OS intent, interact with the native file dialog to input a dummy path (e.g., 'C:\\Windows\\win.ini'), confirm the dialog, and then click the 'Upload' button on the webpage.",
+            "client_context": {
+                "client_id": "chaos_wildcard_upload",
+                "rules": [
+                    "Navigate to the upload test page.",
+                    "Click the web button to open the OS file dialog.",
+                    "Switch to OS context to handle the file dialog.",
+                    "Type a valid path and submit the dialog.",
+                    "Switch back to Web context to complete the upload."
                 ]
             }
         }
