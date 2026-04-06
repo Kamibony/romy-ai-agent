@@ -26,7 +26,23 @@ document.addEventListener('click', (e) => {
 
     try {
         const dpr = window.devicePixelRatio || 1;
-        console.log("Ghost Click Intercepted at", e.clientX, e.clientY);
+
+        let xpath = "Unknown element";
+        try {
+            if (e.target) {
+                let text = e.target.innerText || e.target.value || e.target.getAttribute('aria-label') || "";
+                if (text && text.length > 50) text = text.substring(0, 50) + "...";
+                let tag = e.target.tagName ? e.target.tagName.toLowerCase() : "";
+                if (tag) {
+                     xpath = tag + (text ? ` with text "${text.trim()}"` : "");
+                     if (e.target.id) xpath += ` (id: #${e.target.id})`;
+                }
+            }
+        } catch (xpathErr) {
+            console.error("Error getting simple xpath:", xpathErr);
+        }
+
+        console.log("Ghost Click Intercepted at", e.clientX, e.clientY, "Element:", xpath);
         // Send to background script which passes it to orchestrator
         chrome.runtime.sendMessage({
             type: window.MESSAGE_TYPES.HUMAN_CLICK_INTERCEPTED,
@@ -34,6 +50,7 @@ document.addEventListener('click', (e) => {
                 type: "CLICK",
                 x: e.clientX,
                 y: e.clientY,
+                xpath: xpath,
                 dpr: dpr
             }
         }).catch(err => {
