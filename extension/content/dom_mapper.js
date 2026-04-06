@@ -63,12 +63,36 @@ window.RomyDomMapper = {
             return nodes;
         }
 
+        function isSemanticId(id) {
+            if (!id) return false;
+            // E.g. avoid things like 'svelte-1234abcd', 'css-k29d1', 'mui-p-123992', or pure UUIDs
+            if (id.length > 20) return false; // Too long, likely auto-generated
+            if (/\d{4,}/.test(id)) return false; // Contains 4+ digits
+            if (/[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}/i.test(id)) return false; // UUID
+            return true;
+        }
+
         function getXPath(element) {
             if (!element) return '';
             const id = element.getAttribute ? element.getAttribute('id') : null;
-            if (id) {
+            if (id && isSemanticId(id)) {
                 return 'id("' + id + '")';
             }
+
+            // Prioritize semantic attributes
+            if (element.hasAttribute('aria-label')) {
+                return `//${element.tagName.toLowerCase()}[@aria-label="${element.getAttribute('aria-label')}"]`;
+            }
+            if (element.hasAttribute('data-testid')) {
+                return `//${element.tagName.toLowerCase()}[@data-testid="${element.getAttribute('data-testid')}"]`;
+            }
+            if (element.hasAttribute('role')) {
+                const text = element.innerText || element.value || '';
+                if (text && text.length < 50) {
+                     return `//${element.tagName.toLowerCase()}[@role="${element.getAttribute('role')}" and contains(text(), "${text.trim()}")]`;
+                }
+            }
+
             if (element === document.body) {
                 return element.tagName.toLowerCase();
             }
@@ -125,11 +149,32 @@ window.RomyDomMapper = {
             return path.join(' > ');
         }
 
+        function isSemanticClass(cls) {
+            if (!cls) return false;
+            // Ignore tailwind / CSS-in-JS hashes
+            if (/\d{3,}/.test(cls)) return false;
+            if (/[a-zA-Z0-9]{8,}/.test(cls) && !/^[a-zA-Z]+$/.test(cls)) return false; // Long alphanumeric usually hash
+            if (cls.includes(':') || cls.includes('[')) return false; // Tailwind arbitrary
+            return true;
+        }
+
         function getCssSelector(el) {
             if (!el) return '';
             if (el.tagName.toLowerCase() == 'html') return 'HTML';
-            let str = el.tagName;
-            str += (el.id != '') ? '#' + el.id : '';
+
+            // Prioritize semantic attributes for CSS selector too
+            if (el.hasAttribute('data-testid')) {
+                return `${el.tagName.toLowerCase()}[data-testid="${el.getAttribute('data-testid')}"]`;
+            }
+            if (el.hasAttribute('aria-label')) {
+                return `${el.tagName.toLowerCase()}[aria-label="${el.getAttribute('aria-label')}"]`;
+            }
+
+            let str = el.tagName.toLowerCase();
+            if (el.id && isSemanticId(el.id)) {
+                str += '#' + el.id;
+            }
+
             if (el.className) {
                 let classes = '';
                 if (typeof el.className === 'string') {
@@ -140,8 +185,7 @@ window.RomyDomMapper = {
                 if (classes) {
                     let classesArr = classes.split(/\s+/).filter(Boolean);
                     for (let i = 0; i < classesArr.length; i++) {
-                        // avoid dynamically generated classes if possible
-                        if (!classesArr[i].match(/^[a-zA-Z0-9-_]+$/)) continue;
+                        if (!isSemanticClass(classesArr[i])) continue;
                         str += '.' + classesArr[i];
                     }
                 }
