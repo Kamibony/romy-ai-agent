@@ -6,7 +6,7 @@ from typing import Optional, List, Dict, Any
 from auth import verify_firebase_token
 from db import check_user_license, get_task_session, update_task_session, create_task_session
 from ai_service import process_with_gemini, transcribe_audio_with_gemini, classify_intent_with_gemini, pre_flight_check_with_gemini, supervisor_plan_with_gemini, critic_verify_with_gemini, synthesize_playbook_rule_with_gemini, compile_sop_with_gemini
-from memory import get_playbook_rules, list_playbook_rules_from_firestore, delete_playbook_rule
+from memory import get_playbook_rules, list_playbook_rules_from_firestore, delete_playbook_rule, save_playbook_rule
 from firebase_admin import firestore
 
 app = FastAPI(title="ROMY AI Agent Backend")
@@ -60,6 +60,12 @@ class InjectSOPRequest(BaseModel):
     raw_sop: str
     client_id: Optional[str] = None
     target_sub_task: Optional[str] = None
+
+class SOPSaveRequest(BaseModel):
+    domain: str
+    goal: str
+    recorded_steps: List[Dict[str, Any]]
+    client_id: Optional[str] = None
 
 # Restricted CORS policy for production security
 origins = [
@@ -207,6 +213,75 @@ def inject_sop(request: InjectSOPRequest, uid: str = Depends(verify_firebase_tok
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to compile SOP.",
+        )
+
+@app.post("/api/v1/memory/sops")
+def save_sop(request: SOPSaveRequest, uid: str = Depends(verify_firebase_token)):
+    """
+    Endpoint for SOP Studio to save a recorded process.
+    The raw DOM steps are vectorized and saved via dual-write.
+    """
+    if not check_user_license(uid):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User license is not active.",
+        )
+
+    # Convert recorded steps to a format that can be vectorized
+    raw_sop = f"Goal: {request.goal}\nSteps:\n" + str(request.recorded_steps)
+
+    # Synthesize the rule
+    rule = compile_sop_with_gemini(request.domain, raw_sop, client_id=request.client_id, target_sub_task=request.goal)
+
+    if rule:
+        save_playbook_rule(
+            domain=request.domain,
+            rule=rule,
+            client_id=request.client_id,
+            goal=request.goal,
+            source="sop_studio"
+        )
+        return {"status": "ok", "rule": rule}
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to compile and save SOP.",
+        )
+
+@app.get("/api/v1/memory/sops")
+def get_sops(client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token)):
+    """
+    Endpoint for Memory Manager to fetch all recorded SOPs.
+    Retrieves rules directly from Firestore.
+    """
+    if not check_user_license(uid):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User license is not active.",
+        )
+
+    rules = list_playbook_rules_from_firestore(client_id=client_id)
+    return {"status": "ok", "sops": rules}
+
+@app.delete("/api/v1/memory/sops/{doc_id}")
+def delete_sop(doc_id: str, client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token)):
+    """
+    Endpoint for Memory Manager to delete a saved SOP.
+    Deletes the rule from both ChromaDB and Firestore.
+    """
+    if not check_user_license(uid):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User license is not active.",
+        )
+
+    success = delete_playbook_rule(doc_id, client_id=client_id)
+    if success:
+        return {"status": "ok"}
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete SOP.",
         )
 
 @app.get("/api/v1/memory/rules")
