@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../providers/agent_provider.dart';
+import '../../providers/api_client_provider.dart';
 
 class SopStudioScreen extends ConsumerStatefulWidget {
   const SopStudioScreen({super.key});
@@ -36,22 +35,16 @@ class _SopStudioScreenState extends ConsumerState<SopStudioScreen> {
       _isSubmitting = true;
     });
 
-    final baseUrl = ref.read(telemetryUrlProvider);
-    final url = Uri.parse('$baseUrl/api/v1/memory/inject_sop');
+    final apiClient = ref.read(apiClientProvider);
 
     try {
-      final response = await http.post(
-        url,
-        headers: {
-          'Content-Type': 'application/json',
-          // Usually a Firebase token would be required here per backend/main.py.
-          // For MVP and given we are using a local dashboard, we might bypass or need a dummy token if auth is disabled locally.
-          'Authorization': 'Bearer local-dev-token',
-        },
+      // The backend /api/v1/memory/sops endpoint expects a SOPSaveRequest
+      final response = await apiClient.post(
+        '/api/v1/memory/sops',
         body: json.encode({
+          'domain': 'default_domain',
           'goal': _goalController.text.trim(),
-          'rules': _rulesController.text.trim().split('\n').where((s) => s.isNotEmpty).toList(),
-          // B2B clients might use a client_id
+          'recorded_steps': [{'step': _rulesController.text.trim()}], // Treat the manual text as a single recorded step for now
           'client_id': 'default'
         }),
       );
@@ -60,7 +53,7 @@ class _SopStudioScreenState extends ConsumerState<SopStudioScreen> {
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('SOP successfully injected into Agent Memory.'), backgroundColor: Colors.green),
+          const SnackBar(content: Text('SOP successfully saved into Agent Memory.'), backgroundColor: Colors.green),
         );
         _goalController.clear();
         _rulesController.clear();

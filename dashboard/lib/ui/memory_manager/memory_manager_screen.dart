@@ -1,15 +1,27 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'dart:convert';
 
-import '../../main.dart'; // import provider
+import '../../providers/api_client_provider.dart';
+
+final memoryRulesProvider = FutureProvider.autoDispose<List<dynamic>>((ref) async {
+  final apiClient = ref.watch(apiClientProvider);
+  final response = await apiClient.get('/api/v1/memory/sops?client_id=default');
+
+  if (response.statusCode == 200) {
+    final jsonResponse = json.decode(response.body);
+    return jsonResponse['sops'] as List<dynamic>;
+  } else {
+    throw Exception('Failed to load memory rules');
+  }
+});
 
 class MemoryManagerScreen extends ConsumerWidget {
   const MemoryManagerScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final firebaseInitState = ref.watch(firebaseInitProvider);
+    final rulesAsyncValue = ref.watch(memoryRulesProvider);
 
     return Padding(
       padding: const EdgeInsets.all(24.0),
@@ -27,41 +39,21 @@ class MemoryManagerScreen extends ConsumerWidget {
           ),
           const SizedBox(height: 24),
           Expanded(
-            child: firebaseInitState.when(
+            child: rulesAsyncValue.when(
               loading: () => const Center(child: CircularProgressIndicator()),
-              error: (error, stack) => Center(child: Text('Error initializing Firebase: $error')),
-              data: (isInitialized) {
-                if (!isInitialized) {
-                  return const Center(
-                    child: Text('Firebase is not initialized. Cannot load memory rules.'),
-                  );
-                }
-
-                final CollectionReference memoryRules = FirebaseFirestore.instance.collection('memory_rules');
-                return StreamBuilder<QuerySnapshot>(
-                  stream: memoryRules.snapshots(),
-                  builder: (context, snapshot) {
-                    if (snapshot.hasError) {
-                      return const Center(child: Text('Error loading memory rules. Make sure Firebase is properly configured for the current tenant.'));
-                    }
-
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                final docs = snapshot.data?.docs ?? [];
-
-                if (docs.isEmpty) {
+              error: (error, stack) => Center(child: Text('Error loading memory rules: $error')),
+              data: (rules) {
+                if (rules.isEmpty) {
                   return const Center(child: Text('No memory rules found. Use the SOP Studio to inject new behaviors.', style: TextStyle(color: Colors.grey)));
                 }
 
                 return ListView.builder(
-                  itemCount: docs.length,
+                  itemCount: rules.length,
                   itemBuilder: (context, index) {
-                    final data = docs[index].data() as Map<String, dynamic>;
-                    final docId = docs[index].id;
+                    final data = rules[index] as Map<String, dynamic>;
+                    final docId = data['id'] ?? data['doc_id'] ?? 'unknown_id';
                     final goal = data['goal'] ?? 'Unknown Goal';
-                    final rules = List<String>.from(data['rules'] ?? []);
+                    final ruleItems = List<String>.from(data['rules'] ?? []);
                     final isActive = data['active'] ?? true;
 
                     return Card(
@@ -79,12 +71,15 @@ class MemoryManagerScreen extends ConsumerWidget {
                             Switch(
                               value: isActive,
                               onChanged: (value) {
-                                memoryRules.doc(docId).update({'active': value});
+                                // Currently active toggle is not supported by backend out of the box, might require new endpoint
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Toggle active state is not yet supported by API.')),
+                                );
                               },
                             ),
                             IconButton(
                               icon: const Icon(Icons.delete, color: Colors.red),
-                              onPressed: () => _confirmDelete(context, memoryRules, docId),
+                              onPressed: () => _confirmDelete(context, ref, docId),
                             ),
                           ],
                         ),
@@ -96,7 +91,7 @@ class MemoryManagerScreen extends ConsumerWidget {
                               children: [
                                 const Text('Active Rules:', style: TextStyle(fontWeight: FontWeight.bold)),
                                 const SizedBox(height: 8),
-                                ...rules.map((rule) => Padding(
+                                ...ruleItems.map((rule) => Padding(
                                   padding: const EdgeInsets.only(bottom: 4.0),
                                   child: Row(
                                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -114,8 +109,6 @@ class MemoryManagerScreen extends ConsumerWidget {
                     );
                   },
                 );
-                  },
-                );
               },
             ),
           ),
@@ -124,7 +117,7 @@ class MemoryManagerScreen extends ConsumerWidget {
     );
   }
 
-  void _confirmDelete(BuildContext context, CollectionReference ref, String docId) {
+  void _confirmDelete(BuildContext context, WidgetRef ref, String docId) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -136,9 +129,26 @@ class MemoryManagerScreen extends ConsumerWidget {
             child: const Text('Cancel'),
           ),
           ElevatedButton(
-            onPressed: () {
-              ref.doc(docId).delete();
+            onPressed: () async {
               Navigator.of(context).pop();
+              final apiClient = ref.read(apiClientProvider);
+              try {
+                final response = await apiClient.delete('/api/v1/memory/sops/$docId?client_id=default');
+                if (response.statusCode == 200) {
+                  ref.invalidate(memoryRulesProvider);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Rule deleted successfully.')),
+                  );
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Failed to delete rule: ${response.body}')),
+                  );
+                }
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Error: $e')),
+                );
+              }
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: const Text('Delete', style: TextStyle(color: Colors.white)),
