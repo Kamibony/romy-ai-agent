@@ -2979,6 +2979,10 @@ import http.server
 import socketserver
 import urllib.parse
 from http import HTTPStatus
+from datetime import datetime
+
+RECORDING_MODE = False
+RECORDED_STEPS = []
 
 class HumanGuidanceRequest(BaseModel):
     type: str = ""
@@ -3010,7 +3014,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        global LOCAL_STATUS, ACTIVE_DOC_ID
+        global LOCAL_STATUS, ACTIVE_DOC_ID, RECORDING_MODE, RECORDED_STEPS
         if self.path == '/api/run_command':
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length)
@@ -3088,23 +3092,38 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                     self.wfile.write(json.dumps({"error": "Validation failed", "details": ve.errors()}).encode())
                     return
 
+                type_of_guidance = validated_request.type
+                xpath = validated_request.xpath
+                x = validated_request.x
+                y = validated_request.y
+                dpr = validated_request.dpr
+
+                is_semantic = (type_of_guidance == "SEMANTIC" or xpath != "Unknown element")
+
+                if type_of_guidance == "CLICK" and x is not None and y is not None:
+                    guidance = f"Click at (X: {x}, Y: {y})"
+                    if is_semantic:
+                        guidance += f" - {xpath}"
+                elif is_semantic:
+                    guidance = f"Semantic Override: {xpath}"
+                else:
+                    # Fallback for legacy format or just text
+                    guidance = f"Semantic Override: {raw_data}"
+
+                if RECORDING_MODE:
+                    step_data = {
+                        "type": type_of_guidance,
+                        "xpath": xpath,
+                        "x": x,
+                        "y": y,
+                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                        "description": guidance
+                    }
+                    RECORDED_STEPS.append(step_data)
+                    logging.info(f"Recorded step: {guidance}")
+
                 if ACTIVE_DOC_ID:
-                    type_of_guidance = validated_request.type
-                    xpath = validated_request.xpath
-                    x = validated_request.x
-                    y = validated_request.y
-                    dpr = validated_request.dpr
-
-                    is_semantic = (type_of_guidance == "SEMANTIC" or xpath != "Unknown element")
                     is_suspended = (global_state_machine and global_state_machine.state == AgentState.SUSPENDED_HITL)
-
-                    if type_of_guidance == "CLICK" and x is not None and y is not None:
-                        guidance = f"Click at (X: {x}, Y: {y})"
-                    elif is_semantic:
-                        guidance = f"Semantic Override: {xpath}"
-                    else:
-                        # Fallback for legacy format or just text
-                        guidance = f"Semantic Override: {raw_data}"
 
                     firestore_update_document("remote_commands", ACTIVE_DOC_ID, {
                         "status": "in_progress",
@@ -3123,18 +3142,12 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                     if global_asyncio_loop:
                         global_asyncio_loop.call_soon_threadsafe(set_event)
 
-                    self.send_response(HTTPStatus.OK)
-                    self.send_header('Content-type', 'application/json')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"status": "ok"}).encode())
-                    return
-                else:
-                    self.send_response(HTTPStatus.BAD_REQUEST)
-                    self.send_header('Content-type', 'application/json')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"error": "No active task"}).encode())
+                self.send_response(HTTPStatus.OK)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "ok"}).encode())
+                return
             except json.JSONDecodeError:
                 self.send_response(HTTPStatus.BAD_REQUEST)
                 self.send_header('Content-type', 'application/json')
@@ -3165,6 +3178,21 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}).encode())
+        elif self.path == '/api/recording/start':
+            RECORDING_MODE = True
+            RECORDED_STEPS.clear()
+            self.send_response(HTTPStatus.OK)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "recording_started"}).encode())
+        elif self.path == '/api/recording/stop':
+            RECORDING_MODE = False
+            self.send_response(HTTPStatus.OK)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "recording_stopped"}).encode())
         elif self.path == '/api/reset':
             # Handle clean state reset
             try:
@@ -3200,6 +3228,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"error": "Not found"}).encode())
 
     def do_GET(self):
+        global RECORDED_STEPS
         parsed_path = urllib.parse.urlparse(self.path)
         if parsed_path.path.startswith('/api/status/'):
             doc_id = parsed_path.path.split('/')[-1]
@@ -3225,6 +3254,12 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 "agent_state": agent_state,
                 "any_subtask_failed": any_subtask_failed
             }).encode())
+        elif parsed_path.path == '/api/recording/steps':
+            self.send_response(HTTPStatus.OK)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({"steps": RECORDED_STEPS}).encode())
         elif parsed_path.path == '/api/ping':
             self.send_response(HTTPStatus.OK)
             self.send_header('Content-type', 'application/json')
