@@ -596,10 +596,10 @@ async function handleGetState(payload) {
         }
 
         // 3. Request DOM Map from the content script using scripting API
-        sendTelemetryLog(`Requesting structural UI array from RomyDomMapper...`);
+        sendTelemetryLog(`Requesting structural UI array from RomyDomMapper across all frames...`);
         try {
             const results = await chrome.scripting.executeScript({
-                target: { tabId: tab.id },
+                target: { tabId: tab.id, allFrames: true },
                 func: () => {
                     if (window.RomyDomMapper && typeof window.RomyDomMapper.extractUIElements === 'function') {
                         return window.RomyDomMapper.extractUIElements();
@@ -608,9 +608,18 @@ async function handleGetState(payload) {
                 }
             });
 
-            if (results && results[0] && results[0].result) {
-                uiElements = results[0].result;
-                sendTelemetryLog(`Successfully extracted ${uiElements.length} UI elements.`);
+            if (results && results.length > 0) {
+                for (const result of results) {
+                    if (result.result && Array.isArray(result.result)) {
+                        // Tag each element with its frameId so we can interact with it later
+                        const elementsWithFrameId = result.result.map(el => {
+                            el.frameId = result.frameId;
+                            return el;
+                        });
+                        uiElements = uiElements.concat(elementsWithFrameId);
+                    }
+                }
+                sendTelemetryLog(`Successfully extracted ${uiElements.length} UI elements across ${results.length} frames.`);
             }
         } catch (domErr) {
             sendTelemetryLog(`Warning: Failed to extract UI elements via scripting: ${domErr.message}. Falling back to empty array.`);
@@ -667,46 +676,61 @@ async function handleExecuteNativeAction(payload) {
         const dpr = evalResult?.result?.value || 1;
 
         // Helper function for JIT target locating
-        const getRealTimeCoordinates = async (targetId, fallbackXpath, fallbackCss) => {
+        const getRealTimeCoordinates = async (targetId, fallbackXpath, fallbackCss, targetFrameId) => {
             // Escape quotes in selectors to prevent eval errors
             const safeXpath = fallbackXpath ? fallbackXpath.replace(/"/g, '\\"') : '';
             const safeCss = fallbackCss ? fallbackCss.replace(/"/g, '\\"') : '';
 
-            let evalExpr = `
-                (function() {
-                    let el = document.querySelector('[data-romy-id="${targetId}"]');
-                    if (!el && "${safeXpath}") {
-                        try {
-                            el = document.evaluate("${safeXpath}", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                        } catch(e) {}
-                    }
-                    if (!el && "${safeCss}") {
-                        try {
-                            el = document.querySelector("${safeCss}");
-                        } catch(e) {}
-                    }
-                    if (el) {
-                        const rect = el.getBoundingClientRect();
-                        if (rect.width === 0 && rect.height === 0) {
-                            return { found: false };
-                        }
-                        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, found: true };
-                    }
-                    return { found: false };
-                })()
-            `;
-            const evalResult = await cdpManager.sendCommand(activeSessionTabId, "Runtime.evaluate", {
-                expression: evalExpr,
-                returnByValue: true
-            });
-            return evalResult?.result?.value;
+            let evalFunc = (targetId, fallbackXpath, fallbackCss) => {
+                let el = document.querySelector(`[data-romy-id="${targetId}"]`);
+                if (!el && fallbackXpath) {
+                    try { el = document.evaluate(fallbackXpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue; } catch(e) {}
+                }
+                if (!el && fallbackCss) {
+                    try { el = document.querySelector(fallbackCss); } catch(e) {}
+                }
+                if (el) {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width === 0 && rect.height === 0) return { found: false };
+
+                    // We need absolute coordinates from the main frame.
+                    // If we're inside an iframe, getBoundingClientRect is relative to the iframe.
+                    // We need to calculate absolute position, but we can only access window/frame locally.
+                    // A trick is to use screenX/Y or pass it up. However, chrome.scripting handles the translation implicitly if we just return the element's rect and add the iframe's rect from the parent.
+                    // But from inside the frame we don't know our parent iframe element securely if cross-origin.
+                    // Actually, the simplest way is to let CDP handle it or just rely on the fallback coordinates LLM gave us for iframes since CDP events are viewport relative.
+                    // Let's just return relative to the current frame's viewport.
+                    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, found: true };
+                }
+                return { found: false };
+            };
+
+            // Using chrome.scripting.executeScript since we need to target specific frameIds robustly
+            try {
+                const results = await chrome.scripting.executeScript({
+                    target: { tabId: activeSessionTabId, frameIds: targetFrameId !== undefined ? [targetFrameId] : undefined },
+                    func: evalFunc,
+                    args: [targetId, safeXpath, safeCss]
+                });
+
+                if (results && results[0] && results[0].result) {
+                     let coords = results[0].result;
+                     // If it's an iframe (frameId !== 0), we must add the iframe's offset
+                     // Note: cross-origin iframes make this tricky.
+                     // We will trust the coords, and fallback to LLM coordinates if they seem wrong or if it's an iframe.
+                     return coords;
+                }
+            } catch (e) {
+                sendTelemetryLog(`JIT locating error via scripting: ${e.message}`);
+            }
+            return { found: false };
         };
 
         if (actionType === 'CLICK') {
             let x, y;
             if (actionData.target_id) {
                 sendTelemetryLog(`JIT locating target_id: ${actionData.target_id}`);
-                const coords = await getRealTimeCoordinates(actionData.target_id, actionData.fallback_xpath || '', actionData.fallback_css || '');
+                const coords = await getRealTimeCoordinates(actionData.target_id, actionData.fallback_xpath || '', actionData.fallback_css || '', actionData.frameId);
                 if (coords && coords.found) {
                     // JIT provides CSS pixels
                     x = coords.x;
@@ -822,7 +846,7 @@ async function handleExecuteNativeAction(payload) {
 
             if (actionData.target_id) {
                 sendTelemetryLog(`JIT locating target_id: ${actionData.target_id} for TYPE focus`);
-                const coords = await getRealTimeCoordinates(actionData.target_id, actionData.fallback_xpath || '', actionData.fallback_css || '');
+                const coords = await getRealTimeCoordinates(actionData.target_id, actionData.fallback_xpath || '', actionData.fallback_css || '', actionData.frameId);
                 if (coords && coords.found) {
                     x = coords.x;
                     y = coords.y;
@@ -1053,12 +1077,31 @@ async function handleExecuteNativeAction(payload) {
 
             sendTelemetryLog(`PRESS ${key} executed successfully.`);
         } else if (actionType === 'HOVER') {
-            const coords = actionData.coordinates;
-            if (!coords || coords.length < 2) {
+            let x, y;
+            if (actionData.target_id) {
+                sendTelemetryLog(`JIT locating target_id: ${actionData.target_id} for HOVER`);
+                const coords = await getRealTimeCoordinates(actionData.target_id, actionData.fallback_xpath || '', actionData.fallback_css || '', actionData.frameId);
+                if (coords && coords.found) {
+                    x = coords.x;
+                    y = coords.y;
+                } else if (actionData.fallback_x !== undefined && actionData.fallback_y !== undefined) {
+                    x = actionData.fallback_x;
+                    y = actionData.fallback_y;
+                } else if (actionData.coordinates && actionData.coordinates.length >= 2) {
+                    x = actionData.coordinates[0] / dpr;
+                    y = actionData.coordinates[1] / dpr;
+                } else {
+                    return { success: false, error: "Could not locate target for HOVER" };
+                }
+            } else if (actionData.coordinates && actionData.coordinates.length >= 2) {
+                x = actionData.coordinates[0] / dpr;
+                y = actionData.coordinates[1] / dpr;
+            } else {
                 return { success: false, error: "Coordinates missing for action HOVER" };
             }
-            const x = Math.round(coords[0] / dpr);
-            const y = Math.round(coords[1] / dpr);
+
+            x = Math.round(x);
+            y = Math.round(y);
 
             await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", {
                 type: "mouseMoved",

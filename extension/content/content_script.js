@@ -35,7 +35,18 @@ document.addEventListener('click', (e) => {
                 let tag = e.target.tagName ? e.target.tagName.toLowerCase() : "";
                 if (tag) {
                      xpath = tag + (text ? ` with text "${text.trim()}"` : "");
-                     if (e.target.id) xpath += ` (id: #${e.target.id})`;
+
+                     // Semantic ID logic for ghost clicks
+                     let id = e.target.id;
+                     if (id && id.length <= 20 && !/\d{4,}/.test(id) && !/[a-z0-9]{8}-[a-z0-9]{4}/i.test(id)) {
+                         xpath += ` (id: #${id})`;
+                     } else if (e.target.hasAttribute('data-testid')) {
+                         xpath += ` (data-testid: ${e.target.getAttribute('data-testid')})`;
+                     } else if (e.target.hasAttribute('role')) {
+                         xpath += ` (role: ${e.target.getAttribute('role')})`;
+                     } else if (e.target.hasAttribute('aria-label') && !text.includes(e.target.getAttribute('aria-label'))) {
+                         xpath += ` (aria-label: ${e.target.getAttribute('aria-label')})`;
+                     }
                 }
             }
         } catch (xpathErr) {

@@ -416,7 +416,10 @@ def compile_sop_with_gemini(domain: str, raw_sop: str, client_id: str = None, ta
             "Standard Operating Procedure (SOP). Your job is to translate this human text into a strict, "
             "universal playbook rule that an automated RPA agent can reliably follow.\n"
             "Format the rule clearly, typically as 'Condition -> Action'. Ensure it uses the agent's ontology "
-            "(CLICK, TYPE, etc.)."
+            "(CLICK, TYPE, WAIT, WAIT_FOR, etc.).\n"
+            "CRITICAL ASYNC RACE CONDITION FIX: You MUST inject explicit visual 'Wait' conditions for dynamic UI changes. "
+            "If the human SOP implies an action that triggers a loading state, a modal, or a page navigation, you MUST add a rule like: "
+            "'WAIT_FOR modal to appear' or 'WAIT 2 seconds' before the next action. Do not assume immediate rendering."
         )
 
         if existing_rules:
@@ -584,6 +587,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "You must output the exact target_id of the Set-of-Mark box, or if unavailable, the [x, y] coordinates representing the center of the target element.\n\n"
             "Supported actions:\n"
             "- {\"action\": \"CLICK\", \"target_id\": \"<id>\", \"coordinates\": [x, y]} (CRUCIAL: If there is a GDPR cookie banner, consent modal, or popup overlapping the page, your VERY FIRST action MUST be to CLICK its \"Accept\", \"Agree\", or \"Close\" button before attempting to interact with any other elements on the main page.)\n"
+            "- {\"action\": \"HOVER\", \"target_id\": \"<id>\", \"coordinates\": [x, y]} (CRITICAL: Use this to expand parent menus, dropdowns, or tooltips if a target element is visually hidden but logically expected to be inside a hover menu.)\n"
             "- {\"action\": \"TYPE\", \"target_id\": \"<id>\", \"coordinates\": [x, y], \"text\": \"<text to type>\", \"submit\": true} (this automatically focuses the element, types, and natively submits by pressing Enter if submit=true)\n"
             "- {\"action\": \"DRAG_AND_DROP\", \"start_x\": <x1>, \"start_y\": <y1>, \"end_x\": <x2>, \"end_y\": <y2>} (Executes a continuous physical mouse drag from start coordinates to end coordinates. Required for drawing or moving items in OS.)\n"
             "- {\"action\": \"SEARCH\", \"target_id\": \"<id>\", \"coordinates\": [x, y], \"text\": \"<search query>\"} (use this explicitly when searching. It acts identically to TYPE with submit=true, bypassing autocomplete dropdowns completely.)\n"
@@ -668,7 +672,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                         properties={
                             "action": types.Schema(
                                 type=types.Type.STRING,
-                                    enum=["CLICK", "TYPE", "SEARCH", "SCROLL", "NAVIGATE", "OPEN_TAB", "LAUNCH_APP", "PRESS_KEY", "WAIT_FOR", "WAIT", "RESET_VIEW", "EXECUTE_JS", "REPLY", "SUB_TASK_COMPLETE", "DONE", "ASK_HUMAN", "DRAG_AND_DROP"]
+                                    enum=["CLICK", "TYPE", "SEARCH", "SCROLL", "NAVIGATE", "OPEN_TAB", "LAUNCH_APP", "PRESS_KEY", "WAIT_FOR", "WAIT", "RESET_VIEW", "EXECUTE_JS", "REPLY", "SUB_TASK_COMPLETE", "DONE", "ASK_HUMAN", "DRAG_AND_DROP", "HOVER"]
                             ),
                             "target_id": types.Schema(
                                 type=types.Type.STRING,
@@ -845,6 +849,16 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                 if action_data.get("action") == "CLICK" and ("coordinates" in action_data or "target_id" in action_data):
                     action_dict = {
                         "action": "CLICK",
+                        "thought": thought
+                    }
+                    if "target_id" in action_data:
+                        action_dict["target_id"] = str(action_data["target_id"])
+                    if "coordinates" in action_data:
+                        action_dict["coordinates"] = action_data["coordinates"]
+                    return {"actions": [action_dict], "memory_rules": playbook_rules_applied}
+                elif action_data.get("action") == "HOVER" and ("coordinates" in action_data or "target_id" in action_data):
+                    action_dict = {
+                        "action": "HOVER",
                         "thought": thought
                     }
                     if "target_id" in action_data:

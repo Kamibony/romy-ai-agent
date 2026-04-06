@@ -1715,6 +1715,8 @@ class AgentStateMachine:
                          if "center" in el:
                              action_to_take["fallback_x"] = el["center"].get("x")
                              action_to_take["fallback_y"] = el["center"].get("y")
+                         if "frameId" in el:
+                             action_to_take["frameId"] = el["frameId"]
                          break
 
              # Check if we should override routing to OS despite WEB intent
@@ -2434,6 +2436,8 @@ def execute_voice_agent_loop() -> None:
                                         if "center" in el:
                                             act["fallback_x"] = el["center"].get("x")
                                             act["fallback_y"] = el["center"].get("y")
+                                        if "frameId" in el:
+                                            act["frameId"] = el["frameId"]
                                         break
 
                             action_type = act.get("action", "")
