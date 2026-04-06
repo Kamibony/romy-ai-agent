@@ -676,7 +676,7 @@ async function handleExecuteNativeAction(payload) {
         const dpr = evalResult?.result?.value || 1;
 
         // Helper function for JIT target locating
-        const getRealTimeCoordinates = async (targetId, fallbackXpath, fallbackCss, targetFrameId) => {
+        const getRealTimeCoordinates = async (targetId, fallbackXpath, fallbackCss, targetFrameId, attemptScrollDiscovery = true) => {
             // Escape quotes in selectors to prevent eval errors
             const safeXpath = fallbackXpath ? fallbackXpath.replace(/"/g, '\\"') : '';
             const safeCss = fallbackCss ? fallbackCss.replace(/"/g, '\\"') : '';
@@ -715,18 +715,95 @@ async function handleExecuteNativeAction(payload) {
 
                 if (results && results[0] && results[0].result) {
                      let coords = results[0].result;
-                     // If it's an iframe (frameId !== 0), we must add the iframe's offset
-                     // Note: cross-origin iframes make this tricky.
-                     // We will trust the coords, and fallback to LLM coordinates if they seem wrong or if it's an iframe.
-                     return coords;
+                     if (coords.found) return coords;
                 }
             } catch (e) {
                 sendTelemetryLog(`JIT locating error via scripting: ${e.message}`);
             }
+
+            // Virtualized DOM Scroll Discovery Heuristic:
+            // If target is missing, iterate over scrollable containers and slowly scroll down to force rendering,
+            // then check if the element has appeared.
+            if (attemptScrollDiscovery) {
+                sendTelemetryLog(`Target ${targetId} not found natively. Attempting Virtualized DOM Scroll Discovery...`);
+                try {
+                    const scrollResults = await chrome.scripting.executeScript({
+                        target: { tabId: activeSessionTabId, frameIds: targetFrameId !== undefined ? [targetFrameId] : undefined },
+                        func: async (targetId, fallbackXpath, fallbackCss) => {
+                            const scrollables = Array.from(document.querySelectorAll('*')).filter(el => {
+                                if (el === document.body || el === document.documentElement) return false;
+                                const style = window.getComputedStyle(el);
+                                return (style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight;
+                            });
+
+                            if (scrollables.length === 0) return { found: false };
+
+                            // Helper function evaluating target presence
+                            const checkTarget = () => {
+                                let el = document.querySelector(`[data-romy-id="${targetId}"]`);
+                                if (!el && fallbackXpath) {
+                                    try { el = document.evaluate(fallbackXpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue; } catch(e) {}
+                                }
+                                if (!el && fallbackCss) {
+                                    try { el = document.querySelector(fallbackCss); } catch(e) {}
+                                }
+                                if (el) {
+                                    const rect = el.getBoundingClientRect();
+                                    if (rect.width > 0 && rect.height > 0) {
+                                        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, found: true };
+                                    }
+                                }
+                                return null;
+                            };
+
+                            for (const container of scrollables) {
+                                // Try scrolling down a few times
+                                for (let i = 0; i < 5; i++) {
+                                    if (container.scrollTop + container.clientHeight >= container.scrollHeight - 10) break;
+                                    container.scrollTop += 300;
+
+                                    // Wait for rendering
+                                    await new Promise(r => setTimeout(r, 400));
+
+                                    const coords = checkTarget();
+                                    if (coords) return coords;
+                                }
+                                // We don't revert the scroll position so the element stays in view
+                            }
+                            return { found: false };
+                        },
+                        args: [targetId, safeXpath, safeCss]
+                    });
+
+                    if (scrollResults && scrollResults[0] && scrollResults[0].result) {
+                        let coords = scrollResults[0].result;
+                        if (coords.found) {
+                            sendTelemetryLog(`Scroll Discovery SUCCESS: Found target ${targetId} after scrolling.`);
+                            return coords;
+                        }
+                    }
+                } catch (e) {
+                    sendTelemetryLog(`Scroll Discovery execution failed: ${e.message}`);
+                }
+            }
+
             return { found: false };
         };
 
         if (actionType === 'CLICK') {
+            // Mitigate Hydration & CLS Delays by waiting for stability before clicking
+            try {
+                await new Promise((resolve) => {
+                    chrome.tabs.sendMessage(activeSessionTabId, { type: 'WAIT_FOR_STABILITY', debounceMs: 500, timeoutMs: 3000 }, (response) => {
+                        // ignore errors from sendMessage (e.g. if content script isn't fully ready)
+                        const err = chrome.runtime.lastError;
+                        resolve();
+                    });
+                });
+            } catch (e) {
+                // Ignore timeout/errors and just proceed
+            }
+
             let x, y;
             if (actionData.target_id) {
                 sendTelemetryLog(`JIT locating target_id: ${actionData.target_id}`);

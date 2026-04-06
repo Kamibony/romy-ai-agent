@@ -12,6 +12,54 @@ window.RomyDomMapper = {
         // Broad locator string matching Playwright scanning
         const locators = 'button, a, input, select, textarea, [role="button"], [role="link"], [onclick], .btn, .button, [class*="btn"]';
 
+
+        function clearHighZIndexOverlays() {
+            // Heuristic to detect and clear popups/cookie banners before mapping
+            const overlays = Array.from(document.querySelectorAll('div, section, aside, dialog'))
+                .filter(el => {
+                    const style = window.getComputedStyle(el);
+                    // Often overlays have high z-index and fixed/absolute positioning
+                    if ((style.position === 'fixed' || style.position === 'absolute') &&
+                        parseInt(style.zIndex, 10) > 50 &&
+                        style.display !== 'none' &&
+                        style.visibility !== 'hidden') {
+
+                        // Check if it's likely a cookie banner / popup
+                        const text = el.innerText.toLowerCase();
+                        if (text.includes('cookie') || text.includes('accept') || text.includes('consent') ||
+                            text.includes('subscribe') || text.includes('newsletter')) {
+                            return true;
+                        }
+
+                        // Or if it covers a significant portion of the screen
+                        const rect = el.getBoundingClientRect();
+                        const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+                        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+                        if (rect.width > viewportWidth * 0.8 && rect.height > viewportHeight * 0.2) {
+                             // E.g. bottom banner
+                             return true;
+                        }
+                    }
+                    return false;
+                });
+
+            overlays.forEach(overlay => {
+                console.log("Romy DOM Mapper: Attempting to clear detected high z-index overlay", overlay);
+                // Look for a close/accept button inside
+                const closeBtn = overlay.querySelector('button, [aria-label*="close" i], [aria-label*="accept" i], .close, .dismiss');
+                if (closeBtn) {
+                    try {
+                        closeBtn.click();
+                    } catch(e) {}
+                } else {
+                    // Force hide if no button found (dangerous but effective heuristic)
+                    overlay.style.display = 'none';
+                }
+            });
+        }
+
+        clearHighZIndexOverlays();
+
         function isInteractive(el) {
             if (el.matches(locators)) return true;
 

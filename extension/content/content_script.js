@@ -77,8 +77,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         case window.MESSAGE_TYPES.REQUEST_DOM_MAP:
             handleRequestDomMap(sendResponse);
             return true; // async
+        case 'WAIT_FOR_STABILITY':
+            handleWaitForStability(request, sendResponse);
+            return true; // async
     }
 });
+
+async function handleWaitForStability(request, sendResponse) {
+    await waitForDomStability(request.debounceMs || 1000, request.timeoutMs || 5000);
+    sendResponse({ success: true });
+}
 
 async function handleRequestDomMap(sendResponse) {
     await waitForDomStability(1000, 5000);
