@@ -1732,6 +1732,13 @@ class AgentStateMachine:
                      action_to_take["x"] = action_to_take["coordinates"][0]
                  if "y" not in action_to_take:
                      action_to_take["y"] = action_to_take["coordinates"][1]
+             # Handle fallback if top level x and y are strings or exist without coordinates list
+             if "x" in action_to_take and isinstance(action_to_take["x"], str):
+                 try: action_to_take["x"] = float(action_to_take["x"])
+                 except ValueError: pass
+             if "y" in action_to_take and isinstance(action_to_take["y"], str):
+                 try: action_to_take["y"] = float(action_to_take["y"])
+                 except ValueError: pass
 
              if action_type in ["ERROR", "API_ERROR", "PARSE_ERROR", "PIPELINE_ERROR"]:
                  error_msg = action_to_take.get("error", action_to_take.get("raw_response", "Unknown error"))
@@ -1793,6 +1800,10 @@ class AgentStateMachine:
                  force_os = False
 
              # Execution Strategy Routing
+             # Ensure target_id is always a string to prevent issues downstream
+             if "target_id" in action_to_take and action_to_take["target_id"] is not None:
+                 action_to_take["target_id"] = str(action_to_take["target_id"])
+
              if self.intent == "WEB" and not force_os:
                  # === Web Execution Strategy ===
                  action_to_take["stealth_mode"] = config.STEALTH_MODE

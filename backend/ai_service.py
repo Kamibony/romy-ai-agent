@@ -678,6 +678,14 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                                 type=types.Type.STRING,
                                 description="The ID of the Set-of-Mark box to interact with (preferred over coordinates)"
                             ),
+                            "x": types.Schema(
+                                type=types.Type.NUMBER,
+                                description="Fallback X coordinate if target_id is not available"
+                            ),
+                            "y": types.Schema(
+                                type=types.Type.NUMBER,
+                                description="Fallback Y coordinate if target_id is not available"
+                            ),
                             "coordinates": types.Schema(
                                 type=types.Type.ARRAY,
                                 items=types.Schema(type=types.Type.NUMBER),
@@ -707,6 +715,22 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
 
         response_text = response.text
 
+        # Helper function to extract spatial info from an action dict
+        def _extract_spatial(action_data, action_dict):
+            if "target_id" in action_data:
+                action_dict["target_id"] = str(action_data["target_id"])
+            elif "id" in action_data:
+                action_dict["target_id"] = str(action_data["id"])
+
+            if "coordinates" in action_data:
+                action_dict["coordinates"] = action_data["coordinates"]
+            if "x" in action_data:
+                action_dict["x"] = action_data["x"]
+            if "y" in action_data:
+                action_dict["y"] = action_data["y"]
+
+            return "target_id" in action_dict or "coordinates" in action_dict or ("x" in action_dict and "y" in action_dict)
+
         # Try to parse the JSON array from the response
         match = re.search(r'\[.*\]', response_text, re.DOTALL)
         if match:
@@ -716,41 +740,21 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                     parsed_actions = []
                     for action_data in actions_data:
                         thought = action_data.get("thought", "")
-                        if action_data.get("action") == "CLICK" and ("coordinates" in action_data or "target_id" in action_data):
-                            action_dict = {
-                                "action": "CLICK",
-                                "thought": thought
-                            }
-                            if "target_id" in action_data:
-                                action_dict["target_id"] = str(action_data["target_id"])
-                            if "coordinates" in action_data:
-                                action_dict["coordinates"] = action_data["coordinates"]
-                            parsed_actions.append(action_dict)
-                        elif action_data.get("action") == "TYPE" and ("coordinates" in action_data or "target_id" in action_data) and "text" in action_data:
-                            action_dict = {
-                                "action": "TYPE",
-                                "text": str(action_data["text"]),
-                                "thought": thought
-                            }
-                            if "target_id" in action_data:
-                                action_dict["target_id"] = str(action_data["target_id"])
-                            if "coordinates" in action_data:
-                                action_dict["coordinates"] = action_data["coordinates"]
+                        if action_data.get("action") == "CLICK":
+                            action_dict = {"action": "CLICK", "thought": thought}
+                            if _extract_spatial(action_data, action_dict):
+                                parsed_actions.append(action_dict)
+                        elif action_data.get("action") == "TYPE" and "text" in action_data:
+                            action_dict = {"action": "TYPE", "text": str(action_data["text"]), "thought": thought}
                             if "submit" in action_data:
                                 action_dict["submit"] = bool(action_data["submit"])
+                            # TYPE is allowed without explicit coordinates if it can use center fallback, but try to extract
+                            _extract_spatial(action_data, action_dict)
                             parsed_actions.append(action_dict)
-                        elif action_data.get("action") == "SEARCH" and ("coordinates" in action_data or "target_id" in action_data) and "text" in action_data:
+                        elif action_data.get("action") == "SEARCH" and "text" in action_data:
                             # Map SEARCH directly to TYPE with submit=True to leverage existing native submit implementation
-                            action_dict = {
-                                "action": "TYPE",
-                                "text": str(action_data["text"]),
-                                "submit": True,
-                                "thought": thought
-                            }
-                            if "target_id" in action_data:
-                                action_dict["target_id"] = str(action_data["target_id"])
-                            if "coordinates" in action_data:
-                                action_dict["coordinates"] = action_data["coordinates"]
+                            action_dict = {"action": "TYPE", "text": str(action_data["text"]), "submit": True, "thought": thought}
+                            _extract_spatial(action_data, action_dict)
                             parsed_actions.append(action_dict)
                         elif action_data.get("action") == "SCROLL" and "direction" in action_data:
                             parsed_actions.append({
@@ -846,50 +850,23 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             try:
                 action_data = json.loads(match_single.group(0))
                 thought = action_data.get("thought", "")
-                if action_data.get("action") == "CLICK" and ("coordinates" in action_data or "target_id" in action_data):
-                    action_dict = {
-                        "action": "CLICK",
-                        "thought": thought
-                    }
-                    if "target_id" in action_data:
-                        action_dict["target_id"] = str(action_data["target_id"])
-                    if "coordinates" in action_data:
-                        action_dict["coordinates"] = action_data["coordinates"]
-                    return {"actions": [action_dict], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "HOVER" and ("coordinates" in action_data or "target_id" in action_data):
-                    action_dict = {
-                        "action": "HOVER",
-                        "thought": thought
-                    }
-                    if "target_id" in action_data:
-                        action_dict["target_id"] = str(action_data["target_id"])
-                    if "coordinates" in action_data:
-                        action_dict["coordinates"] = action_data["coordinates"]
-                    return {"actions": [action_dict], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "TYPE" and ("coordinates" in action_data or "target_id" in action_data) and "text" in action_data:
-                    action_dict = {
-                        "action": "TYPE",
-                        "text": str(action_data["text"]),
-                        "thought": thought
-                    }
-                    if "target_id" in action_data:
-                        action_dict["target_id"] = str(action_data["target_id"])
-                    if "coordinates" in action_data:
-                        action_dict["coordinates"] = action_data["coordinates"]
+                if action_data.get("action") == "CLICK":
+                    action_dict = {"action": "CLICK", "thought": thought}
+                    if _extract_spatial(action_data, action_dict):
+                        return {"actions": [action_dict], "memory_rules": playbook_rules_applied}
+                elif action_data.get("action") == "HOVER":
+                    action_dict = {"action": "HOVER", "thought": thought}
+                    if _extract_spatial(action_data, action_dict):
+                        return {"actions": [action_dict], "memory_rules": playbook_rules_applied}
+                elif action_data.get("action") == "TYPE" and "text" in action_data:
+                    action_dict = {"action": "TYPE", "text": str(action_data["text"]), "thought": thought}
                     if "submit" in action_data:
                         action_dict["submit"] = bool(action_data["submit"])
+                    _extract_spatial(action_data, action_dict)
                     return {"actions": [action_dict], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "SEARCH" and ("coordinates" in action_data or "target_id" in action_data) and "text" in action_data:
-                    action_dict = {
-                        "action": "TYPE",
-                        "text": str(action_data["text"]),
-                        "submit": True,
-                        "thought": thought
-                    }
-                    if "target_id" in action_data:
-                        action_dict["target_id"] = str(action_data["target_id"])
-                    if "coordinates" in action_data:
-                        action_dict["coordinates"] = action_data["coordinates"]
+                elif action_data.get("action") == "SEARCH" and "text" in action_data:
+                    action_dict = {"action": "TYPE", "text": str(action_data["text"]), "submit": True, "thought": thought}
+                    _extract_spatial(action_data, action_dict)
                     return {"actions": [action_dict], "memory_rules": playbook_rules_applied}
                 elif action_data.get("action") == "SCROLL" and "direction" in action_data:
                     return {"actions": [{
