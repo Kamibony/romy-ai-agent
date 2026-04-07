@@ -1516,14 +1516,8 @@ class AgentStateMachine:
         }, sort_keys=True).encode('utf-8')).hexdigest()
 
         # Check if we should omit the image payload
+        # STEP 2: The Blindness Fix. Disable differential passing to ensure Vision-First coordinates.
         omit_image = False
-        mutating_actions_that_require_new_image = {"CLICK", "TYPE", "PRESS", "PRESS_KEY", "PRESS_ENTER", "DRAG_AND_DROP", "SCROLL", "LAUNCH_APP", "EXECUTE_JS", "NAVIGATE", "OPEN_TAB"}
-        last_action_type = str(self.previous_action.get("action", "")).upper() if self.previous_action else ""
-
-        if hasattr(self, 'previous_state_hash') and self.previous_state_hash == current_state_hash:
-            if last_action_type not in mutating_actions_that_require_new_image:
-                logging.info(f"Differential Passing: Structural hash matched ({current_state_hash}) and last action ({last_action_type}) was non-mutating. Omitting image payload.")
-                omit_image = True
 
         self.previous_state_hash = current_state_hash
 
@@ -1544,7 +1538,8 @@ class AgentStateMachine:
         try:
             headers = {"Authorization": f"Bearer {CURRENT_TOKEN}"}
             backend_url = config.GET_COMMAND_ENDPOINT
-            response = authenticated_request("POST", backend_url, json=payload, headers=headers)
+            # STEP 1: The Watchdog Fix. Align timeout to Gemini maximum processing time.
+            response = authenticated_request("POST", backend_url, json=payload, headers=headers, timeout=(15, 120))
             response.raise_for_status()
             try:
                 self.ai_response = response.json()

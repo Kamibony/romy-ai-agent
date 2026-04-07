@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -348,8 +348,25 @@ def classify_intent(request: ClassifyIntentRequest, uid: str = Depends(verify_fi
         "command_text": command_text
     }
 
+def _background_update_session_and_telemetry(session_id: str, updates: dict, action_list: dict, uid: str):
+    """Background task to update Firestore and telemetry to avoid blocking HTTP response."""
+    if session_id:
+        update_task_session(session_id, updates)
+
+    try:
+        db = firestore.client()
+        db.collection("telemetry").add({
+            "timestamp": firestore.SERVER_TIMESTAMP,
+            "gemini_context": str(action_list), # Storing the action list in place of context
+            "claude_action": str(action_list), # Kept for backward compatibility if needed by frontend
+            "uid": uid
+        })
+        print("Telemetry written to Firestore in background")
+    except Exception as e:
+        print(f"Error writing telemetry in background: {e}")
+
 @app.post("/api/v1/agent/command")
-def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_firebase_token)):
+def agent_command(request: AgentCommandRequest, background_tasks: BackgroundTasks, uid: str = Depends(verify_firebase_token)):
     """
     Endpoint that requires a valid Firebase token.
     Checks user license from Firestore before accepting the command.
@@ -368,6 +385,7 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
 
     try:
         thread_history = ""
+        session = None
         if request.session_id:
             session = get_task_session(request.session_id)
             if not session:
@@ -377,8 +395,8 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
                 thread_history = session.get("thread_history", "")
 
                 # Check status
-                status = session.get("status", "pending")
-                if status == "help_needed":
+                session_status = session.get("status", "pending")
+                if session_status == "help_needed":
                     # We should not be processing if it's waiting for help
                     # but if we get a request, maybe the client is re-syncing
                     pass
@@ -399,6 +417,7 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
         )
         print(f"Gemini action list: {action_list}")
 
+        updates = {}
         if request.session_id and session:
             current_step = session.get("current_step", 0) + 1
             new_history = thread_history + f"\nStep {current_step} AI Action: {action_list}"
@@ -420,19 +439,14 @@ def agent_command(request: AgentCommandRequest, uid: str = Depends(verify_fireba
                     updates["status"] = "failed"
                     break
 
-            update_task_session(request.session_id, updates)
-
-        try:
-            db = firestore.client()
-            db.collection("telemetry").add({
-                "timestamp": firestore.SERVER_TIMESTAMP,
-                "gemini_context": str(action_list), # Storing the action list in place of context
-                "claude_action": str(action_list), # Kept for backward compatibility if needed by frontend
-                "uid": uid
-            })
-            print("Telemetry written to Firestore")
-        except Exception as e:
-            print(f"Error writing telemetry: {e}")
+        # STEP 3: The Stagnation Fix. Offload Firestore writes to BackgroundTasks.
+        background_tasks.add_task(
+            _background_update_session_and_telemetry,
+            request.session_id,
+            updates,
+            action_list,
+            uid
+        )
 
         # Directly return the list of actions to match extension expectations
         return action_list
