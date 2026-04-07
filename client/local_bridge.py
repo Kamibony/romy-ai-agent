@@ -58,31 +58,17 @@ class LocalBridgeManager:
     async def _handle_client(self, websocket):
         logging.info(f"WebSocket client connected from {websocket.remote_address}")
 
-        reject_new = False
+        # We want the most recent connection to be the active one
         with self.lock:
-            # We only support one active Chrome Extension connection at a time
-            # If a new one connects while we have an active session, reject the new one
-            is_active = False
-            if self.active_websocket:
-                # websockets >= 14 uses 'state' enum instead of 'closed' boolean
-                if hasattr(self.active_websocket, 'state'):
-                    is_active = self.active_websocket.state.name not in ('CLOSED', 'CLOSING')
-                else:
-                    # fallback for older websockets versions
-                    is_active = not getattr(self.active_websocket, 'closed', True)
-
-            if is_active and self.active_websocket != websocket:
-                reject_new = True
-            else:
-                self.active_websocket = websocket
-
-        if reject_new:
-            logging.warning("Rejecting new connection. An active Chrome Extension is already connected.")
-            try:
-                await websocket.close()
-            except Exception as e:
-                logging.warning(f"Error closing rejected WebSocket connection: {e}")
-            return
+            if self.active_websocket and self.active_websocket != websocket:
+                logging.info("Closing previous WebSocket connection in favor of new one.")
+                try:
+                    # Cancel the old connection asynchronously without blocking this new connection setup
+                    if hasattr(self.active_websocket, 'close'):
+                        asyncio.create_task(self.active_websocket.close())
+                except Exception as e:
+                    logging.warning(f"Error closing old WebSocket connection: {e}")
+            self.active_websocket = websocket
 
         try:
             async for message in websocket:
@@ -164,11 +150,36 @@ class LocalBridgeManager:
         self.stop_event = asyncio.Event()
         logging.info(f"WebSocket local bridge server started on ws://127.0.0.1:{self.port}")
 
+
+        async def heartbeat_loop():
+            while not self.stop_event.is_set():
+                await asyncio.sleep(10)
+                ws = None
+                with self.lock:
+                    ws = self.active_websocket
+
+                if ws:
+                    try:
+                        pong_waiter = await ws.ping()
+                        await asyncio.wait_for(pong_waiter, timeout=5.0)
+                    except Exception as e:
+                        logging.warning(f"Heartbeat failed, closing dead connection: {e}")
+                        with self.lock:
+                            if self.active_websocket == ws:
+                                self.active_websocket = None
+                        try:
+                            await ws.close()
+                        except:
+                            pass
+
+        heartbeat_task = asyncio.create_task(heartbeat_loop())
+
         try:
             await self.stop_event.wait()
         except asyncio.CancelledError:
             pass
         finally:
+            heartbeat_task.cancel()
             self.server.close()
             await self.server.wait_closed()
             logging.info("WebSocket local bridge server stopped.")
@@ -238,6 +249,12 @@ class LocalBridgeManager:
             if agent.ABORT_AGENT:
                 logging.warning("Emergency abort triggered while waiting for Chrome Extension result.")
                 return {"success": False, "error": "User aborted execution"}
+
+            # If the connection drops while we are waiting, we should probably fail fast
+            # but maybe it reconnects. Let's fail fast if there's no active websocket
+            with self.lock:
+                if not self.active_websocket:
+                    return {"success": False, "error": "WebSocket connection lost while waiting for result."}
 
             remaining = timeout - (time.time() - start_time)
             if remaining <= 0:

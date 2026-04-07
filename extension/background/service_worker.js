@@ -161,8 +161,7 @@ function connectLocalBridge() {
         ws.onerror = (error) => {
             if (localBridgeWs !== ws) return;
             // Silence network errors to avoid spamming the console when Python agent is down
-            isConnecting = false;
-            if (ws.readyState === WebSocket.CONNECTING) {
+            if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) {
                 // If we get an error while connecting (e.g. connection refused), close it
                 // so the onclose handler can trigger a reconnect attempt.
                 try {
@@ -174,7 +173,7 @@ function connectLocalBridge() {
         isConnecting = false;
         console.error("Error setting up WebSocket:", e);
         reconnectAttempts++;
-        const backoff = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+        const backoff = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 15000);
         if (reconnectTimeout) clearTimeout(reconnectTimeout);
         reconnectTimeout = setTimeout(connectLocalBridge, backoff);
     }
