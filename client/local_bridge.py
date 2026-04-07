@@ -217,7 +217,7 @@ class LocalBridgeManager:
                 logging.warning("Emergency abort triggered while waiting for Chrome Extension to connect.")
                 return {"success": False, "error": "User aborted execution"}
 
-            if time.time() - wait_start > 10:  # Wait up to 10 seconds for reconnection
+            if time.time() - wait_start > 20:  # Wait up to 20 seconds for reconnection
                 logging.error("No active WebSocket connection from Chrome Extension after waiting.")
                 return {"success": False, "error": "Chrome Extension is not connected to the local bridge."}
 
