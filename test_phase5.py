@@ -36,7 +36,13 @@ def validate_outcome(doc_id, expected_outcome):
     if not expected_outcome:
         return True, "No validation criteria specified."
 
-    user_data_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "RomyAgentBrowserData", "flight_records", doc_id)
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        base_dir = os.path.join(local_app_data, "RomyAgentBrowserData")
+    else:
+        base_dir = os.path.abspath(os.path.join(os.getcwd(), "RomyAgentBrowserData"))
+    user_data_dir = os.path.join(base_dir, "flight_records", doc_id)
+
     if not os.path.exists(user_data_dir):
         return False, f"Flight records directory not found: {user_data_dir}"
 
