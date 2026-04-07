@@ -88,14 +88,25 @@ def get_chaos_scenarios():
         }
     ]
 
+def get_flight_records_dir(doc_id=""):
+    """Helper to safely get flight records path across OSes"""
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        base_dir = os.path.join(local_app_data, "RomyAgentBrowserData")
+    else:
+        # Fallback if LOCALAPPDATA is not set (e.g., Linux/macOS or restricted environments)
+        base_dir = os.path.abspath(os.path.join(os.getcwd(), "RomyAgentBrowserData"))
+
+    return os.path.join(base_dir, "flight_records", doc_id) if doc_id else os.path.join(base_dir, "flight_records")
+
 def analyze_flight_records(doc_id):
     """
     Parses the local flight records for a given session and returns a summary dict
     containing telemetry, errors, steps taken, and screenshots paths.
     """
-    user_data_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "RomyAgentBrowserData", "flight_records", doc_id)
+    user_data_dir = get_flight_records_dir(doc_id)
     if not os.path.exists(user_data_dir):
-        return {"error": "Flight records directory not found.", "steps": 0, "telemetry": [], "errors": [], "circuit_breakers": 0}
+        return {"error": f"Flight records directory not found at {user_data_dir}", "steps": 0, "telemetry": [], "errors": [], "circuit_breakers": 0}
 
     record_files = glob.glob(os.path.join(user_data_dir, "record_*.json"))
     if not record_files:
