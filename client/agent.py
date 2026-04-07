@@ -79,7 +79,15 @@ LOCAL_STATUS = {} # Dictionary to store local task statuses mapping doc_id to st
 def save_flight_record(doc_id: str, iteration: int, payload: dict, response: dict, action_executed: dict, screenshot_b64: str, system_state: dict = None) -> None:
     """Saves a timestamped record of the ReAct cycle locally for debugging."""
     try:
-        user_data_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "RomyAgentBrowserData", "flight_records", doc_id)
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            base_dir = os.path.join(local_app_data, "RomyAgentBrowserData")
+        else:
+            # Fallback if LOCALAPPDATA is not set (e.g., Linux/macOS or restricted environments)
+            # Use the root of the project by going up from client/agent.py
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "RomyAgentBrowserData"))
+
+        user_data_dir = os.path.join(base_dir, "flight_records", doc_id)
         os.makedirs(user_data_dir, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1380,7 +1388,7 @@ class AgentStateMachine:
 
             try:
                 state_result = await asyncio.wait_for(
-                    asyncio.to_thread(bridge.delegate_command, state_payload, 60),
+                     asyncio.to_thread(bridge.delegate_command, state_payload, timeout=60),
                     timeout=65
                 )
             except asyncio.TimeoutError:
@@ -1718,6 +1726,13 @@ class AgentStateMachine:
 
              logging.info(f"Executing Macro-Action {action_idx + 1}/{len(self.actions_to_execute)}: {action_type}")
 
+             # Ensure coordinates provided as a list map to x and y for compatibility with execution layer
+             if "coordinates" in action_to_take and isinstance(action_to_take["coordinates"], list) and len(action_to_take["coordinates"]) >= 2:
+                 if "x" not in action_to_take:
+                     action_to_take["x"] = action_to_take["coordinates"][0]
+                 if "y" not in action_to_take:
+                     action_to_take["y"] = action_to_take["coordinates"][1]
+
              if action_type in ["ERROR", "API_ERROR", "PARSE_ERROR", "PIPELINE_ERROR"]:
                  error_msg = action_to_take.get("error", action_to_take.get("raw_response", "Unknown error"))
                  logging.error(f"Backend returned an error action: {action_type} - {error_msg}")
@@ -1785,8 +1800,9 @@ class AgentStateMachine:
 
                  # Wrap bridge call to make it non-blocking and timeout-aware
                  try:
+                     # local_bridge's delegate_command signature is delegate_command(self, payload: dict, timeout=300)
                      exec_result = await asyncio.wait_for(
-                         asyncio.to_thread(bridge.delegate_command, exec_payload, 60),
+                         asyncio.to_thread(bridge.delegate_command, exec_payload, timeout=60),
                          timeout=65
                      )
                  except asyncio.TimeoutError:
@@ -2475,6 +2491,13 @@ def execute_voice_agent_loop() -> None:
                                             act["frameId"] = el["frameId"]
                                         break
 
+                            # Ensure coordinates provided as a list map to x and y for compatibility with execution layer
+                            if "coordinates" in act and isinstance(act["coordinates"], list) and len(act["coordinates"]) >= 2:
+                                if "x" not in act:
+                                    act["x"] = act["coordinates"][0]
+                                if "y" not in act:
+                                    act["y"] = act["coordinates"][1]
+
                             action_type = act.get("action", "")
                             action_upper = str(action_type).upper()
 
@@ -2833,9 +2856,7 @@ def execute_voice_agent_loop() -> None:
                             if action_upper == "CLICK" and ("x" not in act or "y" not in act):
                                 logging.error(f"Safety Bailout: Missing 'target_id' or spatial coordinates (x, y) for {action_upper} action.")
                                 break
-                            if action_upper == "TYPE" and ("x" not in act or "y" not in act):
-                                logging.error(f"Safety Bailout: Missing 'target_id' or spatial coordinates (x, y) for {action_upper} action.")
-                                break
+                            # TYPE is allowed without coordinates (uses Active Window Center Fallback)
 
                     if action_upper == "SUB_TASK_COMPLETE":
                         logging.info(f"Sub-task completed: {current_sub_task}")
