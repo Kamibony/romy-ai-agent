@@ -151,8 +151,8 @@ function connectLocalBridge() {
             if (heartbeatInterval) clearInterval(heartbeatInterval);
             reconnectAttempts++;
 
-            // Adjust backoff: initially fast retries, maxing out at 15 seconds to catch Python agent restarts quickly
-            const backoff = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 15000);
+            // Adjust backoff: initially fast retries, maxing out at 5 seconds to catch Python agent restarts quickly
+            const backoff = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 5000);
             console.log(`WebSocket connection closed. Reconnecting in ${backoff}ms...`);
             if (reconnectTimeout) clearTimeout(reconnectTimeout);
             reconnectTimeout = setTimeout(connectLocalBridge, backoff);
@@ -173,7 +173,7 @@ function connectLocalBridge() {
         isConnecting = false;
         console.error("Error setting up WebSocket:", e);
         reconnectAttempts++;
-        const backoff = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 15000);
+        const backoff = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 5000);
         if (reconnectTimeout) clearTimeout(reconnectTimeout);
         reconnectTimeout = setTimeout(connectLocalBridge, backoff);
     }
