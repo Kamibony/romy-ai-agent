@@ -117,6 +117,105 @@ def validate_outcome(doc_id, expected_outcome):
 
     return False, f"Unknown validation rule type: {rule_type}"
 
+
+def get_diagnostics(doc_id):
+    """
+    Extracts deep diagnostics from the flight records for a given doc_id.
+    Returns a string detailing the last known state, help reason, or errors.
+    """
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        base_dir = os.path.join(local_app_data, "RomyAgentBrowserData")
+    else:
+        base_dir = os.path.abspath(os.path.join(os.getcwd(), "RomyAgentBrowserData"))
+    user_data_dir = os.path.join(base_dir, "flight_records", doc_id)
+
+    if not os.path.exists(user_data_dir):
+        return "No flight records found."
+
+    record_files = glob.glob(os.path.join(user_data_dir, "record_*.json"))
+    if not record_files:
+        return "No flight records found in directory."
+
+    def get_iteration(filename):
+        try:
+            return int(os.path.basename(filename).split('_')[1])
+        except (IndexError, ValueError):
+            return -1
+
+    record_files.sort(key=get_iteration)
+    last_record_file = record_files[-1]
+
+    try:
+        with open(last_record_file, "r", encoding="utf-8") as f:
+            last_record = json.load(f)
+    except Exception as e:
+        return f"Failed to read last flight record: {e}"
+
+    actions = last_record.get("action_executed", [])
+    if isinstance(actions, dict):
+        actions = [actions]
+
+    diagnostic_info = []
+
+    for act in actions:
+        if isinstance(act, dict):
+            action_type = str(act.get("action", "")).upper()
+            if action_type == "ASK_HUMAN":
+                diagnostic_info.append(f"AI requested help: {act.get('reason', 'Unknown reason')}")
+            elif "ERROR" in action_type:
+                diagnostic_info.append(f"AI error: {act.get('error', act.get('raw_response', 'Unknown error'))}")
+
+    if not diagnostic_info and actions:
+        last_action = actions[-1] if isinstance(actions[-1], dict) else {}
+        action_type = last_action.get("action", "Unknown")
+        diagnostic_info.append(f"Last action: {action_type}")
+        if "target_id" in last_action:
+            diagnostic_info.append(f"Target ID: {last_action['target_id']}")
+
+    system_state = last_record.get("system_state", {})
+    if system_state:
+        if system_state.get("any_subtask_failed"):
+            diagnostic_info.append("A subtask failed previously.")
+
+    if not diagnostic_info:
+        return "No clear diagnostic reason found in last flight record."
+
+    return " | ".join(diagnostic_info)
+
+def force_reset_agent():
+    """
+    Forcefully resets the agent state via the local API, aborting any running tasks,
+    and sending a dummy human guidance event to wake it up from HITL deadlocks.
+    """
+    try:
+        req = urllib.request.Request(f"{LOCAL_API_URL}/reset", method='POST')
+        urllib.request.urlopen(req, timeout=5)
+    except Exception as e:
+        print(f"Failed to trigger /api/reset: {e}")
+
+    try:
+        payload = json.dumps({
+            "type": "SEMANTIC",
+            "xpath": "Automated Suite Abort",
+            "x": 0,
+            "y": 0,
+            "dpr": 1.0
+        }).encode('utf-8')
+        req = urllib.request.Request(
+            f"{LOCAL_API_URL}/human_guidance",
+            data=payload,
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+        urllib.request.urlopen(req, timeout=5)
+        time.sleep(2)
+        print("Agent state gracefully reset.")
+        return True
+    except Exception as e:
+        print(f"Failed to force reset agent via human guidance: {e}")
+        return False
+
 def test_harness(run_target=None):
     """
     E2E Test Harness:
@@ -264,9 +363,21 @@ def test_harness(run_target=None):
         print(f"Command: {cmd}")
         print(f"Tracking session ID: {doc_id}")
 
+        if not check_local_api_running():
+            print(f"ERROR: Local API server is not running (Connection Refused). Cannot run scenario {i}.")
+            results.append({
+                "name": name,
+                "command": cmd,
+                "elapsed": 0.0,
+                "status": "failed (API dead)",
+                "diagnostics": "Local API server unreachable."
+            })
+            continue
+
         start_time = time.time()
         status = "failed (initialization)"
         elapsed = 0
+
 
         try:
             # Enqueue the command via local API
@@ -289,8 +400,14 @@ def test_harness(run_target=None):
             else:
                 # Wait for the task to finish by polling status
                 status = "pending"
+                start_wait_time = time.time()
+                timeout_seconds = 300
                 while status not in ["completed", "failed"]:
                     time.sleep(2)
+                    if time.time() - start_wait_time > timeout_seconds:
+                        print(f"Scenario timed out after {timeout_seconds} seconds.")
+                        status = "failed (timeout)"
+                        break
                     try:
                         status_req = urllib.request.Request(f"{LOCAL_API_URL}/status/{doc_id}")
                         status_response = urllib.request.urlopen(status_req)
@@ -319,6 +436,13 @@ def test_harness(run_target=None):
             if not validation_passed:
                 status = f"failed (validation: {validation_reason})"
 
+        diag = ""
+        if "failed" in status:
+            diag = get_diagnostics(doc_id)
+            print(f"Diagnostics for {doc_id}: {diag}")
+            print("Isolating failure: Resetting agent state for next scenario...")
+            force_reset_agent()
+
         print(f"-> Scenario finished in {elapsed:.2f} seconds. Final Status: {status}")
         if validation_reason:
             print(f"Validation: {validation_reason}")
@@ -327,21 +451,24 @@ def test_harness(run_target=None):
             "name": name,
             "command": cmd,
             "elapsed": elapsed,
-            "status": status
+            "status": status,
+            "diagnostics": diag
         })
 
         # Give the system a brief moment before the next test
         time.sleep(2)
 
-    print("\n" + "=" * 80)
+    print("\n" + "=" * 120)
     print("E2E TEST SUITE SUMMARY MATRIX")
-    print("=" * 80)
-    print(f"{'SCENARIO':<60} | {'STATUS':<15} | {'TIME'}")
-    print("-" * 80)
+    print("=" * 120)
+    print(f"{'SCENARIO':<40} | {'STATUS':<25} | {'TIME':<8} | {'DIAGNOSTICS'}")
+    print("-" * 120)
     for res in results:
-        name_trunc = res['name'][:57] + "..." if len(res['name']) > 60 else res['name']
-        print(f"{name_trunc:<60} | {res['status']:<15} | {res['elapsed']:.2f}s")
-    print("=" * 80)
+        name_trunc = res['name'][:37] + "..." if len(res['name']) > 40 else res['name']
+        diag = res.get('diagnostics', '')
+        diag_trunc = diag[:40] + "..." if len(diag) > 40 else diag
+        print(f"{name_trunc:<40} | {res['status']:<25} | {res['elapsed']:>6.2f}s | {diag_trunc}")
+    print("=" * 120)
 
     success_count = sum(1 for r in results if r['status'] == 'completed')
     total_count = len(results)
