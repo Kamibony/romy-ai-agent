@@ -70,23 +70,3 @@ window.fetch = async function(...args) {
 
 console.log("Romy Network Tracker initialized. Intercepting XHR and Fetch.");
 
-// Systemic Fix: Prevent native clipboard dialogs from blocking the thread
-// Mocking the Clipboard API to return stub values immediately to prevent
-// native methods from triggering the browser permission overlay.
-if (navigator.clipboard) {
-    navigator.clipboard.readText = async () => { return ""; };
-    navigator.clipboard.writeText = async (text) => { return; };
-
-    console.log("Romy Clipboard API mocked to suppress native dialogs.");
-}
-
-// Suppress Geolocation and Notification Prompts natively on the document just in case
-if (navigator.permissions && navigator.permissions.query) {
-    const originalQuery = navigator.permissions.query;
-    navigator.permissions.query = async (params) => {
-        if (['clipboard-read', 'clipboard-write', 'notifications', 'geolocation', 'camera', 'microphone'].includes(params.name)) {
-            return { state: 'granted', onchange: null, addEventListener: () => {}, removeEventListener: () => {} };
-        }
-        return originalQuery.call(navigator.permissions, params);
-    };
-}
