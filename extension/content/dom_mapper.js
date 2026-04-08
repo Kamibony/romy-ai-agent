@@ -58,7 +58,7 @@ window.RomyDomMapper = {
             });
         }
 
-        clearHighZIndexOverlays();
+        // clearHighZIndexOverlays(); // Disabled to allow popups to be visually processed by the LLM
 
         function isInteractive(el) {
             if (el.matches(locators)) return true;

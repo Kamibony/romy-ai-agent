@@ -29,6 +29,25 @@ def check_local_api_running():
     except urllib.error.URLError:
         return False
 
+def wait_for_bridge_connection(timeout_seconds=30):
+    """Waits for the Chrome extension to establish a WebSocket connection with the local agent."""
+    print("Waiting for Chrome Extension bridge connection...")
+    start_time = time.time()
+    while time.time() - start_time < timeout_seconds:
+        try:
+            req = urllib.request.Request(f"{LOCAL_API_URL}/bridge_status")
+            response = urllib.request.urlopen(req, timeout=2)
+            data = json.loads(response.read().decode())
+            if data.get("active_websocket") is True:
+                print("Bridge connection established!")
+                return True
+        except Exception as e:
+            pass
+        time.sleep(1)
+
+    print(f"Warning: Bridge connection not established after {timeout_seconds} seconds.")
+    return False
+
 def validate_outcome(doc_id, expected_outcome):
     """
     Validates the actual outcome by reading the last flight record JSON file.
@@ -81,8 +100,14 @@ def validate_outcome(doc_id, expected_outcome):
                 if url:
                     urls_visited.append(url)
                 for act in rec.get("action_executed", []):
-                    if isinstance(act, dict) and str(act.get("action", "")).upper() == "REPLY":
-                        replies.append(str(act.get("text", "")))
+                    if isinstance(act, dict):
+                        action_type = str(act.get("action", "")).upper()
+                        if action_type == "REPLY":
+                            replies.append(str(act.get("text", "")))
+                        elif action_type in ["NAVIGATE", "OPEN_TAB"]:
+                            target_url = act.get("url")
+                            if target_url:
+                                urls_visited.append(target_url)
         except:
             pass
 
@@ -348,6 +373,11 @@ def test_harness(run_target=None):
     if not check_local_api_running():
         print("ERROR: Local API server is not running on port 8764.")
         print("Please ensure that main.py is running and logged in before executing test_e2e.py")
+        return
+
+    if not wait_for_bridge_connection():
+        print("ERROR: Could not establish bridge connection with Chrome Extension.")
+        print("Please ensure the Chrome Extension is installed, enabled, and the browser is running.")
         return
 
     results = []
