@@ -1521,6 +1521,49 @@ class AgentStateMachine:
 
         self.state = AgentState.THINKING
 
+    def trigger_supervisor_feedback_loop(self, reason: str):
+        """Dynamic feedback loop to re-plan when the agent encounters an unexpected state or deadlocks."""
+        logging.warning(f"Triggering dynamic Supervisor Feedback Loop. Reason: {reason}")
+
+        # Implement a limit to prevent infinite replanning loops
+        self.replan_count = getattr(self, 'replan_count', 0) + 1
+        if self.replan_count > 3:
+            logging.error("Dynamic replanning loop limit reached. Falling back to HITL suspension.")
+            # Triggering a non-blocking background write to update firestore before suspending
+            def firestore_update():
+                try:
+                    firestore_update_document("remote_commands", self.doc_id, {
+                        "status": "AWAITING_HUMAN_INPUT",
+                        "help_reason": "Dynamic replanning loop limit reached. The agent repeatedly failed to make progress."
+                    })
+                except Exception as e:
+                    logging.error(f"Failed to update firestore on replan limit: {e}")
+            threading.Thread(target=firestore_update, daemon=True).start()
+
+            self.state = AgentState.SUSPENDED_HITL
+            return
+
+        # Append context mismatch and request re-evaluation of plan
+        self.command_text += f"\n[System Note: The execution environment state has unexpectedly shifted or deadlocked. Reason: '{reason}'. I must re-evaluate the remainder of the plan dynamically based on the current visible screen.]"
+
+        # Fetch a new plan based on the updated command text
+        logging.info("Requesting dynamically adjusted Supervisor Plan...")
+        new_plan = supervisor_plan(self.command_text)
+
+        if new_plan:
+            logging.info(f"Dynamically adjusted plan received: {new_plan}")
+            # Replace the remaining subtasks with the new plan and reset
+            self.sub_tasks = new_plan
+            self.current_sub_task_index = 0
+            self.sub_task_iteration = 0
+            self.history.clear()
+            self.previous_action = None
+
+            # Transition back to evaluating the new plan
+            self.state = AgentState.EVALUATING
+        else:
+            logging.error("Failed to generate a dynamic plan. Proceeding with the original plan.")
+
     async def state_thinking(self, bridge):
         current_sub_task = self.sub_tasks[self.current_sub_task_index]
 
@@ -1611,21 +1654,50 @@ class AgentStateMachine:
                     logging.warning(f"Discarding action missing 'action' key: {act}")
                     continue
 
-                # Check for structural validity
+                # Strict Data Validation Layer & Graceful Degradation
                 action_type = str(act.get("action")).upper()
-                if action_type == "CLICK" and "coordinates" not in act and "target_id" not in act:
-                    logging.warning(f"Discarding invalid CLICK action missing target: {act}")
-                    continue
-                if action_type == "TYPE" and "text" not in act:
-                    logging.warning(f"Discarding invalid TYPE action missing text: {act}")
-                    continue
+                is_valid = True
+                error_reason = ""
 
-                validated_actions.append(act)
+                # Check for spatial coordinates or target
+                has_spatial = "target_id" in act or "coordinates" in act or ("x" in act and "y" in act)
+
+                if action_type == "CLICK" and not has_spatial:
+                    is_valid = False
+                    error_reason = "Missing spatial data ('target_id' or 'coordinates' or 'x,y') for CLICK."
+                elif action_type == "TYPE":
+                    if "text" not in act:
+                        is_valid = False
+                        error_reason = "Missing 'text' key for TYPE action."
+                    elif not has_spatial:
+                        # Allow Active Window Center Fallback for OS, but for WEB it's an error
+                        if self.intent == "WEB":
+                            is_valid = False
+                            error_reason = "Missing spatial data ('target_id' or 'coordinates' or 'x,y') for TYPE on WEB."
+                elif action_type == "LAUNCH_APP" and "app_name" not in act:
+                    is_valid = False
+                    error_reason = "Missing 'app_name' for LAUNCH_APP."
+                elif action_type in ["NAVIGATE", "OPEN_TAB"] and "url" not in act:
+                    is_valid = False
+                    error_reason = f"Missing 'url' for {action_type}."
+                elif action_type in ["PRESS", "PRESS_KEY"] and "key" not in act:
+                    is_valid = False
+                    error_reason = f"Missing 'key' for {action_type}."
+
+                if not is_valid:
+                    logging.warning(f"Invalid AI Action generated: {act}. Reason: {error_reason}. Degrading to ERROR action.")
+                    validated_actions.append({
+                        "action": "ERROR",
+                        "error": f"Invalid action payload generated by AI: {error_reason}",
+                        "raw_response": json.dumps(act)
+                    })
+                else:
+                    validated_actions.append(act)
 
             actions = validated_actions
 
             if not actions:
-                 raise ValueError("No valid actions returned by AI.")
+                 raise ValueError("No actions returned by AI after validation.")
         except Exception as e:
             resp_str = str(getattr(self, 'ai_response', 'None'))
             if len(resp_str) > 200:
@@ -1652,14 +1724,7 @@ class AgentStateMachine:
                  help_reason = act.get("reason", "I am stuck and need help.")
                  contextual_help_reason = f"{help_reason} | Stuck trying to execute: [{current_sub_task}]"
                  logging.info(f"AI requested human help: {contextual_help_reason}")
-                 try:
-                     await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
-                         "status": "AWAITING_HUMAN_INPUT",
-                         "help_reason": contextual_help_reason
-                     })
-                 except Exception as e:
-                     logging.error(f"Error saving help request to Firestore: {e}")
-                 self.state = AgentState.SUSPENDED_HITL
+                 self.trigger_supervisor_feedback_loop(contextual_help_reason)
                  return
 
         current_state_str = str([{"id": el.get("target_id", "N/A"), "text": el.get("text", "")[:20]} for el in self.current_ui_elements[:5]])
@@ -1674,14 +1739,7 @@ class AgentStateMachine:
             max_stuck_actions = 10 if is_only_wait else 3
             if self.action_stuck_counter >= max_stuck_actions:
                 logging.warning("Action Stuck detector triggered! AI repeatedly issuing identical cyclical actions.")
-                try:
-                    await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
-                        "status": "AWAITING_HUMAN_INPUT",
-                        "help_reason": f"Cyclical loop detected (Semantic Blindness). Repeating same action: {current_actions_str[:100]}"
-                    })
-                except Exception as e:
-                    logging.error(f"Error saving stuck state to Firestore: {e}")
-                self.state = AgentState.SUSPENDED_HITL
+                self.trigger_supervisor_feedback_loop(f"Cyclical loop detected. Repeating same action: {current_actions_str[:100]}")
                 return
         else:
             self.action_stuck_counter = 0
@@ -1692,14 +1750,7 @@ class AgentStateMachine:
             max_stuck_visual = 15 if is_only_wait else 5
             if self.stuck_counter >= max_stuck_visual:
                  logging.warning("Visual Stuck detector triggered! Same visual state for 5 iterations.")
-                 try:
-                     await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
-                         "status": "AWAITING_HUMAN_INPUT",
-                         "help_reason": f"I am stuck in a visual loop trying to execute: [{current_sub_task}]"
-                     })
-                 except Exception as e:
-                     logging.error(f"Error saving stuck state to Firestore: {e}")
-                 self.state = AgentState.SUSPENDED_HITL
+                 self.trigger_supervisor_feedback_loop(f"Stuck in a visual loop trying to execute: [{current_sub_task}]")
                  return
         else:
             self.stuck_counter = 0
@@ -1778,14 +1829,7 @@ class AgentStateMachine:
                  logging.error(f"Backend returned an error action: {action_type} - {error_msg}")
                  self.sub_task_iteration += 1
                  if self.sub_task_iteration >= self.max_sub_task_iterations:
-                     try:
-                         await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
-                             "status": "AWAITING_HUMAN_INPUT",
-                             "help_reason": f"System error: {action_type}. {error_msg}"
-                         })
-                     except Exception as fs_e:
-                         logging.error(f"Error saving help request to Firestore: {fs_e}")
-                     self.state = AgentState.SUSPENDED_HITL
+                     self.trigger_supervisor_feedback_loop(f"System error repeatedly encountered: {action_type} - {error_msg}")
                  else:
                      self.command_text += f"\n[System Note: Backend error encountered: {error_msg}. Retrying.]"
                      self.state = AgentState.EVALUATING
