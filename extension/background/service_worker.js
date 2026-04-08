@@ -1274,10 +1274,24 @@ async function handleExecuteNativeAction(payload) {
              return { success: false, error: `Unsupported action type: ${actionType}` };
         }
 
-        // Trap A: Enforce Post-Action Stabilization (1.5s) to allow SPA DOM to settle
+        // Trap A: Enforce Post-Action Stabilization to allow SPA DOM/Network to settle dynamically
         if (['CLICK', 'TYPE', 'SCROLL', 'PRESS', 'PRESS_KEY', 'PRESS_ENTER', 'NAVIGATE', 'OPEN_TAB', 'HOVER', 'RESET_VIEW'].includes(actionType)) {
-            sendTelemetryLog(`Enforcing 1.5s Post-Action Stabilization Wait after ${actionType}...`);
-            await new Promise(r => setTimeout(r, 1500));
+            sendTelemetryLog(`Waiting for dynamic SPA stability after ${actionType}...`);
+            try {
+                await new Promise((resolve, reject) => {
+                    chrome.tabs.sendMessage(activeSessionTabId, { type: 'WAIT_FOR_STABILITY', debounceMs: 500, timeoutMs: 5000 }, (response) => {
+                        if (chrome.runtime.lastError) {
+                            reject(new Error(chrome.runtime.lastError.message));
+                        } else {
+                            resolve();
+                        }
+                    });
+                });
+            } catch (e) {
+                // Fallback to static timeout if message fails
+                sendTelemetryLog(`Dynamic stability check failed (${e.message}). Falling back to static 1.5s wait.`);
+                await new Promise(r => setTimeout(r, 1500));
+            }
         }
 
         return { success: true };
