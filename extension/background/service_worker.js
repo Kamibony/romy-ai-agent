@@ -603,29 +603,6 @@ async function handleGetState(payload) {
     try {
         await cdpManager.attach(tab.id);
 
-        // Systemic Fix: Aggressively suppress ALL permission dialogs using CDP
-        // This targets the specific origin of the tab to grant clipboard, notifications, etc.
-        try {
-            const origin = new URL(tab.url).origin;
-            if (origin && origin !== "null") {
-                await cdpManager.sendCommand(tab.id, "Browser.grantPermissions", {
-                    origin: origin,
-                    permissions: [
-                        "clipboardReadWrite",
-                        "clipboardSanitizedWrite",
-                        "geolocation",
-                        "notifications",
-                        "videoCapture",
-                        "audioCapture",
-                        "sensors"
-                    ]
-                });
-                sendTelemetryLog(`Silently granted all CDP permissions to ${origin}`);
-            }
-        } catch (permErr) {
-            sendTelemetryLog(`Warning: Failed to grant permissions via CDP: ${permErr.message}`);
-        }
-
         // Fetch Device Pixel Ratio to properly scale coordinates/image bounds
         const dprResult = await cdpManager.sendCommand(tab.id, "Runtime.evaluate", {
             expression: "window.devicePixelRatio"
