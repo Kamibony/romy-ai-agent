@@ -146,25 +146,27 @@ def sanitize_extracted_parameter(val: str, param_type: str = "text") -> str:
     if not isinstance(val, str):
         return val
 
+    val = val.strip()
+
     if param_type == "url":
         # Unconditionally sanitize known URL structures
-        return val.rstrip(".,;")
+        return re.sub(r'[.,;!?\'"]+$', '', val)
 
     if param_type == "text":
         # 1. Structural matches (Email or URL-like strings)
         if "@" in val or val.startswith("www.") or val.startswith("http"):
-            return val.rstrip(".,;")
+            return re.sub(r'[.,;!?\'"]+$', '', val)
 
         # 2. Purely numeric strings (allowing internal formatting but stripping trailing artifacts)
         # e.g. "12345." -> "12345", "1,000;" -> "1,000"
-        if re.match(r'^[\d\s,]+[.,;]$', val):
-            return val.rstrip(".,;")
+        if re.match(r'^[\d\s,]+[.,;!?\'"]+$', val):
+            return re.sub(r'[.,;!?\'"]+$', '', val)
 
         # 3. Short search terms (1-3 words) with trailing punctuation, avoiding common abbreviations
         words = val.split()
-        if len(words) <= 3 and len(val) > 0 and val[-1] in ".,;":
+        if len(words) <= 3 and len(val) > 0 and val[-1] in ".,;!?'\"":
             if val.lower() not in ["dr.", "mr.", "mrs.", "ms.", "inc.", "ltd.", "co.", "corp.", "st.", "rd.", "ave."]:
-                return val.rstrip(".,;")
+                return re.sub(r'[.,;!?\'"]+$', '', val)
 
     return val
 
