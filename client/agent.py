@@ -921,6 +921,9 @@ def annotate_image_with_som(img_data: bytes, ui_elements: list, dpr: float = 1.0
                     width = int(bwidth * dpr)
                     height = int(bheight * dpr)
 
+                    if width <= 0 or height <= 0:
+                        continue
+
                     draw.rectangle([x, y, x + width, y + height], outline=(255, 0, 0, 255), width=2)
                     text = f" [{target_id}] "
                     if hasattr(font, 'getbbox'):
@@ -3378,6 +3381,22 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
             self.send_header('Content-type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps({"status": "ok"}).encode())
+        elif parsed_path.path == '/api/bridge_status':
+            try:
+                from local_bridge import bridge
+                has_active_ws = False
+                if bridge.active_websocket is not None:
+                    has_active_ws = True
+
+                self.send_response(HTTPStatus.OK)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "ok", "active_websocket": has_active_ws}).encode())
+            except Exception as e:
+                self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode())
         elif parsed_path.path == '/api/playbook_rules':
             # Extract domain and client_id from query params
             query_params = urllib.parse.parse_qs(parsed_path.query)
