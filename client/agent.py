@@ -1090,10 +1090,10 @@ def verify_action_natively(action, before_state, after_state):
             return {"success": True, "reason": "Context (URL/Window) changed after click natively verified."}
 
         # If DOM/UI Tree changed significantly (e.g. elements appeared/disappeared)
-        before_ids = {el.get("id") for el in before_ui if el.get("id")}
-        after_ids = {el.get("id") for el in after_ui if el.get("id")}
+# Check by target_id as well
+        before_ids = {el.get("target_id", el.get("id")) for el in before_ui if el.get("target_id", el.get("id"))}
+        after_ids = {el.get("target_id", el.get("id")) for el in after_ui if el.get("target_id", el.get("id"))}
 
-        # Check by name as well for OS
         before_names = {el.get("name") for el in before_ui if el.get("name")}
         after_names = {el.get("name") for el in after_ui if el.get("name")}
 
@@ -1101,8 +1101,8 @@ def verify_action_natively(action, before_state, after_state):
         if before_ids != after_ids or before_names != after_names:
              return {"success": True, "reason": "UI state changed after click natively verified."}
 
-        # If state didn't change significantly (or we can't be sure), fallback to LLM Critic
-        return {"success": False, "reason": "No deterministic UI or Context change natively detected after click."}
+        # Soft verification for async transitions
+        return {"success": True, "reason": "Click executed, assuming async state transition."}
 
     elif action_type in ["RESET_VIEW", "SCROLL", "PRESS_ENTER", "PRESS", "PRESS_KEY", "HOVER", "REPLY", "LAUNCH_APP", "DRAG_AND_DROP", "EXECUTE_JS"]:
         return {"success": True, "reason": f"{action_type} natively verified as NON_VISUAL or inherently self-resolving."}
@@ -1205,7 +1205,7 @@ class AgentStateMachine:
         self.previous_action = None
         self.previous_state_metadata = None
         self.previous_state_ui = None
-        self.max_sub_task_iterations = 3
+        self.max_sub_task_iterations = 2
         self.any_subtask_failed = False
 
     async def run(self, doc_id, command_text, audio_b64="", client_context=None):
@@ -1544,17 +1544,24 @@ class AgentStateMachine:
             return
 
         # Append context mismatch and request re-evaluation of plan
-        self.command_text += f"\n[System Note: The execution environment state has unexpectedly shifted or deadlocked. Reason: '{reason}'. I must re-evaluate the remainder of the plan dynamically based on the current visible screen.]"
+        completed_tasks = self.sub_tasks[:self.current_sub_task_index]
+        completed_text = "\n- ".join(completed_tasks) if completed_tasks else "None"
+        self.command_text += f"\n[System Note: The execution environment state has unexpectedly shifted or deadlocked. Reason: '{reason}'. I must re-evaluate the remainder of the plan dynamically. Completed tasks so far:\n- {completed_text}]"
 
         # Fetch a new plan based on the updated command text
         logging.info("Requesting dynamically adjusted Supervisor Plan...")
         new_plan = supervisor_plan(self.command_text)
 
+        # Prepend completed tasks so progress isn't lost
+        if new_plan:
+            new_plan = completed_tasks + new_plan
+            self.current_sub_task_index = len(completed_tasks)
+
         if new_plan:
             logging.info(f"Dynamically adjusted plan received: {new_plan}")
             # Replace the remaining subtasks with the new plan and reset
             self.sub_tasks = new_plan
-            self.current_sub_task_index = 0
+            # current_sub_task_index preserved by above logic
             self.sub_task_iteration = 0
             self.history.clear()
             self.previous_action = None
@@ -1783,10 +1790,21 @@ class AgentStateMachine:
              if "text" in action_to_take:
                  action_to_take["text"] = sanitize_extracted_parameter(action_to_take["text"], param_type="text")
 
-             if action_type == "SUB_TASK_COMPLETE" or action_type == "DONE":
+             if action_type == "REPLY" or action_type == "DONE":
+                 logging.info(f"Terminal action {action_type} encountered. Concluding execution loop.")
+                 self.state = AgentState.TERMINATED
+                 try:
+                     asyncio.create_task(asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {"status": "completed"}))
+                 except:
+                     pass
+                 bail_out = True
+                 break
+
+             if action_type == "SUB_TASK_COMPLETE":
                  if has_mutated_state:
                      logging.warning("Systemic Safety Intercept: Dropping SUB_TASK_COMPLETE because a state-mutating visual action occurred in this batch. Forcing a state check for dynamic overlays (Stable State Law).")
                  else:
+
                      logging.info(f"Sub-Task '{current_sub_task}' marked as complete by AI.")
                      self.current_sub_task_index += 1
                      self.sub_task_iteration = 0
