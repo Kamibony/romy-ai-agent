@@ -141,6 +141,36 @@ def trigger_abort() -> None:
     logging.critical("User requested emergency abort. Stopping agent loops...")
     ABORT_AGENT = True
 
+def sanitize_extracted_parameter(val: str, param_type: str = "text") -> str:
+    """Systemic Fix: Context-aware sanitization of LLM-extracted parameters to strip stray trailing punctuation."""
+    if not isinstance(val, str):
+        return val
+
+    # Always strip surrounding whitespace first to ensure rstrip works on the actual punctuation
+    clean_val = val.strip()
+
+    if param_type == "url":
+        # Unconditionally sanitize known URL structures
+        return clean_val.rstrip(".,;")
+
+    if param_type == "text":
+        # 1. Structural matches (Email or URL-like strings)
+        if "@" in clean_val or clean_val.startswith("www.") or clean_val.startswith("http"):
+            return clean_val.rstrip(".,;")
+
+        # 2. Purely numeric strings (allowing internal formatting but stripping trailing artifacts)
+        # e.g. "12345." -> "12345", "1,000;" -> "1,000"
+        if re.match(r'^[\d\s,]+[.,;]$', clean_val):
+            return clean_val.rstrip(".,;")
+
+        # 3. Short search terms (1-3 words) with trailing punctuation, avoiding common abbreviations
+        words = clean_val.split()
+        if len(words) <= 3 and len(clean_val) > 0 and clean_val[-1] in ".,;":
+            if clean_val.lower() not in ["dr.", "mr.", "mrs.", "ms.", "inc.", "ltd.", "co.", "corp.", "st.", "rd.", "ave."]:
+                return clean_val.rstrip(".,;")
+
+    return clean_val
+
 def agent_worker_loop() -> None:
     """
     Main Loop running on the primary thread to process commands from the COMMAND_QUEUE.
@@ -1694,6 +1724,12 @@ class AgentStateMachine:
 
              action_type = str(action_to_take.get("action", "")).upper()
 
+             # Systemic Parameter Sanitization (Trailing Punctuation from LLM Extraction)
+             if "url" in action_to_take:
+                 action_to_take["url"] = sanitize_extracted_parameter(action_to_take["url"], param_type="url")
+             if "text" in action_to_take:
+                 action_to_take["text"] = sanitize_extracted_parameter(action_to_take["text"], param_type="text")
+
              if action_type == "SUB_TASK_COMPLETE" or action_type == "DONE":
                  if has_mutated_state:
                      logging.warning("Systemic Safety Intercept: Dropping SUB_TASK_COMPLETE because a state-mutating visual action occurred in this batch. Forcing a state check for dynamic overlays (Stable State Law).")
@@ -2507,6 +2543,12 @@ def execute_voice_agent_loop() -> None:
                             action_type = act.get("action", "")
                             action_upper = str(action_type).upper()
 
+                            # Systemic Parameter Sanitization (Voice loop)
+                            if "url" in act:
+                                act["url"] = sanitize_extracted_parameter(act["url"], param_type="url")
+                            if "text" in act:
+                                act["text"] = sanitize_extracted_parameter(act["text"], param_type="text")
+
                             if action_upper == "TYPE":
                                 has_typed_in_batch = True
 
@@ -2819,6 +2861,12 @@ def execute_voice_agent_loop() -> None:
 
                     action_type = act.get("action", "")
                     action_upper = str(action_type).upper()
+
+                    # Systemic Parameter Sanitization (OS voice loop)
+                    if "url" in act:
+                        act["url"] = sanitize_extracted_parameter(act["url"], param_type="url")
+                    if "text" in act:
+                        act["text"] = sanitize_extracted_parameter(act["text"], param_type="text")
 
                     # Stuck Detector Logic
                     if act == actions[0]:

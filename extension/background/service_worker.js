@@ -431,6 +431,31 @@ async function handleGetState(payload) {
 
     let tab = null;
 
+    // Helper to apply systemic permission overrides via chrome.contentSettings
+    const applyPermissionOverrides = async (targetUrl) => {
+        try {
+            const origin = new URL(targetUrl).origin;
+            if (origin && origin !== "null") {
+                const pattern = origin + "/*";
+                if (chrome.contentSettings && chrome.contentSettings.notifications) {
+                    await chrome.contentSettings.notifications.set({ primaryPattern: pattern, setting: 'allow' });
+                }
+                if (chrome.contentSettings && chrome.contentSettings.location) {
+                    await chrome.contentSettings.location.set({ primaryPattern: pattern, setting: 'allow' });
+                }
+                if (chrome.contentSettings && chrome.contentSettings.camera) {
+                    await chrome.contentSettings.camera.set({ primaryPattern: pattern, setting: 'allow' });
+                }
+                if (chrome.contentSettings && chrome.contentSettings.microphone) {
+                    await chrome.contentSettings.microphone.set({ primaryPattern: pattern, setting: 'allow' });
+                }
+                sendTelemetryLog(`Granted native permissions via contentSettings for origin: ${origin}`);
+            }
+        } catch (e) {
+            // Ignore errors for invalid URLs
+        }
+    };
+
     if (iteration === 0) {
         // Start of a new session: always create a new tab
         const urlToOpen = targetUrl || 'https://www.google.com';
@@ -441,6 +466,7 @@ async function handleGetState(payload) {
                 resolve(newTab);
             });
         });
+        await applyPermissionOverrides(tab.url || urlToOpen);
         tab = await waitForTabStable(tab.id);
         activeSessionTabId = tab.id;
         await new Promise(r => setTimeout(r, 1000));
@@ -480,6 +506,7 @@ async function handleGetState(payload) {
 
         if (targetUrl && isEmptyOrNewTab(tab.url)) {
             sendTelemetryLog(`Navigating empty/new tab to extracted URL: ${targetUrl}`);
+            await applyPermissionOverrides(targetUrl);
             tab = await new Promise((resolve, reject) => {
                 chrome.tabs.update(tab.id, { url: targetUrl }, (updatedTab) => {
                     if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
@@ -496,6 +523,7 @@ async function handleGetState(payload) {
                     resolve(newTab);
                 });
             });
+            await applyPermissionOverrides(targetUrl || 'https://www.google.com');
             tab = await waitForTabStable(tab.id);
             activeSessionTabId = tab.id;
             await new Promise(r => setTimeout(r, 1000));
@@ -624,25 +652,9 @@ async function handleGetState(payload) {
             sendTelemetryLog(`Warning: Failed to extract UI elements via scripting: ${domErr.message}. Falling back to empty array.`);
         }
 
-        // 4. Try to fetch clipboard status (Requires document focus/permissions)
-        try {
-            const clipResults = await chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                func: async () => {
-                    try {
-                        const text = await navigator.clipboard.readText();
-                        return text ? "contains text" : "empty";
-                    } catch (e) {
-                        return "unknown"; // Might not have permission, or not text
-                    }
-                }
-            });
-            if (clipResults && clipResults[0] && clipResults[0].result) {
-                clipboardStatus = clipResults[0].result;
-            }
-        } catch (clipErr) {
-            sendTelemetryLog(`Warning: Failed to extract clipboard status: ${clipErr.message}`);
-        }
+        // 4. Clipboard status extraction is disabled natively on the web to prevent "Permitir" blocking dialogs.
+        // It is safely handled by the OS-level ctypes execution in Python (DesktopEnvironment).
+        clipboardStatus = "unknown";
 
     } catch (e) {
         sendTelemetryLog(`CDP Screenshot Error: ${e.message}`);
