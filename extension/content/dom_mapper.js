@@ -243,16 +243,35 @@ window.RomyDomMapper = {
 
         let allNodes = getAllNodes(document);
 
-        // De-noising: remove nodes that are just large wrappers (e.g. > 50% of viewport)
-        // unless they are explicitly semantic like <button>, <a>, <input>
+        // Define a strong semantic distinctness helper to protect ARIA roles and important tags
+        function isDistinctSemanticElement(node) {
+            if (node.matches('input, select, textarea, button, a, [role="button"], [role="link"], [role="menuitem"], [role="tab"]')) {
+                return true;
+            }
+            if (node.hasAttribute('aria-label')) {
+                return true;
+            }
+            if (node.tagName.toLowerCase() === 'svg') {
+                return true;
+            }
+            const className = typeof node.className === 'string' ? node.className : (node.className && node.className.baseVal ? node.className.baseVal : '');
+            if (className) {
+                const classes = className.toLowerCase().split(' ');
+                if (classes.some(c => c.includes('btn') || c.includes('button') || c.includes('action') || c.includes('submit'))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
         const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
 
+        // De-noising: remove nodes that are just large wrappers (e.g. > 50% of viewport)
+        // unless they are explicitly semantic
         allNodes = allNodes.filter(node => {
             const rect = node.getBoundingClientRect();
-            const isSemantic = node.matches('button, a, input, select, textarea, [role="button"], [role="link"]') ||
-                               node.hasAttribute('aria-label') ||
-                               node.tagName.toLowerCase() === 'svg';
+            const isSemantic = isDistinctSemanticElement(node);
 
             // If it's just a generic container marked interactive via CSS (cursor: pointer)
             // and it takes up more than 50% of the screen, we probably don't want it.
@@ -262,54 +281,10 @@ window.RomyDomMapper = {
             return true;
         });
 
-        // De-noising: Deduplicate nested overlaps (keep logical parent, discard fully contained children)
-        // If an element is fully contained inside another interactive element, and they have the same center
-        // or just broadly overlap, it often creates duplicate targets.
-        // A common heuristic: if a child is inside a parent and both are interactive, keep the parent
-        // if they essentially cover the same area, or just filter out children of interactive parents
-        // if they don't add semantic value. Or filter out the parent if the child is the real target.
-        // Actually, usually the outermost interactive element (e.g., <button> or <a>) is the logical parent,
-        // and its inner spans/svgs should be ignored.
-        const nodesToKeep = new Set(allNodes);
-
-        for (const node of allNodes) {
-            let parent = node.parentElement;
-            let interactiveParent = null;
-            while (parent) {
-                if (nodesToKeep.has(parent)) {
-                    interactiveParent = parent;
-                    break;
-                }
-                parent = parent.parentElement;
-            }
-
-            if (interactiveParent) {
-                const isDistinctChild = node.matches('input, select, textarea, button, a') ||
-                                        node.hasAttribute('aria-label') ||
-                                        node.tagName.toLowerCase() === 'svg';
-                const parentIsDistinct = interactiveParent.matches('button, a') ||
-                                         interactiveParent.hasAttribute('aria-label') ||
-                                         interactiveParent.tagName.toLowerCase() === 'svg';
-
-                if (isDistinctChild) {
-                    // If the child is distinctly interactive (like input or button), we definitely want to keep it.
-                    // But if it's inside a generic interactive wrapper (like a form or a large div),
-                    // we should probably discard the generic wrapper so we don't end up with overlapping targets.
-                    if (!parentIsDistinct) {
-                        nodesToKeep.delete(interactiveParent);
-                    }
-                } else {
-                    // If the child is not distinctly interactive (e.g., a span or svg without distinctness),
-                    // and it's inside an interactive parent, we don't need the child as a separate target.
-                    nodesToKeep.delete(node);
-                }
-            }
-        }
-
-        allNodes = Array.from(nodesToKeep);
-
-        // To prevent Layout Thrashing, we separate the read phase (getBoundingClientRect, getComputedStyle, innerText)
-        // from the write phase (node.setAttribute).
+        // Phase 1: Visibility Check
+        // We do this BEFORE deduplication to avoid the "0x0 Wrapper Trap".
+        // If a parent wrapper is 0x0, it is invisible and discarded here,
+        // leaving its visible children intact.
         const visibleNodes = [];
 
         allNodes.forEach((node) => {
@@ -345,8 +320,53 @@ window.RomyDomMapper = {
             }
         });
 
+        // Phase 2: Structural/Spatial Deduplication on Visible Nodes
+        // We use a Set to safely manage which nodes to keep, checking ancestry against visible items only.
+        const nodesToKeep = new Set(visibleNodes);
+        const visibleNodesMap = new Map();
+        visibleNodes.forEach(item => visibleNodesMap.set(item.node, item));
+
+        for (const item of visibleNodes) {
+            const node = item.node;
+            let parent = node.parentElement;
+            let visibleParentItem = null;
+
+            while (parent) {
+                if (visibleNodesMap.has(parent)) {
+                    visibleParentItem = visibleNodesMap.get(parent);
+                    break;
+                }
+                parent = parent.parentElement;
+            }
+
+            if (visibleParentItem && nodesToKeep.has(item) && nodesToKeep.has(visibleParentItem)) {
+                const isDistinctChild = isDistinctSemanticElement(node);
+                const parentIsDistinct = isDistinctSemanticElement(visibleParentItem.node);
+
+                if (isDistinctChild) {
+                    if (!parentIsDistinct) {
+                        // Child is distinct (e.g. button), parent is generic (e.g. div with pointer).
+                        // Drop the generic parent.
+                        nodesToKeep.delete(visibleParentItem);
+                    } else {
+                        // Both are distinct. e.g. SVG inside a Button.
+                        if (node.tagName.toLowerCase() === 'svg') {
+                            // Drop SVG if it's inside another distinct interactive parent
+                            nodesToKeep.delete(item);
+                        }
+                    }
+                } else {
+                    // Child is generic (e.g. span), parent is visible interactive (generic or distinct).
+                    // Drop the generic child, the parent represents the interactive region.
+                    nodesToKeep.delete(item);
+                }
+            }
+        }
+
+        const finalVisibleNodes = Array.from(nodesToKeep);
+
         // Write Phase: assign attributes and collect structured data
-        visibleNodes.forEach(({ node, rect, innerText }) => {
+        finalVisibleNodes.forEach(({ node, rect, innerText }) => {
             // Generate and inject unique ID as string of number
             const uniqueId = String(elementIdCounter++);
             node.setAttribute('data-romy-id', uniqueId);
