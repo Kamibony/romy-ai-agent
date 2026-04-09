@@ -1366,21 +1366,19 @@ class AgentStateMachine:
 
         if self.sub_task_iteration >= self.max_sub_task_iterations:
             current_sub_task = self.sub_tasks[self.current_sub_task_index]
-            logging.warning(f"Circuit Breaker triggered: Max iterations ({self.max_sub_task_iterations}) reached for sub-task '{current_sub_task}'. Marking as FAILED and advancing.")
+            logging.warning(f"Circuit Breaker triggered: Max iterations ({self.max_sub_task_iterations}) reached for sub-task '{current_sub_task}'. Fast-Failing to TRAINING_NEEDED state.")
             self.any_subtask_failed = True
 
             try:
                 await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
-                    "telemetry": f"Circuit Breaker triggered: Max retries ({self.max_sub_task_iterations}) reached for sub-task '{current_sub_task}'. Moving to next sub-task."
+                    "telemetry": f"Circuit Breaker triggered: Max retries ({self.max_sub_task_iterations}) reached for sub-task '{current_sub_task}'. Transitioning to TRAINING_NEEDED."
                 })
             except Exception as e:
                 logging.error(f"Failed to update telemetry for Circuit Breaker: {e}")
 
-            self.command_text += f"\n[System Note: Sub-task '{current_sub_task}' FAILED after {self.max_sub_task_iterations} attempts. Advancing plan automatically.]"
-            self.current_sub_task_index += 1
-            self.sub_task_iteration = 0
-            self.previous_action = None
-            self.history.clear()
+            # Capture failing context for SOP Studio
+            self.failing_actions_array = self.actions_to_execute if getattr(self, 'actions_to_execute', None) else [{"action": "UNKNOWN", "error": "Max retries reached"}]
+            self.state = AgentState.TRAINING_NEEDED
             return
 
         current_sub_task = self.sub_tasks[self.current_sub_task_index]
@@ -1494,7 +1492,7 @@ class AgentStateMachine:
             logging.error(f"Error annotating image with SoM: {e}")
             self.current_annotated_screenshot = self.current_clean_screenshot
 
-        if self.previous_action:
+        if getattr(self, "previous_action", None):
             logging.info("Attempting Orchestrator-Level Native Verification of previous action...")
             native_res = verify_action_natively(
                 self.previous_action,
@@ -1505,8 +1503,20 @@ class AgentStateMachine:
             if native_res.get("success"):
                 logging.info(f"Native verification succeeded: {native_res.get('reason')}")
                 self.command_text += f"\n[System Note: Action {self.previous_action.get('action', 'UNKNOWN')} verified successfully natively: {native_res.get('reason')}]"
+
+                # NATIVE CONDITIONAL ACCEPTANCE of SUB_TASK_COMPLETE
+                has_sub_task_complete_flag = getattr(self, "pending_sub_task_complete", False)
+                if has_sub_task_complete_flag:
+                     logging.info(f"Natively accepting deferred SUB_TASK_COMPLETE for '{current_sub_task}' post-verification.")
+                     self.current_sub_task_index += 1
+                     self.sub_task_iteration = 0
+                     self.previous_action = None
+                     self.history.clear()
+                     self.pending_sub_task_complete = False
+                     return
             else:
                 logging.info(f"Native verification didn't match: {native_res.get('reason')}")
+                self.pending_sub_task_complete = False # Drop flag if verification fails
 
         # Dynamic Sub-Task Evaluation
         if self.sub_task_iteration == 0:
@@ -1552,25 +1562,30 @@ class AgentStateMachine:
             self.state = AgentState.SUSPENDED_HITL
             return
 
-        # Append context mismatch and request re-evaluation of plan
+        # Context mismatch and request re-evaluation of plan
         completed_tasks = self.sub_tasks[:self.current_sub_task_index]
-        completed_text = "\n- ".join(completed_tasks) if completed_tasks else "None"
-        self.command_text += f"\n[System Note: The execution environment state has unexpectedly shifted or deadlocked. Reason: '{reason}'. I must re-evaluate the remainder of the plan dynamically. Completed tasks so far:\n- {completed_text}]"
+        # We NO LONGER append to self.command_text. Contextual Plan Splicing is handled by API arguments directly.
 
-        # Fetch a new plan based on the updated command text
+        # Fetch a new plan based on the original command text with exact state context injected via kwargs
         logging.info("Requesting dynamically adjusted Supervisor Plan...")
         new_plan = supervisor_plan(self.command_text, completed_tasks=completed_tasks, task_index=self.current_sub_task_index, roadblock_reason=reason)
 
-        # Prepend completed tasks so progress isn't lost
-        if new_plan:
-            new_plan = completed_tasks + new_plan
-            self.current_sub_task_index = len(completed_tasks)
-
         if new_plan:
             logging.info(f"Dynamically adjusted plan received: {new_plan}")
-            # Replace the remaining subtasks with the new plan and reset
+            # Replace the subtasks with the new complete plan
             self.sub_tasks = new_plan
-            # current_sub_task_index preserved by above logic
+
+            # Fast-forward the index logically matching the new plan
+            # Assuming the LLM returns the *entire* plan and the first N items are the identical completed tasks
+            new_index = 0
+            for i, task in enumerate(new_plan):
+                if i < len(completed_tasks) and task == completed_tasks[i]:
+                    new_index = i + 1
+                else:
+                    break
+
+            # Natively fast-forward context to the newly created divergence step
+            self.current_sub_task_index = new_index
             self.sub_task_iteration = 0
             self.history.clear()
             self.previous_action = None
@@ -1788,6 +1803,14 @@ class AgentStateMachine:
         mutating_actions = {"CLICK", "TYPE", "PRESS", "PRESS_KEY", "PRESS_ENTER", "DRAG_AND_DROP", "SCROLL", "LAUNCH_APP", "EXECUTE_JS", "NAVIGATE", "OPEN_TAB"}
         non_visual_actions = {"RESET_VIEW", "SCROLL", "PRESS_ENTER", "PRESS", "PRESS_KEY", "HOVER", "REPLY", "LAUNCH_APP", "DRAG_AND_DROP", "EXECUTE_JS"}
 
+        # Look-Ahead Flagging for Native Conditional Acceptance
+        has_sub_task_complete_flag = any(str(act.get("action", "")).upper() == "SUB_TASK_COMPLETE" for act in self.actions_to_execute)
+        has_mutating_action = any(str(act.get("action", "")).upper() in mutating_actions for act in self.actions_to_execute)
+
+        if has_sub_task_complete_flag and has_mutating_action:
+            self.pending_sub_task_complete = True
+            logging.info("Look-Ahead: Mutating action + SUB_TASK_COMPLETE detected. Enabling Native Conditional Acceptance post-execution.")
+
         for action_idx, action_to_take in enumerate(self.actions_to_execute):
              if self.interrupt_event.is_set():
                  logging.info("Asynchronous semantic interrupt detected during action execution! Bailing out early.")
@@ -1813,13 +1836,19 @@ class AgentStateMachine:
                  break
 
              if action_type == "SUB_TASK_COMPLETE":
-                 logging.info(f"Sub-Task '{current_sub_task}' marked as complete by AI. Natively accepting conditional success.")
-                 self.current_sub_task_index += 1
-                 self.sub_task_iteration = 0
-                 self.previous_action = None
-                 self.history.clear()
-                 bail_out = True
-                 break
+                 # Handled by Look-Ahead Flagging (Native Conditional Acceptance) after mutating actions
+                 if has_mutating_action:
+                     logging.info(f"Skipping inline SUB_TASK_COMPLETE execution to allow native conditional acceptance post-action.")
+                     continue
+                 else:
+                     # Standard behavior if it's the only action
+                     logging.info(f"Sub-Task '{current_sub_task}' marked as complete by AI. Natively accepting conditional success.")
+                     self.current_sub_task_index += 1
+                     self.sub_task_iteration = 0
+                     self.previous_action = None
+                     self.history.clear()
+                     bail_out = True
+                     break
 
              if action_type in mutating_actions:
                  if action_type not in non_visual_actions:
@@ -2094,20 +2123,34 @@ class AgentStateMachine:
         self.state = AgentState.EVALUATING
 
     async def state_training_needed(self):
-        logging.warning("Entering TRAINING_NEEDED state. Capturing context and transitioning to HITL.")
+        logging.warning("Entering TRAINING_NEEDED state. Capturing structured context and transitioning to HITL.")
         current_sub_task = self.sub_tasks[self.current_sub_task_index] if self.current_sub_task_index < len(self.sub_tasks) else "Unknown Task"
 
-        # Save exact context to Firestore
+        # Save exact structured context to Firestore for the Flutter SOP Studio
         try:
             safe_screenshot_bytes = getattr(self, 'current_clean_screenshot', b"")
             safe_screenshot = base64.b64encode(safe_screenshot_bytes).decode('utf-8') if safe_screenshot_bytes else ""
 
+            failing_actions = getattr(self, 'failing_actions_array', [])
+            dom_snapshot = []
+            if getattr(self, 'current_ui_elements', None):
+                # Trim the DOM snapshot to keep payload manageable while preserving structural context
+                for el in self.current_ui_elements[:50]:
+                    dom_snapshot.append({
+                        "target_id": el.get("target_id", el.get("id", "")),
+                        "type": el.get("type", ""),
+                        "text": str(el.get("text", ""))[:50],
+                        "bounds": el.get("bounds", {})
+                    })
+
             await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
                 "status": "AWAITING_HUMAN_INPUT",
-                "help_reason": f"Action Hash Circuit Breaker tripped. Repeatedly failed on sub-task: [{current_sub_task}]",
+                "help_reason": f"Fast-Fail Circuit Breaker tripped on physical bottleneck. Repeatedly failed on sub-task: [{current_sub_task}]",
                 "screenshot_b64": safe_screenshot,
-                "failing_actions": getattr(self, 'failing_actions_array', []),
-                "failing_goal": current_sub_task
+                "failing_actions": failing_actions,
+                "failing_goal": current_sub_task,
+                "dom_snapshot": dom_snapshot,
+                "target_url": getattr(self, "current_url", "unknown")
             })
         except Exception as e:
             logging.error(f"Failed to update firestore with TRAINING_NEEDED context: {e}")

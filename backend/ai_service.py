@@ -153,8 +153,7 @@ def supervisor_plan_with_gemini(command_text: str, completed_tasks: list[str] = 
             system_instruction += (
                 f"\n\nThe agent encountered a roadblock while executing task {task_index}. Reason: {roadblock_reason}. "
                 f"The following tasks have already been completed: {completed_tasks}. "
-                "Do NOT re-generate the completed tasks. Instead, generate a NEW sequence of sub-tasks to complete the remaining work, adjusting for the roadblock. "
-                "Output ONLY the new sub-tasks that need to be appended to the completed tasks."
+                "You must output the ENTIRE logical plan from start to finish. Include the completed tasks exactly as they are at the beginning of your array, and then generate a NEW sequence of sub-tasks to complete the remaining work, adjusting for the roadblock."
             )
 
         response = client.models.generate_content(

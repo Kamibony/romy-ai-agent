@@ -821,9 +821,33 @@ async function handleExecuteNativeAction(payload) {
             // Mitigate Hydration & CLS Delays by waiting for stability before clicking
             try {
                 await new Promise((resolve) => {
+                    let isResolved = false;
+                    let navListener = null;
+
+                    const cleanup = () => {
+                        if (isResolved) return;
+                        isResolved = true;
+                        if (navListener) {
+                            chrome.webNavigation.onCommitted.removeListener(navListener);
+                        }
+                    };
+
+                    navListener = (details) => {
+                        if (details.tabId === activeSessionTabId && details.frameId === 0) {
+                            sendTelemetryLog(`[Navigation] Hard navigation detected. Resolving stability instantly.`);
+                            cleanup();
+                            resolve();
+                        }
+                    };
+                    chrome.webNavigation.onCommitted.addListener(navListener);
+
                     chrome.tabs.sendMessage(activeSessionTabId, { type: 'WAIT_FOR_STABILITY', debounceMs: 500, timeoutMs: 3000 }, (response) => {
-                        // ignore errors from sendMessage (e.g. if content script isn't fully ready)
-                        const err = chrome.runtime.lastError;
+                        if (isResolved) {
+                            let _ = chrome.runtime.lastError; // Suppress unchecked error warning
+                            return;
+                        }
+                        cleanup();
+                        let _ = chrome.runtime.lastError; // ignore errors from sendMessage (e.g. if content script isn't fully ready or port closed)
                         resolve();
                     });
                 });
