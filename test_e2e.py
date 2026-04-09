@@ -431,7 +431,7 @@ def test_harness(run_target=None):
                 # Wait for the task to finish by polling status
                 status = "pending"
                 start_wait_time = time.time()
-                timeout_seconds = 300
+                timeout_seconds = 150
                 while status not in ["completed", "failed"]:
                     time.sleep(2)
                     if time.time() - start_wait_time > timeout_seconds:

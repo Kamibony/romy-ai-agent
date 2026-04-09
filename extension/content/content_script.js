@@ -84,12 +84,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 async function handleWaitForStability(request, sendResponse) {
-    await waitForDomStability(request.debounceMs || 1000, request.timeoutMs || 5000);
+    await waitForDomStability(request.debounceMs || 500, request.timeoutMs || 2500);
     sendResponse({ success: true });
 }
 
 async function handleRequestDomMap(sendResponse) {
-    await waitForDomStability(1000, 5000);
+    await waitForDomStability(500, 2500);
     try {
         const elements = window.RomyDomMapper.extractUIElements();
         sendResponse({ elements });
@@ -103,7 +103,7 @@ async function handleRequestDomMap(sendResponse) {
  * Stability is defined as no new DOM mutations AND zero active network requests for `debounceMs`.
  * If stability isn't reached within `timeoutMs`, the Promise resolves anyway as a fallback.
  */
-function waitForDomStability(debounceMs = 1000, timeoutMs = 5000) {
+function waitForDomStability(debounceMs = 500, timeoutMs = 2500) {
     return new Promise((resolve) => {
         let debounceTimer;
         let timeoutTimer;
