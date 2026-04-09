@@ -315,7 +315,18 @@ window.RomyDomMapper = {
 
             if (isVisible) {
                 // Perform layout-dependent reads in this phase
-                const innerText = node.innerText || node.value || "";
+                let innerText = node.innerText || "";
+                const tag = node.tagName.toLowerCase();
+                if ((tag === 'input' || tag === 'textarea' || tag === 'select') && node.value) {
+                    // For inputs, value is the primary source of truth for typed text
+                    if (innerText && innerText !== node.value) {
+                        innerText = innerText + " " + node.value;
+                    } else {
+                        innerText = node.value;
+                    }
+                } else if (!innerText && node.value) {
+                    innerText = node.value;
+                }
                 visibleNodes.push({ node, rect, innerText });
             }
         });
