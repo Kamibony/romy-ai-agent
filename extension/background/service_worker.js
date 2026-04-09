@@ -1279,7 +1279,32 @@ async function handleExecuteNativeAction(payload) {
             sendTelemetryLog(`Waiting for dynamic SPA stability after ${actionType}...`);
             try {
                 await new Promise((resolve, reject) => {
+                    let isResolved = false;
+                    let navListener = null;
+
+                    const cleanup = () => {
+                        if (isResolved) return;
+                        isResolved = true;
+                        if (navListener) {
+                            chrome.webNavigation.onCommitted.removeListener(navListener);
+                        }
+                    };
+
+                    navListener = (details) => {
+                        if (details.tabId === activeSessionTabId && details.frameId === 0) {
+                            sendTelemetryLog(`[Navigation] Hard navigation detected. Resolving stability instantly.`);
+                            cleanup();
+                            resolve();
+                        }
+                    };
+                    chrome.webNavigation.onCommitted.addListener(navListener);
+
                     chrome.tabs.sendMessage(activeSessionTabId, { type: 'WAIT_FOR_STABILITY', debounceMs: 500, timeoutMs: 5000 }, (response) => {
+                        if (isResolved) {
+                            let _ = chrome.runtime.lastError; // Suppress unchecked error warning
+                            return;
+                        }
+                        cleanup();
                         if (chrome.runtime.lastError) {
                             reject(new Error(chrome.runtime.lastError.message));
                         } else {

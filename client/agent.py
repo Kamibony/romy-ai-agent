@@ -67,6 +67,7 @@ class AgentState(Enum):
     THINKING = "THINKING"
     ACTING = "ACTING"
     SUSPENDED_HITL = "SUSPENDED_HITL"
+    TRAINING_NEEDED = "TRAINING_NEEDED"
     LEARNING_ROUTINE = "LEARNING_ROUTINE"
     TERMINATED = "TERMINATED"
 
@@ -979,13 +980,19 @@ def pre_flight_check(command_text: str) -> dict:
         logging.error(f"Error in pre-flight check: {e}")
         return {"status": "ok"}
 
-def supervisor_plan(command_text: str) -> list:
+def supervisor_plan(command_text: str, completed_tasks: list = None, task_index: int = None, roadblock_reason: str = None) -> list:
     if not CURRENT_TOKEN:
         return []
 
     url = config.SUPERVISOR_PLAN_ENDPOINT
 
     payload = {"command_text": command_text}
+    if completed_tasks is not None:
+        payload["completed_tasks"] = completed_tasks
+    if task_index is not None:
+        payload["task_index"] = task_index
+    if roadblock_reason is not None:
+        payload["roadblock_reason"] = roadblock_reason
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
     try:
         response = authenticated_request("POST", url, json=payload, headers=headers, timeout=(10, 30))
@@ -1301,6 +1308,8 @@ class AgentStateMachine:
                     await self.state_acting(bridge)
                 elif self.state == AgentState.SUSPENDED_HITL:
                     await self.state_suspended_hitl()
+                elif self.state == AgentState.TRAINING_NEEDED:
+                    await self.state_training_needed()
                 elif self.state == AgentState.LEARNING_ROUTINE:
                     await self.state_learning_routine()
 
@@ -1550,7 +1559,7 @@ class AgentStateMachine:
 
         # Fetch a new plan based on the updated command text
         logging.info("Requesting dynamically adjusted Supervisor Plan...")
-        new_plan = supervisor_plan(self.command_text)
+        new_plan = supervisor_plan(self.command_text, completed_tasks=completed_tasks, task_index=self.current_sub_task_index, roadblock_reason=reason)
 
         # Prepend completed tasks so progress isn't lost
         if new_plan:
@@ -1739,18 +1748,21 @@ class AgentStateMachine:
         # If the only action is WAIT, do not trigger the stuck detectors (unless waiting forever)
         is_only_wait = len(actions) == 1 and str(actions[0].get("action")).upper() == "WAIT"
 
-        # Stuck Action Detector: Check if the AI is repeating the exact same action output consecutively
+        # Fast-Fail to Memory (Action Hash Circuit Breaker)
         current_actions_str = json.dumps(actions, sort_keys=True)
-        if hasattr(self, 'previous_actions_str') and self.previous_actions_str == current_actions_str:
+        current_action_hash = hashlib.md5(current_actions_str.encode('utf-8')).hexdigest()
+
+        if hasattr(self, 'previous_action_hash') and self.previous_action_hash == current_action_hash:
             self.action_stuck_counter = getattr(self, 'action_stuck_counter', 0) + 1
-            max_stuck_actions = 10 if is_only_wait else 3
+            max_stuck_actions = 10 if is_only_wait else 2 # Fast fail after 2 identical repeating loops
             if self.action_stuck_counter >= max_stuck_actions:
-                logging.warning("Action Stuck detector triggered! AI repeatedly issuing identical cyclical actions.")
-                self.trigger_supervisor_feedback_loop(f"Cyclical loop detected. Repeating same action: {current_actions_str[:100]}")
+                logging.warning("Action Hash Circuit Breaker tripped! AI repeatedly issuing identical actions.")
+                self.failing_actions_array = actions
+                self.state = AgentState.TRAINING_NEEDED
                 return
         else:
             self.action_stuck_counter = 0
-            self.previous_actions_str = current_actions_str
+            self.previous_action_hash = current_action_hash
 
         if self.history and self.history[-1] == current_state_str:
             self.stuck_counter = getattr(self, 'stuck_counter', 0) + 1
@@ -1801,15 +1813,11 @@ class AgentStateMachine:
                  break
 
              if action_type == "SUB_TASK_COMPLETE":
-                 if has_mutated_state:
-                     logging.warning("Systemic Safety Intercept: Dropping SUB_TASK_COMPLETE because a state-mutating visual action occurred in this batch. Forcing a state check for dynamic overlays (Stable State Law).")
-                 else:
-
-                     logging.info(f"Sub-Task '{current_sub_task}' marked as complete by AI.")
-                     self.current_sub_task_index += 1
-                     self.sub_task_iteration = 0
-                     self.previous_action = None
-                     self.history.clear()
+                 logging.info(f"Sub-Task '{current_sub_task}' marked as complete by AI. Natively accepting conditional success.")
+                 self.current_sub_task_index += 1
+                 self.sub_task_iteration = 0
+                 self.previous_action = None
+                 self.history.clear()
                  bail_out = True
                  break
 
@@ -2084,6 +2092,27 @@ class AgentStateMachine:
         self.iteration += 1
         self.sub_task_iteration += 1
         self.state = AgentState.EVALUATING
+
+    async def state_training_needed(self):
+        logging.warning("Entering TRAINING_NEEDED state. Capturing context and transitioning to HITL.")
+        current_sub_task = self.sub_tasks[self.current_sub_task_index] if self.current_sub_task_index < len(self.sub_tasks) else "Unknown Task"
+
+        # Save exact context to Firestore
+        try:
+            safe_screenshot_bytes = getattr(self, 'current_clean_screenshot', b"")
+            safe_screenshot = base64.b64encode(safe_screenshot_bytes).decode('utf-8') if safe_screenshot_bytes else ""
+
+            await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
+                "status": "AWAITING_HUMAN_INPUT",
+                "help_reason": f"Action Hash Circuit Breaker tripped. Repeatedly failed on sub-task: [{current_sub_task}]",
+                "screenshot_b64": safe_screenshot,
+                "failing_actions": getattr(self, 'failing_actions_array', []),
+                "failing_goal": current_sub_task
+            })
+        except Exception as e:
+            logging.error(f"Failed to update firestore with TRAINING_NEEDED context: {e}")
+
+        self.state = AgentState.SUSPENDED_HITL
 
     async def state_suspended_hitl(self):
         logging.info("Agent is SUSPENDED, awaiting HITL event (Ghost Click)...")
@@ -2616,10 +2645,7 @@ def execute_voice_agent_loop() -> None:
                             if action_upper == "TYPE":
                                 has_typed_in_batch = True
 
-                            # Intercept premature sub-task completions to enforce Stable State Law
-                            if action_upper == "SUB_TASK_COMPLETE" and has_typed_in_batch:
-                                logging.warning("Systemic Safety Intercept: Dropping SUB_TASK_COMPLETE because a TYPE action occurred in this batch. Forcing a state check for dynamic overlays.")
-                                break
+
 
                             logging.info(f"Backend returned action [{action_idx+1}/{len(actions)}]: {action_upper}")
 

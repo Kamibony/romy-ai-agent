@@ -129,7 +129,7 @@ def pre_flight_check_with_gemini(command_text: str) -> dict:
         print(f"Error in pre-flight check: {e}")
         return {"status": "ok"}
 
-def supervisor_plan_with_gemini(command_text: str) -> list[str]:
+def supervisor_plan_with_gemini(command_text: str, completed_tasks: list[str] = None, task_index: int = None, roadblock_reason: str = None) -> list[str]:
     """
     Breaks down a given task into sequential sub-tasks.
     Returns a list of strings representing the sub-tasks.
@@ -148,6 +148,14 @@ def supervisor_plan_with_gemini(command_text: str) -> list[str]:
             "Output strictly a JSON array of strings, where each string is a prefixed sub-task. "
             "Example output: [\"[WEB] Navigate to pelikan.cz\", \"[WEB] Enter origin city\", \"[OS] Open Calculator\", \"[WEB] Select departure date\"]"
         )
+
+        if roadblock_reason:
+            system_instruction += (
+                f"\n\nThe agent encountered a roadblock while executing task {task_index}. Reason: {roadblock_reason}. "
+                f"The following tasks have already been completed: {completed_tasks}. "
+                "Do NOT re-generate the completed tasks. Instead, generate a NEW sequence of sub-tasks to complete the remaining work, adjusting for the roadblock. "
+                "Output ONLY the new sub-tasks that need to be appended to the completed tasks."
+            )
 
         response = client.models.generate_content(
             model='gemini-2.5-flash',
@@ -587,7 +595,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "You must output the exact target_id of the Set-of-Mark box, or if unavailable, the [x, y] coordinates representing the center of the target element.\n\n"
             "Supported actions:\n"
             "- {\"action\": \"CLICK\", \"target_id\": \"<id>\", \"coordinates\": [x, y]} (CRUCIAL: If there is a GDPR cookie banner, consent modal, or popup overlapping the page, your VERY FIRST action MUST be to CLICK its \"Accept\", \"Agree\", or \"Close\" button before attempting to interact with any other elements on the main page.)\n"
-            "- {\"action\": \"HOVER\", \"target_id\": \"<id>\", \"coordinates\": [x, y]} (CRITICAL: Use this to expand parent menus, dropdowns, or tooltips if a target element is visually hidden but logically expected to be inside a hover menu.)\n"
+            "- {\"action\": \"HOVER\", \"target_id\": \"<id>\", \"coordinates\": [x, y]} (CRITICAL: When interacting with complex navigation bars, mega-menus, or elements that might be hidden inside dropdowns (like on e-commerce sites), you MUST output a HOVER action on the parent category to reveal the sub-menu BEFORE attempting to CLICK the child item.)\n"
             "- {\"action\": \"TYPE\", \"target_id\": \"<id>\", \"coordinates\": [x, y], \"text\": \"<text to type>\", \"submit\": true} (this automatically focuses the element, types, and natively submits by pressing Enter if submit=true)\n"
             "- {\"action\": \"DRAG_AND_DROP\", \"start_x\": <x1>, \"start_y\": <y1>, \"end_x\": <x2>, \"end_y\": <y2>} (Executes a continuous physical mouse drag from start coordinates to end coordinates. Required for drawing or moving items in OS.)\n"
             "- {\"action\": \"SEARCH\", \"target_id\": \"<id>\", \"coordinates\": [x, y], \"text\": \"<search query>\"} (use this explicitly when searching. It acts identically to TYPE with submit=true, bypassing autocomplete dropdowns completely.)\n"
