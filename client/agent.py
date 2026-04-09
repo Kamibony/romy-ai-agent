@@ -1212,7 +1212,7 @@ class AgentStateMachine:
         self.previous_action = None
         self.previous_state_metadata = None
         self.previous_state_ui = None
-        self.max_sub_task_iterations = 2
+        self.max_sub_task_iterations = 3
         self.any_subtask_failed = False
 
     async def run(self, doc_id, command_text, audio_b64="", client_context=None):
@@ -1364,23 +1364,6 @@ class AgentStateMachine:
             await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {"status": "completed"})
             return
 
-        if self.sub_task_iteration >= self.max_sub_task_iterations:
-            current_sub_task = self.sub_tasks[self.current_sub_task_index]
-            logging.warning(f"Circuit Breaker triggered: Max iterations ({self.max_sub_task_iterations}) reached for sub-task '{current_sub_task}'. Fast-Failing to TRAINING_NEEDED state.")
-            self.any_subtask_failed = True
-
-            try:
-                await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
-                    "telemetry": f"Circuit Breaker triggered: Max retries ({self.max_sub_task_iterations}) reached for sub-task '{current_sub_task}'. Transitioning to TRAINING_NEEDED."
-                })
-            except Exception as e:
-                logging.error(f"Failed to update telemetry for Circuit Breaker: {e}")
-
-            # Capture failing context for SOP Studio
-            self.failing_actions_array = self.actions_to_execute if getattr(self, 'actions_to_execute', None) else [{"action": "UNKNOWN", "error": "Max retries reached"}]
-            self.state = AgentState.TRAINING_NEEDED
-            return
-
         current_sub_task = self.sub_tasks[self.current_sub_task_index]
         logging.info(f"--- Executing Sub-Task {self.current_sub_task_index + 1}/{len(self.sub_tasks)}: {current_sub_task} ---")
 
@@ -1504,6 +1487,10 @@ class AgentStateMachine:
                 logging.info(f"Native verification succeeded: {native_res.get('reason')}")
                 self.command_text += f"\n[System Note: Action {self.previous_action.get('action', 'UNKNOWN')} verified successfully natively: {native_res.get('reason')}]"
 
+                # Smart Circuit Breaker Reset: Reward healthy, multi-step progress
+                logging.info("Resetting sub_task_iteration to 0 due to healthy state-mutating progress.")
+                self.sub_task_iteration = 0
+
                 # NATIVE CONDITIONAL ACCEPTANCE of SUB_TASK_COMPLETE
                 has_sub_task_complete_flag = getattr(self, "pending_sub_task_complete", False)
                 if has_sub_task_complete_flag:
@@ -1537,6 +1524,22 @@ class AgentStateMachine:
                 self.history.clear()
                 # Skip thinking and acting, re-evaluate the next sub-task
                 return
+
+        if self.sub_task_iteration >= self.max_sub_task_iterations:
+            logging.warning(f"Circuit Breaker triggered: Max iterations ({self.max_sub_task_iterations}) reached for sub-task '{current_sub_task}'. Fast-Failing to TRAINING_NEEDED state.")
+            self.any_subtask_failed = True
+
+            try:
+                await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {
+                    "telemetry": f"Circuit Breaker triggered: Max retries ({self.max_sub_task_iterations}) reached for sub-task '{current_sub_task}'. Transitioning to TRAINING_NEEDED."
+                })
+            except Exception as e:
+                logging.error(f"Failed to update telemetry for Circuit Breaker: {e}")
+
+            # Capture failing context for SOP Studio
+            self.failing_actions_array = self.actions_to_execute if getattr(self, 'actions_to_execute', None) else [{"action": "UNKNOWN", "error": "Max retries reached"}]
+            self.state = AgentState.TRAINING_NEEDED
+            return
 
         self.state = AgentState.THINKING
 
