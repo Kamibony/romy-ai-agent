@@ -194,8 +194,11 @@ def evaluate_plan_progress_with_gemini(command_text: str, current_sub_task: str,
     system_instruction = (
         "You are a State Evaluation Agent. Your job is to analyze the current visual and structural state of a UI "
         "and determine if the 'Current Sub-Task' has ALREADY been successfully accomplished. "
-        "For example, if the sub-task is 'Search for YouTube videos' and the current screen already shows YouTube search results for the query, "
-        "you must mark it as accomplished. If the sub-task is 'Navigate to pelikan.cz' and the browser is already on pelikan.cz, it is accomplished.\n\n"
+        "CRITICAL INSTRUCTION - LOOK FOR CONSEQUENCES: You must evaluate the OUTCOME of actions, not just the starting state. "
+        "For example, if the sub-task is 'Search for YouTube videos about AI', you should look for the *search results page* showing videos about AI, "
+        "not just verifying that the words are typed into a search box. "
+        "If the sub-task is 'Navigate to pelikan.cz', and the browser is on pelikan.cz, it is accomplished. "
+        "If you see the desired end-state of the sub-task, mark it as accomplished immediately to prevent phantom execution loops.\n\n"
         "Output strictly a JSON object with a boolean 'is_accomplished' and a string 'reason' explaining why."
     )
 

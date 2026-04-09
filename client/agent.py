@@ -925,15 +925,24 @@ def annotate_image_with_som(img_data: bytes, ui_elements: list, dpr: float = 1.0
                     if width <= 0 or height <= 0:
                         continue
 
-                    draw.rectangle([x, y, x + width, y + height], outline=(255, 0, 0, 255), width=2)
+                    # Standardize coordinates to prevent mathematical errors (y1 < y0)
+                    x0, y0 = x, y
+                    x1, y1 = max(x0 + 1, x + width), max(y0 + 1, y + height)
+
+                    draw.rectangle([x0, y0, x1, y1], outline=(255, 0, 0, 255), width=2)
                     text = f" [{target_id}] "
                     if hasattr(font, 'getbbox'):
                         bbox = font.getbbox(text)
                         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
                     else:
                         tw, th = len(text) * 6, 12
-                    draw.rectangle([x, max(0, y - th), x + tw, y], fill=(255, 0, 0, 255))
-                    draw.text((x, max(0, y - th)), text, fill=(255, 255, 255, 255), font=font)
+
+                    label_y0 = max(0, y0 - th)
+                    label_y1 = max(label_y0 + 1, y0)
+                    label_x1 = max(x0 + 1, x0 + tw)
+
+                    draw.rectangle([x0, label_y0, label_x1, label_y1], fill=(255, 0, 0, 255))
+                    draw.text((x0, label_y0), text, fill=(255, 255, 255, 255), font=font)
                 except Exception as e:
                     logging.warning(f"Error drawing SoM box for ID {target_id}: {e}")
 
@@ -1491,10 +1500,20 @@ class AgentStateMachine:
                 logging.info("Resetting sub_task_iteration to 0 due to healthy state-mutating progress.")
                 self.sub_task_iteration = 0
 
-                # NATIVE CONDITIONAL ACCEPTANCE of SUB_TASK_COMPLETE
+                # STRONG NATIVE CONDITIONAL ACCEPTANCE
+                # If we natively verified a major state change (like URL navigation or major UI shift),
+                # and it's a typical generic sub-task (like navigate, search), we can forcefully accept it
+                # to bypass overly strict phantom LLM evaluator loops.
+                action_type = str(self.previous_action.get('action', '')).upper()
                 has_sub_task_complete_flag = getattr(self, "pending_sub_task_complete", False)
-                if has_sub_task_complete_flag:
-                     logging.info(f"Natively accepting deferred SUB_TASK_COMPLETE for '{current_sub_task}' post-verification.")
+
+                # Heuristic: Is this a generic task type where native verification strongly implies completion?
+                is_generic_task = any(kw in current_sub_task.lower() for kw in ["navigate", "search", "přejdi", "vyhledej"])
+                is_strong_signal = action_type in ["NAVIGATE", "OPEN_TAB"] or (action_type == "CLICK" and "Context (URL/Window) changed" in native_res.get("reason", ""))
+
+                if has_sub_task_complete_flag or (is_generic_task and is_strong_signal):
+                     logging.info(f"Strong Native Conditional Acceptance triggered for '{current_sub_task}'. Forcing SUB_TASK_COMPLETE post-verification.")
+                     self.command_text += f"\n[System Note: Sub-task '{current_sub_task}' verified complete natively via strong signal.]"
                      self.current_sub_task_index += 1
                      self.sub_task_iteration = 0
                      self.previous_action = None
@@ -1711,9 +1730,27 @@ class AgentStateMachine:
                 elif action_type == "LAUNCH_APP" and "app_name" not in act:
                     is_valid = False
                     error_reason = "Missing 'app_name' for LAUNCH_APP."
-                elif action_type in ["NAVIGATE", "OPEN_TAB"] and "url" not in act:
-                    is_valid = False
-                    error_reason = f"Missing 'url' for {action_type}."
+                elif action_type in ["NAVIGATE", "OPEN_TAB"]:
+                    if "url" not in act or not str(act["url"]).strip():
+                        # Intelligent URL Extraction Fallback
+                        import re
+                        current_task_str = getattr(self, "sub_tasks", [""])[getattr(self, "current_sub_task_index", 0)] if hasattr(self, "sub_tasks") else ""
+                        url_match = re.search(r"(?P<url>(?:https?://|www\.)[^\s]+|[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/[^\s]*)?)", current_task_str)
+                        if url_match:
+                            act["url"] = url_match.group("url")
+                            logging.info(f"Intelligently extracted fallback URL '{act['url']}' for {action_type} from task string.")
+                        else:
+                            is_valid = False
+                            error_reason = f"Missing or empty 'url' for {action_type} and could not intelligently extract."
+
+                    if is_valid and "url" in act:
+                        url = str(act["url"]).strip()
+                        if not url.startswith("http://") and not url.startswith("https://"):
+                            if url.startswith("localhost") or url.startswith("127.0.0.1"):
+                                act["url"] = "http://" + url
+                            else:
+                                act["url"] = "https://" + url
+                            logging.info(f"Standardized URL protocol to '{act['url']}'.")
                 elif action_type in ["PRESS", "PRESS_KEY"] and "key" not in act:
                     is_valid = False
                     error_reason = f"Missing 'key' for {action_type}."
