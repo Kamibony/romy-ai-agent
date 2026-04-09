@@ -35,6 +35,9 @@ class PreFlightRequest(BaseModel):
 
 class SupervisorPlanRequest(BaseModel):
     command_text: str
+    completed_tasks: Optional[List[str]] = None
+    task_index: Optional[int] = None
+    roadblock_reason: Optional[str] = None
 
 class EvaluatePlanProgressRequest(BaseModel):
     command_text: str
@@ -137,7 +140,7 @@ def supervisor_plan(request: SupervisorPlanRequest, uid: str = Depends(verify_fi
             detail="User license is not active.",
         )
 
-    sub_tasks = supervisor_plan_with_gemini(request.command_text)
+    sub_tasks = supervisor_plan_with_gemini(request.command_text, request.completed_tasks, request.task_index, request.roadblock_reason)
     return {"sub_tasks": sub_tasks}
 
 @app.post("/api/evaluate_plan_progress")
