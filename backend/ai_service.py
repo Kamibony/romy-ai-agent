@@ -153,7 +153,11 @@ def supervisor_plan_with_gemini(command_text: str, completed_tasks: list[str] = 
             system_instruction += (
                 f"\n\nThe agent encountered a roadblock while executing task {task_index}. Reason: {roadblock_reason}. "
                 f"The following tasks have already been completed: {completed_tasks}. "
-                "You must output the ENTIRE logical plan from start to finish. Include the completed tasks exactly as they are at the beginning of your array, and then generate a NEW sequence of sub-tasks to complete the remaining work, adjusting for the roadblock."
+                "CRITICAL: The previous sub-task failed repeatedly. DO NOT simply repeat the original plan. "
+                "You MUST inject a specific recovery sub-task immediately after the completed tasks to handle the roadblock "
+                "(e.g., 'Find and close cookie banner', 'Dismiss blocking modal', or 'Scroll down to reveal alternative targets') "
+                "before attempting the remaining logic. "
+                "You must output the ENTIRE logical plan from start to finish. Include the completed tasks exactly as they are at the beginning of your array, followed by your new recovery sub-task(s), and then generate the remaining sequence of sub-tasks to complete the work."
             )
 
         response = client.models.generate_content(
