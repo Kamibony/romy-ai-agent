@@ -1496,33 +1496,14 @@ class AgentStateMachine:
                 logging.info(f"Native verification succeeded: {native_res.get('reason')}")
                 self.command_text += f"\n[System Note: Action {self.previous_action.get('action', 'UNKNOWN')} verified successfully natively: {native_res.get('reason')}]"
 
-                # Smart Circuit Breaker Reset: Reward healthy, multi-step progress
-                logging.info("Resetting sub_task_iteration to 0 due to healthy state-mutating progress.")
+                # Smart Circuit Breaker Reset
+                # If we natively verified a state change, we reset the iteration counter
+                # to prevent premature timeouts, but we do NOT force task completion.
+                # The LLM must still evaluate the final visual state.
                 self.sub_task_iteration = 0
-
-                # STRONG NATIVE CONDITIONAL ACCEPTANCE
-                # If we natively verified a major state change (like URL navigation or major UI shift),
-                # and it's a typical generic sub-task (like navigate, search), we can forcefully accept it
-                # to bypass overly strict phantom LLM evaluator loops.
-                action_type = str(self.previous_action.get('action', '')).upper()
-                has_sub_task_complete_flag = getattr(self, "pending_sub_task_complete", False)
-
-                # Heuristic: Is this a generic task type where native verification strongly implies completion?
-                is_generic_task = any(kw in current_sub_task.lower() for kw in ["navigate", "search", "přejdi", "vyhledej"])
-                is_strong_signal = action_type in ["NAVIGATE", "OPEN_TAB"] or (action_type == "CLICK" and "Context (URL/Window) changed" in native_res.get("reason", ""))
-
-                if has_sub_task_complete_flag or (is_generic_task and is_strong_signal):
-                     logging.info(f"Strong Native Conditional Acceptance triggered for '{current_sub_task}'. Forcing SUB_TASK_COMPLETE post-verification.")
-                     self.command_text += f"\n[System Note: Sub-task '{current_sub_task}' verified complete natively via strong signal.]"
-                     self.current_sub_task_index += 1
-                     self.sub_task_iteration = 0
-                     self.previous_action = None
-                     self.history.clear()
-                     self.pending_sub_task_complete = False
-                     return
+                logging.info("Native verification succeeded, resetting sub_task_iteration to 0 to prevent circuit breaker.")
             else:
                 logging.info(f"Native verification didn't match: {native_res.get('reason')}")
-                self.pending_sub_task_complete = False # Drop flag if verification fails
 
         # Dynamic Sub-Task Evaluation
         if self.sub_task_iteration == 0:
@@ -1843,13 +1824,8 @@ class AgentStateMachine:
         mutating_actions = {"CLICK", "TYPE", "PRESS", "PRESS_KEY", "PRESS_ENTER", "DRAG_AND_DROP", "SCROLL", "LAUNCH_APP", "EXECUTE_JS", "NAVIGATE", "OPEN_TAB"}
         non_visual_actions = {"RESET_VIEW", "SCROLL", "PRESS_ENTER", "PRESS", "PRESS_KEY", "HOVER", "REPLY", "LAUNCH_APP", "DRAG_AND_DROP", "EXECUTE_JS"}
 
-        # Look-Ahead Flagging for Native Conditional Acceptance
-        has_sub_task_complete_flag = any(str(act.get("action", "")).upper() == "SUB_TASK_COMPLETE" for act in self.actions_to_execute)
+        # Look-Ahead Flagging
         has_mutating_action = any(str(act.get("action", "")).upper() in mutating_actions for act in self.actions_to_execute)
-
-        if has_sub_task_complete_flag and has_mutating_action:
-            self.pending_sub_task_complete = True
-            logging.info("Look-Ahead: Mutating action + SUB_TASK_COMPLETE detected. Enabling Native Conditional Acceptance post-execution.")
 
         for action_idx, action_to_take in enumerate(self.actions_to_execute):
              if self.interrupt_event.is_set():
@@ -1876,13 +1852,13 @@ class AgentStateMachine:
                  break
 
              if action_type == "SUB_TASK_COMPLETE":
-                 # Handled by Look-Ahead Flagging (Native Conditional Acceptance) after mutating actions
+                 # Handled by Look-Ahead Flagging after mutating actions to enforce visual evaluation
                  if has_mutating_action:
-                     logging.info(f"Skipping inline SUB_TASK_COMPLETE execution to allow native conditional acceptance post-action.")
+                     logging.info(f"Skipping inline SUB_TASK_COMPLETE execution to allow visual evaluation post-action.")
                      continue
                  else:
                      # Standard behavior if it's the only action
-                     logging.info(f"Sub-Task '{current_sub_task}' marked as complete by AI. Natively accepting conditional success.")
+                     logging.info(f"Sub-Task '{current_sub_task}' marked as complete by AI.")
                      self.current_sub_task_index += 1
                      self.sub_task_iteration = 0
                      self.previous_action = None
