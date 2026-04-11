@@ -57,13 +57,24 @@ class SopStudioNotifier extends Notifier<SopStudioState> {
     );
   }
 
+  void setDomain(String domain) {
+    state = state.copyWith(domain: domain, errorMessage: null);
+  }
+
+  void setGoal(String goal) {
+    state = state.copyWith(goal: goal, errorMessage: null);
+  }
+
   void addStep(SopActionType type, {String? description}) {
     final newStep = SopStep(
       id: _uuid.v4(),
       actionType: type,
       description: description,
     );
-    state = state.copyWith(steps: [...state.steps, newStep], errorMessage: null);
+    state = state.copyWith(
+      steps: [...state.steps, newStep],
+      errorMessage: null,
+    );
   }
 
   void updateStep(String stepId, SopStep updatedStep) {
@@ -77,12 +88,17 @@ class SopStudioNotifier extends Notifier<SopStudioState> {
   }
 
   void removeStep(String stepId) {
-    final updatedSteps = state.steps.where((step) => step.id != stepId).toList();
+    final updatedSteps = state.steps
+        .where((step) => step.id != stepId)
+        .toList();
     state = state.copyWith(steps: updatedSteps, errorMessage: null);
   }
 
   void reorderSteps(int oldIndex, int newIndex) {
-    if (oldIndex < 0 || oldIndex >= state.steps.length || newIndex < 0 || newIndex > state.steps.length) {
+    if (oldIndex < 0 ||
+        oldIndex >= state.steps.length ||
+        newIndex < 0 ||
+        newIndex > state.steps.length) {
       return;
     }
     final steps = List<SopStep>.from(state.steps);
@@ -97,7 +113,9 @@ class SopStudioNotifier extends Notifier<SopStudioState> {
 
   bool validateSequence() {
     if (state.steps.isEmpty) {
-      state = state.copyWith(errorMessage: 'Sequence must have at least one step.');
+      state = state.copyWith(
+        errorMessage: 'Sequence must have at least one step.',
+      );
       return false;
     }
 
@@ -109,7 +127,9 @@ class SopStudioNotifier extends Notifier<SopStudioState> {
         }
       } else if (step.actionType == SopActionType.navigate) {
         if (step.url == null || step.url!.isEmpty) {
-          state = state.copyWith(errorMessage: 'NAVIGATE action must have a url.');
+          state = state.copyWith(
+            errorMessage: 'NAVIGATE action must have a url.',
+          );
           return false;
         }
       }
@@ -151,7 +171,8 @@ class SopStudioNotifier extends Notifier<SopStudioState> {
       } else {
         state = state.copyWith(
           isSubmitting: false,
-          errorMessage: 'Failed to submit SOP: ${response.statusCode} - ${response.body}',
+          errorMessage:
+              'Failed to submit SOP: ${response.statusCode} - ${response.body}',
         );
         return false;
       }
@@ -165,6 +186,8 @@ class SopStudioNotifier extends Notifier<SopStudioState> {
   }
 }
 
-final sopStudioProvider = NotifierProvider<SopStudioNotifier, SopStudioState>(() {
-  return SopStudioNotifier();
-});
+final sopStudioProvider = NotifierProvider<SopStudioNotifier, SopStudioState>(
+  () {
+    return SopStudioNotifier();
+  },
+);

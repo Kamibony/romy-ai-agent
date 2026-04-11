@@ -23,11 +23,7 @@ final firebaseInitProvider = FutureProvider<bool>((ref) async {
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
-  runApp(
-    const ProviderScope(
-      child: DashboardApp(),
-    ),
-  );
+  runApp(const ProviderScope(child: DashboardApp()));
 }
 
 class DashboardApp extends StatelessWidget {
@@ -95,9 +91,7 @@ class _MainLayoutState extends State<MainLayout> {
             ],
           ),
           const VerticalDivider(thickness: 1, width: 1),
-          Expanded(
-            child: _screens[_selectedIndex],
-          ),
+          Expanded(child: _screens[_selectedIndex]),
         ],
       ),
     );

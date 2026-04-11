@@ -39,46 +39,133 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: String.fromEnvironment('FIREBASE_API_KEY', defaultValue: 'dummy-api-key'),
-    appId: String.fromEnvironment('FIREBASE_APP_ID', defaultValue: '1:1234567890:web:1234567890abcdef'),
-    messagingSenderId: String.fromEnvironment('FIREBASE_MESSAGING_SENDER_ID', defaultValue: '1234567890'),
-    projectId: String.fromEnvironment('FIREBASE_PROJECT_ID', defaultValue: 'dummy-project-id'),
-    authDomain: String.fromEnvironment('FIREBASE_AUTH_DOMAIN', defaultValue: 'dummy-project-id.firebaseapp.com'),
-    storageBucket: String.fromEnvironment('FIREBASE_STORAGE_BUCKET', defaultValue: 'dummy-project-id.appspot.com'),
+    apiKey: String.fromEnvironment(
+      'FIREBASE_API_KEY',
+      defaultValue: 'dummy-api-key',
+    ),
+    appId: String.fromEnvironment(
+      'FIREBASE_APP_ID',
+      defaultValue: '1:1234567890:web:1234567890abcdef',
+    ),
+    messagingSenderId: String.fromEnvironment(
+      'FIREBASE_MESSAGING_SENDER_ID',
+      defaultValue: '1234567890',
+    ),
+    projectId: String.fromEnvironment(
+      'FIREBASE_PROJECT_ID',
+      defaultValue: 'dummy-project-id',
+    ),
+    authDomain: String.fromEnvironment(
+      'FIREBASE_AUTH_DOMAIN',
+      defaultValue: 'dummy-project-id.firebaseapp.com',
+    ),
+    storageBucket: String.fromEnvironment(
+      'FIREBASE_STORAGE_BUCKET',
+      defaultValue: 'dummy-project-id.appspot.com',
+    ),
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: String.fromEnvironment('FIREBASE_API_KEY', defaultValue: 'dummy-api-key'),
-    appId: String.fromEnvironment('FIREBASE_APP_ID', defaultValue: '1:1234567890:android:1234567890abcdef'),
-    messagingSenderId: String.fromEnvironment('FIREBASE_MESSAGING_SENDER_ID', defaultValue: '1234567890'),
-    projectId: String.fromEnvironment('FIREBASE_PROJECT_ID', defaultValue: 'dummy-project-id'),
-    storageBucket: String.fromEnvironment('FIREBASE_STORAGE_BUCKET', defaultValue: 'dummy-project-id.appspot.com'),
+    apiKey: String.fromEnvironment(
+      'FIREBASE_API_KEY',
+      defaultValue: 'dummy-api-key',
+    ),
+    appId: String.fromEnvironment(
+      'FIREBASE_APP_ID',
+      defaultValue: '1:1234567890:android:1234567890abcdef',
+    ),
+    messagingSenderId: String.fromEnvironment(
+      'FIREBASE_MESSAGING_SENDER_ID',
+      defaultValue: '1234567890',
+    ),
+    projectId: String.fromEnvironment(
+      'FIREBASE_PROJECT_ID',
+      defaultValue: 'dummy-project-id',
+    ),
+    storageBucket: String.fromEnvironment(
+      'FIREBASE_STORAGE_BUCKET',
+      defaultValue: 'dummy-project-id.appspot.com',
+    ),
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: String.fromEnvironment('FIREBASE_API_KEY', defaultValue: 'dummy-api-key'),
-    appId: String.fromEnvironment('FIREBASE_APP_ID', defaultValue: '1:1234567890:ios:1234567890abcdef'),
-    messagingSenderId: String.fromEnvironment('FIREBASE_MESSAGING_SENDER_ID', defaultValue: '1234567890'),
-    projectId: String.fromEnvironment('FIREBASE_PROJECT_ID', defaultValue: 'dummy-project-id'),
-    storageBucket: String.fromEnvironment('FIREBASE_STORAGE_BUCKET', defaultValue: 'dummy-project-id.appspot.com'),
-    iosBundleId: String.fromEnvironment('FIREBASE_IOS_BUNDLE_ID', defaultValue: 'com.example.dashboard'),
+    apiKey: String.fromEnvironment(
+      'FIREBASE_API_KEY',
+      defaultValue: 'dummy-api-key',
+    ),
+    appId: String.fromEnvironment(
+      'FIREBASE_APP_ID',
+      defaultValue: '1:1234567890:ios:1234567890abcdef',
+    ),
+    messagingSenderId: String.fromEnvironment(
+      'FIREBASE_MESSAGING_SENDER_ID',
+      defaultValue: '1234567890',
+    ),
+    projectId: String.fromEnvironment(
+      'FIREBASE_PROJECT_ID',
+      defaultValue: 'dummy-project-id',
+    ),
+    storageBucket: String.fromEnvironment(
+      'FIREBASE_STORAGE_BUCKET',
+      defaultValue: 'dummy-project-id.appspot.com',
+    ),
+    iosBundleId: String.fromEnvironment(
+      'FIREBASE_IOS_BUNDLE_ID',
+      defaultValue: 'com.example.dashboard',
+    ),
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
-    apiKey: String.fromEnvironment('FIREBASE_API_KEY', defaultValue: 'dummy-api-key'),
-    appId: String.fromEnvironment('FIREBASE_APP_ID', defaultValue: '1:1234567890:ios:1234567890abcdef'),
-    messagingSenderId: String.fromEnvironment('FIREBASE_MESSAGING_SENDER_ID', defaultValue: '1234567890'),
-    projectId: String.fromEnvironment('FIREBASE_PROJECT_ID', defaultValue: 'dummy-project-id'),
-    storageBucket: String.fromEnvironment('FIREBASE_STORAGE_BUCKET', defaultValue: 'dummy-project-id.appspot.com'),
-    iosBundleId: String.fromEnvironment('FIREBASE_IOS_BUNDLE_ID', defaultValue: 'com.example.dashboard'),
+    apiKey: String.fromEnvironment(
+      'FIREBASE_API_KEY',
+      defaultValue: 'dummy-api-key',
+    ),
+    appId: String.fromEnvironment(
+      'FIREBASE_APP_ID',
+      defaultValue: '1:1234567890:ios:1234567890abcdef',
+    ),
+    messagingSenderId: String.fromEnvironment(
+      'FIREBASE_MESSAGING_SENDER_ID',
+      defaultValue: '1234567890',
+    ),
+    projectId: String.fromEnvironment(
+      'FIREBASE_PROJECT_ID',
+      defaultValue: 'dummy-project-id',
+    ),
+    storageBucket: String.fromEnvironment(
+      'FIREBASE_STORAGE_BUCKET',
+      defaultValue: 'dummy-project-id.appspot.com',
+    ),
+    iosBundleId: String.fromEnvironment(
+      'FIREBASE_IOS_BUNDLE_ID',
+      defaultValue: 'com.example.dashboard',
+    ),
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: String.fromEnvironment('FIREBASE_API_KEY', defaultValue: 'dummy-api-key'),
-    appId: String.fromEnvironment('FIREBASE_APP_ID', defaultValue: '1:1234567890:web:1234567890abcdef'),
-    messagingSenderId: String.fromEnvironment('FIREBASE_MESSAGING_SENDER_ID', defaultValue: '1234567890'),
-    projectId: String.fromEnvironment('FIREBASE_PROJECT_ID', defaultValue: 'dummy-project-id'),
-    authDomain: String.fromEnvironment('FIREBASE_AUTH_DOMAIN', defaultValue: 'dummy-project-id.firebaseapp.com'),
-    storageBucket: String.fromEnvironment('FIREBASE_STORAGE_BUCKET', defaultValue: 'dummy-project-id.appspot.com'),
+    apiKey: String.fromEnvironment(
+      'FIREBASE_API_KEY',
+      defaultValue: 'dummy-api-key',
+    ),
+    appId: String.fromEnvironment(
+      'FIREBASE_APP_ID',
+      defaultValue: '1:1234567890:web:1234567890abcdef',
+    ),
+    messagingSenderId: String.fromEnvironment(
+      'FIREBASE_MESSAGING_SENDER_ID',
+      defaultValue: '1234567890',
+    ),
+    projectId: String.fromEnvironment(
+      'FIREBASE_PROJECT_ID',
+      defaultValue: 'dummy-project-id',
+    ),
+    authDomain: String.fromEnvironment(
+      'FIREBASE_AUTH_DOMAIN',
+      defaultValue: 'dummy-project-id.firebaseapp.com',
+    ),
+    storageBucket: String.fromEnvironment(
+      'FIREBASE_STORAGE_BUCKET',
+      defaultValue: 'dummy-project-id.appspot.com',
+    ),
   );
 }

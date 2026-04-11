@@ -80,8 +80,8 @@ void main() {
     test('reorderSteps moves step correctly', () {
       final notifier = container.read(sopStudioProvider.notifier);
       notifier.addStep(SopActionType.click); // 0
-      notifier.addStep(SopActionType.type);  // 1
-      notifier.addStep(SopActionType.wait);  // 2
+      notifier.addStep(SopActionType.type); // 1
+      notifier.addStep(SopActionType.wait); // 2
 
       var state = container.read(sopStudioProvider);
       final firstStepId = state.steps[0].id;
@@ -148,7 +148,9 @@ void main() {
 
       var state = container.read(sopStudioProvider);
       final stepId = state.steps.first.id;
-      final updatedStep = state.steps.first.copyWith(url: 'https://example.com');
+      final updatedStep = state.steps.first.copyWith(
+        url: 'https://example.com',
+      );
       notifier.updateStep(stepId, updatedStep);
 
       final isValid = notifier.validateSequence();

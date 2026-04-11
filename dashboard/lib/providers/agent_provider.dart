@@ -8,7 +8,9 @@ import 'api_client_provider.dart';
 // Provides the telemetry URL
 final telemetryUrlProvider = Provider<String>((ref) => 'http://127.0.0.1:8764');
 
-final agentStateProvider = NotifierProvider<AgentStateNotifier, AgentStatus>(AgentStateNotifier.new);
+final agentStateProvider = NotifierProvider<AgentStateNotifier, AgentStatus>(
+  AgentStateNotifier.new,
+);
 
 class AgentStatus {
   final String status;
@@ -35,7 +37,10 @@ class AgentStatus {
     this.imageHash,
   });
 
-  factory AgentStatus.fromJson(Map<String, dynamic> json, {String? existingImage}) {
+  factory AgentStatus.fromJson(
+    Map<String, dynamic> json, {
+    String? existingImage,
+  }) {
     return AgentStatus(
       status: json['status'] ?? 'unknown',
       agentState: json['agent_state'] ?? 'unknown',
@@ -83,7 +88,7 @@ class AgentStateNotifier extends Notifier<AgentStatus> {
       }
     } catch (e) {
       if (state.status != 'offline') {
-         state = AgentStatus(status: 'offline');
+        state = AgentStatus(status: 'offline');
       }
     }
   }
@@ -101,15 +106,11 @@ class AgentStateNotifier extends Notifier<AgentStatus> {
   Future<void> sendHumanGuidance(double x, double y) async {
     try {
       final baseUrl = ref.read(telemetryUrlProvider);
-      final payload = json.encode({
-        "type": "CLICK",
-        "x": x,
-        "y": y
-      });
+      final payload = json.encode({"type": "CLICK", "x": x, "y": y});
       await http.post(
         Uri.parse('$baseUrl/api/human_guidance'),
         headers: {'Content-Type': 'application/json'},
-        body: payload
+        body: payload,
       );
       debugPrint('Sent human guidance: $x, $y');
     } catch (e) {
