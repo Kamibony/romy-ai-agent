@@ -133,10 +133,11 @@ class MissionControlScreen extends ConsumerWidget {
                                   final double rawX = (localX - dx) / scale;
                                   final double rawY = (localY - dy) / scale;
 
-                                  // Only trigger if click was actually inside the image (not on letterbox)
-                                  if (rawX >= 0 && rawX <= imageWidth && rawY >= 0 && rawY <= imageHeight) {
-                                    notifier.sendHumanGuidance(rawX, rawY);
-                                  }
+                                  // Clamp to image bounds
+                                  final double clampedX = rawX.clamp(0.0, imageWidth);
+                                  final double clampedY = rawY.clamp(0.0, imageHeight);
+
+                                  notifier.sendHumanGuidance(clampedX, clampedY);
                                 },
                                 child: RepaintBoundary(
                                   child: Image.memory(
