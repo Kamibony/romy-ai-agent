@@ -12,7 +12,7 @@ import queue
 import json
 import threading
 from datetime import datetime
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, Field
 from typing import Optional
 
 import io
@@ -3255,8 +3255,8 @@ RECORDED_STEPS = []
 class HumanGuidanceRequest(BaseModel):
     type: str = ""
     xpath: str = "Unknown element"
-    x: Optional[float] = None
-    y: Optional[float] = None
+    x: Optional[float] = Field(default=None, ge=0)
+    y: Optional[float] = Field(default=None, ge=0)
     dpr: float = 1.0
 
 
@@ -3365,6 +3365,24 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 x = validated_request.x
                 y = validated_request.y
                 dpr = validated_request.dpr
+
+                # Dynamic Clamping against original width/height
+                global global_state_machine
+                if x is not None and y is not None:
+                    clean_screenshot_bytes = getattr(global_state_machine, "current_clean_screenshot", None)
+                    if clean_screenshot_bytes:
+                        try:
+                            from PIL import Image
+                            import io
+                            img = Image.open(io.BytesIO(clean_screenshot_bytes))
+                            img_w, img_h = img.size
+                            x = min(max(0.0, float(x)), float(img_w))
+                            y = min(max(0.0, float(y)), float(img_h))
+                            # Update the validated request to pass clamped values to the state machine
+                            validated_request.x = x
+                            validated_request.y = y
+                        except Exception as e:
+                            logging.error(f"Error clamping coordinates: {e}")
 
                 is_semantic = (type_of_guidance == "SEMANTIC" or xpath != "Unknown element")
 
@@ -3517,6 +3535,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
             original_width = None
             original_height = None
             help_reason = None
+            image_hash = None
 
             global global_state_machine
             if global_state_machine and getattr(global_state_machine, "doc_id", None) == doc_id:
@@ -3541,7 +3560,16 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 # Current screenshot
                 clean_screenshot_bytes = getattr(global_state_machine, "current_clean_screenshot", None)
                 if clean_screenshot_bytes:
-                    screenshot_base64 = base64.b64encode(clean_screenshot_bytes).decode('utf-8')
+                    import hashlib
+                    image_hash = hashlib.md5(clean_screenshot_bytes).hexdigest()
+
+                    # Only calculate base64 if hash is different
+                    query = urllib.parse.parse_qs(parsed_path.query)
+                    client_hash = query.get('image_hash', [None])[0]
+
+                    if client_hash != image_hash:
+                        screenshot_base64 = base64.b64encode(clean_screenshot_bytes).decode('utf-8')
+
                     try:
                         from PIL import Image
                         import io
@@ -3553,7 +3581,8 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(HTTPStatus.OK)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps({
+
+            response_data = {
                 "doc_id": doc_id,
                 "status": status,
                 "iteration": iteration,
@@ -3562,11 +3591,15 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 "intent": intent,
                 "current_action": current_action,
                 "current_url": current_url,
-                "screenshot": screenshot_base64,
                 "original_width": original_width,
                 "original_height": original_height,
-                "help_reason": help_reason
-            }).encode())
+                "help_reason": help_reason,
+                "image_hash": image_hash
+            }
+            if screenshot_base64 is not None:
+                response_data["screenshot"] = screenshot_base64
+
+            self.wfile.write(json.dumps(response_data).encode())
         elif parsed_path.path == '/api/recording/steps':
             self.send_response(HTTPStatus.OK)
             self.send_header('Content-type', 'application/json')

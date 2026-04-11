@@ -20,6 +20,7 @@ class AgentStatus {
   final int? originalWidth;
   final int? originalHeight;
   final String? helpReason;
+  final String? imageHash;
 
   AgentStatus({
     this.status = 'unknown',
@@ -31,19 +32,21 @@ class AgentStatus {
     this.originalWidth,
     this.originalHeight,
     this.helpReason,
+    this.imageHash,
   });
 
-  factory AgentStatus.fromJson(Map<String, dynamic> json) {
+  factory AgentStatus.fromJson(Map<String, dynamic> json, {String? existingImage}) {
     return AgentStatus(
       status: json['status'] ?? 'unknown',
       agentState: json['agent_state'] ?? 'unknown',
       intent: json['intent'],
       currentAction: json['current_action'],
       currentUrl: json['current_url'],
-      base64Image: json['screenshot'],
+      base64Image: json['screenshot'] ?? existingImage,
       originalWidth: json['original_width'],
       originalHeight: json['original_height'],
       helpReason: json['help_reason'],
+      imageHash: json['image_hash'],
     );
   }
 }
@@ -69,10 +72,14 @@ class AgentStateNotifier extends Notifier<AgentStatus> {
   Future<void> _fetchStatus() async {
     try {
       final baseUrl = ref.read(telemetryUrlProvider);
-      final response = await http.get(Uri.parse('$baseUrl/api/status/active'));
+      String url = '$baseUrl/api/status/active';
+      if (state.imageHash != null) {
+        url += '?image_hash=${state.imageHash}';
+      }
+      final response = await http.get(Uri.parse(url));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        state = AgentStatus.fromJson(data);
+        state = AgentStatus.fromJson(data, existingImage: state.base64Image);
       }
     } catch (e) {
       if (state.status != 'offline') {
