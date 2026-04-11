@@ -4,7 +4,9 @@ import 'dart:convert';
 
 import '../../providers/api_client_provider.dart';
 
-final memoryRulesProvider = FutureProvider.autoDispose<List<dynamic>>((ref) async {
+final memoryRulesProvider = FutureProvider.autoDispose<List<dynamic>>((
+  ref,
+) async {
   final apiClient = ref.watch(apiClientProvider);
   final response = await apiClient.get('/api/v1/memory/sops?client_id=default');
 
@@ -41,10 +43,16 @@ class MemoryManagerScreen extends ConsumerWidget {
           Expanded(
             child: rulesAsyncValue.when(
               loading: () => const Center(child: CircularProgressIndicator()),
-              error: (error, stack) => Center(child: Text('Error loading memory rules: $error')),
+              error: (error, stack) =>
+                  Center(child: Text('Error loading memory rules: $error')),
               data: (rules) {
                 if (rules.isEmpty) {
-                  return const Center(child: Text('No memory rules found. Use the SOP Studio to inject new behaviors.', style: TextStyle(color: Colors.grey)));
+                  return const Center(
+                    child: Text(
+                      'No memory rules found. Use the SOP Studio to inject new behaviors.',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  );
                 }
 
                 return ListView.builder(
@@ -59,8 +67,13 @@ class MemoryManagerScreen extends ConsumerWidget {
                     return Card(
                       margin: const EdgeInsets.only(bottom: 16.0),
                       child: ExpansionTile(
-                        title: Text(goal, style: const TextStyle(fontWeight: FontWeight.bold)),
-                        subtitle: Text('ID: $docId | Status: ${isActive ? 'Active' : 'Inactive'}'),
+                        title: Text(
+                          goal,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        subtitle: Text(
+                          'ID: $docId | Status: ${isActive ? 'Active' : 'Inactive'}',
+                        ),
                         leading: Icon(
                           isActive ? Icons.memory : Icons.memory_outlined,
                           color: isActive ? Colors.green : Colors.grey,
@@ -73,13 +86,18 @@ class MemoryManagerScreen extends ConsumerWidget {
                               onChanged: (value) {
                                 // Currently active toggle is not supported by backend out of the box, might require new endpoint
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Toggle active state is not yet supported by API.')),
+                                  const SnackBar(
+                                    content: Text(
+                                      'Toggle active state is not yet supported by API.',
+                                    ),
+                                  ),
                                 );
                               },
                             ),
                             IconButton(
                               icon: const Icon(Icons.delete, color: Colors.red),
-                              onPressed: () => _confirmDelete(context, ref, docId),
+                              onPressed: () =>
+                                  _confirmDelete(context, ref, docId),
                             ),
                           ],
                         ),
@@ -89,18 +107,24 @@ class MemoryManagerScreen extends ConsumerWidget {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text('Active Rules:', style: TextStyle(fontWeight: FontWeight.bold)),
+                                const Text(
+                                  'Active Rules:',
+                                  style: TextStyle(fontWeight: FontWeight.bold),
+                                ),
                                 const SizedBox(height: 8),
-                                ...ruleItems.map((rule) => Padding(
-                                  padding: const EdgeInsets.only(bottom: 4.0),
-                                  child: Row(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      const Text('• '),
-                                      Expanded(child: Text(rule)),
-                                    ],
+                                ...ruleItems.map(
+                                  (rule) => Padding(
+                                    padding: const EdgeInsets.only(bottom: 4.0),
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text('• '),
+                                        Expanded(child: Text(rule)),
+                                      ],
+                                    ),
                                   ),
-                                )),
+                                ),
                               ],
                             ),
                           ),
@@ -122,7 +146,9 @@ class MemoryManagerScreen extends ConsumerWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Confirm Deletion'),
-        content: const Text('Are you sure you want to permanently delete this memory rule? The agent will forget this behavior.'),
+        content: const Text(
+          'Are you sure you want to permanently delete this memory rule? The agent will forget this behavior.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
@@ -133,7 +159,9 @@ class MemoryManagerScreen extends ConsumerWidget {
               Navigator.of(context).pop();
               final apiClient = ref.read(apiClientProvider);
               try {
-                final response = await apiClient.delete('/api/v1/memory/sops/$docId?client_id=default');
+                final response = await apiClient.delete(
+                  '/api/v1/memory/sops/$docId?client_id=default',
+                );
                 if (response.statusCode == 200) {
                   ref.invalidate(memoryRulesProvider);
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -141,13 +169,15 @@ class MemoryManagerScreen extends ConsumerWidget {
                   );
                 } else {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Failed to delete rule: ${response.body}')),
+                    SnackBar(
+                      content: Text('Failed to delete rule: ${response.body}'),
+                    ),
                   );
                 }
               } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Error: $e')),
-                );
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('Error: $e')));
               }
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),

@@ -1,10 +1,7 @@
 import 'package:flutter/material.dart';
-import 'dart:convert';
-import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
-
-import '../../providers/api_client_provider.dart';
+import '../../providers/sop_studio_provider.dart';
+import '../../models/sop_models.dart';
 
 class SopStudioScreen extends ConsumerStatefulWidget {
   const SopStudioScreen({super.key});
@@ -14,271 +11,410 @@ class SopStudioScreen extends ConsumerStatefulWidget {
 }
 
 class _SopStudioScreenState extends ConsumerState<SopStudioScreen> {
+  final _domainController = TextEditingController();
   final _goalController = TextEditingController();
-  bool _isSubmitting = false;
-  bool _isRecording = false;
-  List<Map<String, dynamic>> _recordedSteps = [];
-  Timer? _pollingTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    final state = ref.read(sopStudioProvider);
+    _domainController.text = state.domain;
+    _goalController.text = state.goal;
+  }
 
   @override
   void dispose() {
+    _domainController.dispose();
     _goalController.dispose();
-    _pollingTimer?.cancel();
     super.dispose();
   }
 
-  Future<void> _startRecording() async {
-    try {
-      final response = await http.post(Uri.parse('http://127.0.0.1:8764/api/recording/start'));
-      if (response.statusCode == 200) {
-        setState(() {
-          _isRecording = true;
-          _recordedSteps = [];
-        });
-        _pollingTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
-          _pollSteps();
-        });
-      } else {
-        _showError('Failed to start recording: ${response.body}');
-      }
-    } catch (e) {
-      _showError('Network error starting recording: $e');
-    }
-  }
+  void _onSaveSOP() async {
+    final notifier = ref.read(sopStudioProvider.notifier);
 
-  Future<void> _stopRecording() async {
-    _pollingTimer?.cancel();
-    try {
-      final response = await http.post(Uri.parse('http://127.0.0.1:8764/api/recording/stop'));
-      if (response.statusCode == 200) {
-        setState(() {
-          _isRecording = false;
-        });
-        // One final poll
-        await _pollSteps();
-      } else {
-        _showError('Failed to stop recording: ${response.body}');
-      }
-    } catch (e) {
-      _showError('Network error stopping recording: $e');
-      setState(() {
-        _isRecording = false;
-      });
+    // Explicitly call validateSequence as requested
+    if (!notifier.validateSequence()) {
+      final state = ref.read(sopStudioProvider);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(state.errorMessage ?? 'Validation failed.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
     }
-  }
 
-  Future<void> _pollSteps() async {
-    try {
-      final response = await http.get(Uri.parse('http://127.0.0.1:8764/api/recording/steps'));
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['steps'] != null) {
-          setState(() {
-            _recordedSteps = List<Map<String, dynamic>>.from(data['steps']);
-          });
-        }
-      }
-    } catch (e) {
-      // Silently ignore polling errors to not spam
-    }
-  }
+    // Validation passed, proceed to submit
+    final success = await notifier.submitSop();
 
-  void _showError(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: Colors.red),
-    );
-  }
 
-  Future<void> _submitSOP() async {
-    if (_goalController.text.trim().isEmpty) {
+    final finalState = ref.read(sopStudioProvider);
+
+    if (success) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill out the target goal.')),
+        const SnackBar(
+          content: Text('SOP saved successfully!'),
+          backgroundColor: Colors.green,
+        ),
       );
-      return;
-    }
-
-    if (_recordedSteps.isEmpty) {
+      notifier.initializeDraft('', '');
+      _domainController.clear();
+      _goalController.clear();
+    } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please record some steps first.')),
+        SnackBar(
+          content: Text(
+            finalState.errorMessage ??
+                'Unknown error occurred while saving SOP.',
+          ),
+          backgroundColor: Colors.red,
+        ),
       );
-      return;
-    }
-
-    setState(() {
-      _isSubmitting = true;
-    });
-
-    final apiClient = ref.read(apiClientProvider);
-
-    try {
-      // The backend /api/v1/memory/sops endpoint expects a SOPSaveRequest
-      final response = await apiClient.post(
-        '/api/v1/memory/sops',
-        body: json.encode({
-          'domain': 'default_domain',
-          'goal': _goalController.text.trim(),
-          'recorded_steps': _recordedSteps.map((s) => {'step': s['description']}).toList(),
-          'client_id': 'default'
-        }),
-      );
-
-      if (!mounted) return;
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('SOP successfully saved into Agent Memory.'), backgroundColor: Colors.green),
-        );
-        _goalController.clear();
-        setState(() {
-          _recordedSteps = [];
-        });
-      } else if (response.statusCode == 409) {
-         showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Semantic Conflict Detected'),
-            content: Text('The SOP conflicts with existing rules.\n\nDetails: ${response.body}'),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK'))
-            ],
-          )
-        );
-      } else {
-         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${response.statusCode} - ${response.body}'), backgroundColor: Colors.red),
-        );
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Network error: $e'), backgroundColor: Colors.red),
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSubmitting = false;
-        });
-      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'SOP Studio',
-                style: Theme.of(context).textTheme.headlineMedium,
-              ),
-              ElevatedButton.icon(
-                onPressed: _isRecording ? _stopRecording : _startRecording,
-                icon: Icon(
-                  _isRecording ? Icons.stop : Icons.fiber_manual_record,
-                  color: _isRecording ? Colors.white : Colors.red,
+    final state = ref.watch(sopStudioProvider);
+    final notifier = ref.read(sopStudioProvider.notifier);
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('SOP Studio')),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'SOP Setup',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _domainController,
+                      decoration: const InputDecoration(
+                        labelText: 'Domain',
+                        hintText: 'e.g., example.com',
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (val) => notifier.setDomain(val),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _goalController,
+                      decoration: const InputDecoration(
+                        labelText: 'Target Goal / Intent',
+                        hintText: 'e.g., Navigate to search results on alza.cz',
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (val) => notifier.setGoal(val),
+                    ),
+                  ],
                 ),
-                label: Text(_isRecording ? 'Stop Recording' : 'Start Recording'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _isRecording ? Colors.red : Theme.of(context).cardColor,
-                  foregroundColor: _isRecording ? Colors.white : Theme.of(context).textTheme.bodyLarge?.color,
-                ),
               ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Record visual actions (Ghost Clicks) directly from your browser to build resilient Playbook Rules.',
-            style: TextStyle(color: Colors.grey),
-          ),
-          if (_isRecording) ...[
+            ),
             const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.red.withOpacity(0.1),
-                border: Border.all(color: Colors.red),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Row(
-                children: [
-                  SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.red),
-                  ),
-                  SizedBox(width: 16),
-                  Text(
-                    'Listening for Ghost Clicks from Chrome Extension...',
-                    style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
-                  ),
-                ],
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: SopActionType.values.map((type) {
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8.0),
+                    child: ActionChip(
+                      label: Text('Add ${type.agentValue}'),
+                      avatar: const Icon(Icons.add, size: 16),
+                      onPressed: () {
+                        notifier.addStep(
+                          type,
+                          description: 'New ${type.agentValue} action',
+                        );
+                      },
+                    ),
+                  );
+                }).toList(),
               ),
             ),
-          ],
-          const SizedBox(height: 24),
-          TextField(
-            controller: _goalController,
-            decoration: const InputDecoration(
-              labelText: 'Target Goal / Intent',
-              hintText: 'e.g., Navigate to search results on alza.cz',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.grey.withOpacity(0.5)),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: _recordedSteps.isEmpty
-                  ? Center(
+            const SizedBox(height: 16),
+            Expanded(
+              child: state.steps.isEmpty
+                  ? const Center(
                       child: Text(
-                        _isRecording
-                            ? 'Perform actions in your browser to record steps.'
-                            : 'Click "Start Recording" to begin capturing steps.',
-                        style: const TextStyle(color: Colors.grey),
+                        'No steps added yet. Use the buttons above to build the sequence.',
+                        style: TextStyle(color: Colors.grey),
                       ),
                     )
-                  : ListView.builder(
-                      itemCount: _recordedSteps.length,
+                  : ReorderableListView.builder(
+                      itemCount: state.steps.length,
+                      onReorder: (oldIndex, newIndex) {
+                        notifier.reorderSteps(oldIndex, newIndex);
+                      },
                       itemBuilder: (context, index) {
-                        final step = _recordedSteps[index];
-                        return Card(
-                          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          child: ListTile(
-                            leading: CircleAvatar(
-                              backgroundColor: Theme.of(context).primaryColor,
-                              foregroundColor: Colors.white,
-                              child: Text('${index + 1}'),
-                            ),
-                            title: Text(step['description'] ?? 'Action'),
-                            subtitle: Text('Timestamp: ${step['timestamp']}'),
-                            trailing: const Icon(Icons.touch_app, color: Colors.grey),
-                          ),
+                        final step = state.steps[index];
+                        return _SopStepCard(
+                          key: ValueKey(step.id),
+                          step: step,
+                          index: index,
                         );
                       },
                     ),
             ),
-          ),
-          const SizedBox(height: 24),
-          SizedBox(
-            width: double.infinity,
-            height: 50,
-            child: ElevatedButton.icon(
-              onPressed: (_isSubmitting || _recordedSteps.isEmpty || _isRecording) ? null : _submitSOP,
-              icon: _isSubmitting ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.auto_awesome),
-              label: Text(_isSubmitting ? 'Compiling SOP...' : 'Compile & Inject SOP'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Theme.of(context).primaryColor,
-                foregroundColor: Colors.white,
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton.icon(
+                onPressed: state.isSubmitting ? null : _onSaveSOP,
+                icon: state.isSubmitting
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.save),
+                label: Text(state.isSubmitting ? 'Saving...' : 'Save SOP'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Theme.of(context).primaryColor,
+                  foregroundColor: Colors.white,
+                ),
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SopStepCard extends ConsumerStatefulWidget {
+  final SopStep step;
+  final int index;
+
+  const _SopStepCard({
+    required super.key,
+    required this.step,
+    required this.index,
+  });
+
+  @override
+  ConsumerState<_SopStepCard> createState() => _SopStepCardState();
+}
+
+class _SopStepCardState extends ConsumerState<_SopStepCard> {
+  late TextEditingController _descriptionController;
+  late TextEditingController _targetNameController;
+  late TextEditingController _targetIdController;
+  late TextEditingController _textController;
+  late TextEditingController _urlController;
+  late TextEditingController _durationMsController;
+  late TextEditingController _xController;
+  late TextEditingController _yController;
+
+  @override
+  void initState() {
+    super.initState();
+    _descriptionController = TextEditingController(
+      text: widget.step.description,
+    );
+    _targetNameController = TextEditingController(text: widget.step.targetName);
+    _targetIdController = TextEditingController(text: widget.step.targetId);
+    _textController = TextEditingController(text: widget.step.text);
+    _urlController = TextEditingController(text: widget.step.url);
+    _durationMsController = TextEditingController(
+      text: widget.step.durationMs?.toString(),
+    );
+    _xController = TextEditingController(text: widget.step.x?.toString());
+    _yController = TextEditingController(text: widget.step.y?.toString());
+  }
+
+  @override
+  void didUpdateWidget(covariant _SopStepCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // When the provider reorders or updates from an external source, keep controllers in sync.
+    // However, only update them if the value actually changed to prevent cursor jumping.
+    if (widget.step.description != _descriptionController.text) {
+      _descriptionController.text = widget.step.description ?? '';
+    }
+    if (widget.step.targetName != _targetNameController.text) {
+      _targetNameController.text = widget.step.targetName ?? '';
+    }
+    if (widget.step.targetId != _targetIdController.text) {
+      _targetIdController.text = widget.step.targetId ?? '';
+    }
+    if (widget.step.text != _textController.text) {
+      _textController.text = widget.step.text ?? '';
+    }
+    if (widget.step.url != _urlController.text) {
+      _urlController.text = widget.step.url ?? '';
+    }
+    final durationStr = widget.step.durationMs?.toString() ?? '';
+    if (durationStr != _durationMsController.text) {
+      _durationMsController.text = durationStr;
+    }
+    final xStr = widget.step.x?.toString() ?? '';
+    if (xStr != _xController.text) {
+      _xController.text = xStr;
+    }
+    final yStr = widget.step.y?.toString() ?? '';
+    if (yStr != _yController.text) {
+      _yController.text = yStr;
+    }
+  }
+
+  @override
+  void dispose() {
+    _descriptionController.dispose();
+    _targetNameController.dispose();
+    _targetIdController.dispose();
+    _textController.dispose();
+    _urlController.dispose();
+    _durationMsController.dispose();
+    _xController.dispose();
+    _yController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final notifier = ref.read(sopStudioProvider.notifier);
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      child: ExpansionTile(
+        initiallyExpanded: true,
+        leading: CircleAvatar(
+          backgroundColor: Theme.of(context).primaryColor,
+          foregroundColor: Colors.white,
+          child: Text('${widget.index + 1}'),
+        ),
+        title: Text('${widget.step.actionType.agentValue} Action'),
+        trailing: IconButton(
+          icon: const Icon(Icons.delete, color: Colors.red),
+          onPressed: () => notifier.removeStep(widget.step.id),
+        ),
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  decoration: const InputDecoration(labelText: 'Description'),
+                  controller: _descriptionController,
+                  onChanged: (val) => notifier.updateStep(
+                    widget.step.id,
+                    widget.step.copyWith(description: val),
+                  ),
+                ),
+                if (widget.step.actionType == SopActionType.click ||
+                    widget.step.actionType == SopActionType.hover) ...[
+                  TextField(
+                    decoration: const InputDecoration(
+                      labelText: 'Target Name (optional)',
+                    ),
+                    controller: _targetNameController,
+                    onChanged: (val) => notifier.updateStep(
+                      widget.step.id,
+                      widget.step.copyWith(targetName: val),
+                    ),
+                  ),
+                  TextField(
+                    decoration: const InputDecoration(
+                      labelText: 'Target ID (optional)',
+                    ),
+                    controller: _targetIdController,
+                    onChanged: (val) => notifier.updateStep(
+                      widget.step.id,
+                      widget.step.copyWith(targetId: val),
+                    ),
+                  ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          decoration: const InputDecoration(
+                            labelText: 'X Coordinate (optional)',
+                          ),
+                          keyboardType: TextInputType.number,
+                          controller: _xController,
+                          onChanged: (val) => notifier.updateStep(
+                            widget.step.id,
+                            widget.step.copyWith(x: int.tryParse(val)),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: TextField(
+                          decoration: const InputDecoration(
+                            labelText: 'Y Coordinate (optional)',
+                          ),
+                          keyboardType: TextInputType.number,
+                          controller: _yController,
+                          onChanged: (val) => notifier.updateStep(
+                            widget.step.id,
+                            widget.step.copyWith(y: int.tryParse(val)),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ] else if (widget.step.actionType == SopActionType.type) ...[
+                  TextField(
+                    decoration: const InputDecoration(
+                      labelText: 'Target Name (optional)',
+                    ),
+                    controller: _targetNameController,
+                    onChanged: (val) => notifier.updateStep(
+                      widget.step.id,
+                      widget.step.copyWith(targetName: val),
+                    ),
+                  ),
+                  TextField(
+                    decoration: const InputDecoration(
+                      labelText: 'Text (required)',
+                    ),
+                    controller: _textController,
+                    onChanged: (val) => notifier.updateStep(
+                      widget.step.id,
+                      widget.step.copyWith(text: val),
+                    ),
+                  ),
+                ] else if (widget.step.actionType ==
+                    SopActionType.navigate) ...[
+                  TextField(
+                    decoration: const InputDecoration(
+                      labelText: 'URL (required)',
+                    ),
+                    controller: _urlController,
+                    onChanged: (val) => notifier.updateStep(
+                      widget.step.id,
+                      widget.step.copyWith(url: val),
+                    ),
+                  ),
+                ] else if (widget.step.actionType == SopActionType.wait ||
+                    widget.step.actionType == SopActionType.waitFor) ...[
+                  TextField(
+                    decoration: const InputDecoration(
+                      labelText: 'Duration in ms (required for WAIT)',
+                    ),
+                    keyboardType: TextInputType.number,
+                    controller: _durationMsController,
+                    onChanged: (val) => notifier.updateStep(
+                      widget.step.id,
+                      widget.step.copyWith(durationMs: int.tryParse(val)),
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
         ],
