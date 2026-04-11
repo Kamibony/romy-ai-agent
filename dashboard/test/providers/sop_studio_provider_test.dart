@@ -21,7 +21,7 @@ void main() {
       expect(state.goal, '');
       expect(state.clientId, isNull);
       expect(state.steps, isEmpty);
-      expect(state.isSubmitting, isFalse);
+      expect(state.isSaving, isFalse);
       expect(state.errorMessage, isNull);
     });
 

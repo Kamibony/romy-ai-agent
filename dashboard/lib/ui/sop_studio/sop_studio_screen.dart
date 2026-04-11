@@ -172,15 +172,15 @@ class _SopStudioScreenState extends ConsumerState<SopStudioScreen> {
               width: double.infinity,
               height: 50,
               child: ElevatedButton.icon(
-                onPressed: state.isSubmitting ? null : _onSaveSOP,
-                icon: state.isSubmitting
+                onPressed: state.isSaving ? null : _onSaveSOP,
+                icon: state.isSaving
                     ? const SizedBox(
                         width: 20,
                         height: 20,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.save),
-                label: Text(state.isSubmitting ? 'Saving...' : 'Save SOP'),
+                label: Text(state.isSaving ? 'Saving...' : 'Save SOP'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Theme.of(context).primaryColor,
                   foregroundColor: Colors.white,
