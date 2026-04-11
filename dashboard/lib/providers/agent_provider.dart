@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'api_client_provider.dart';
 
 // Provides the telemetry URL
 final telemetryUrlProvider = Provider<String>((ref) => 'http://127.0.0.1:8764');
@@ -11,28 +12,38 @@ final agentStateProvider = NotifierProvider<AgentStateNotifier, AgentStatus>(Age
 
 class AgentStatus {
   final String status;
+  final String agentState;
   final String? intent;
   final String? currentAction;
   final String? currentUrl;
   final String? base64Image;
+  final int? originalWidth;
+  final int? originalHeight;
+  final String? helpReason;
 
   AgentStatus({
     this.status = 'unknown',
+    this.agentState = 'unknown',
     this.intent,
     this.currentAction,
     this.currentUrl,
     this.base64Image,
+    this.originalWidth,
+    this.originalHeight,
+    this.helpReason,
   });
 
   factory AgentStatus.fromJson(Map<String, dynamic> json) {
     return AgentStatus(
       status: json['status'] ?? 'unknown',
-      intent: json['agent_state']?['intent'],
-      currentAction: json['agent_state']?['current_action'],
-      currentUrl: json['agent_state']?['current_url'],
-      // We might receive the image here, or via another endpoint/socket.
-      // Usually, the screenshot might be omitted from standard status endpoint.
-      base64Image: json['agent_state']?['screenshot'],
+      agentState: json['agent_state'] ?? 'unknown',
+      intent: json['intent'],
+      currentAction: json['current_action'],
+      currentUrl: json['current_url'],
+      base64Image: json['screenshot'],
+      originalWidth: json['original_width'],
+      originalHeight: json['original_height'],
+      helpReason: json['help_reason'],
     );
   }
 }
@@ -58,15 +69,12 @@ class AgentStateNotifier extends Notifier<AgentStatus> {
   Future<void> _fetchStatus() async {
     try {
       final baseUrl = ref.read(telemetryUrlProvider);
-      // Typically, telemetry provides a /api/status endpoint
-      // We might use a generic ID or omit if the API supports generic status
       final response = await http.get(Uri.parse('$baseUrl/api/status/active'));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         state = AgentStatus.fromJson(data);
       }
     } catch (e) {
-      // Silent error or update state to indicate connection issue
       if (state.status != 'offline') {
          state = AgentStatus(status: 'offline');
       }
@@ -83,6 +91,22 @@ class AgentStateNotifier extends Notifier<AgentStatus> {
     }
   }
 
-  // Note: For Notifiers, cleanup can be done in ref.onDispose
-  // However, build is where we should probably put onDispose
+  Future<void> sendHumanGuidance(double x, double y) async {
+    try {
+      final baseUrl = ref.read(telemetryUrlProvider);
+      final payload = json.encode({
+        "type": "CLICK",
+        "x": x,
+        "y": y
+      });
+      await http.post(
+        Uri.parse('$baseUrl/api/human_guidance'),
+        headers: {'Content-Type': 'application/json'},
+        body: payload
+      );
+      debugPrint('Sent human guidance: $x, $y');
+    } catch (e) {
+      debugPrint('Failed to send human guidance: $e');
+    }
+  }
 }

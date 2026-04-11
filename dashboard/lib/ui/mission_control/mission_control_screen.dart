@@ -57,6 +57,31 @@ class MissionControlScreen extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 16),
+          if (agentState.helpReason != null) ...[
+            Card(
+              color: Colors.amber.shade100,
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.info_outline, color: Colors.orange),
+                        SizedBox(width: 8),
+                        Text('Human Help Required', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(agentState.helpReason!),
+                    const SizedBox(height: 8),
+                    const Text('Click directly on the Live Preview below to guide the agent.', style: TextStyle(fontStyle: FontStyle.italic)),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
           Expanded(
             child: Card(
               child: Column(
@@ -68,12 +93,60 @@ class MissionControlScreen extends ConsumerWidget {
                   ),
                   Expanded(
                     child: agentState.base64Image != null
-                        ? RepaintBoundary(
-                            child: Image.memory(
-                              base64Decode(agentState.base64Image!),
-                              fit: BoxFit.contain,
-                              gaplessPlayback: true, // Prevents flickering on update
-                            ),
+                        ? LayoutBuilder(
+                            builder: (context, constraints) {
+                              return GestureDetector(
+                                onTapDown: (details) {
+                                  if (agentState.originalWidth == null || agentState.originalHeight == null) return;
+
+                                  final double widgetWidth = constraints.maxWidth;
+                                  final double widgetHeight = constraints.maxHeight;
+                                  final double imageWidth = agentState.originalWidth!.toDouble();
+                                  final double imageHeight = agentState.originalHeight!.toDouble();
+
+                                  // Calculate aspect ratios
+                                  final double widgetAspect = widgetWidth / widgetHeight;
+                                  final double imageAspect = imageWidth / imageHeight;
+
+                                  double scale;
+                                  double dx = 0.0;
+                                  double dy = 0.0;
+
+                                  // Image is wider than the widget -> Letterboxing (black bars on top/bottom)
+                                  if (imageAspect > widgetAspect) {
+                                    scale = widgetWidth / imageWidth;
+                                    double scaledImageHeight = imageHeight * scale;
+                                    dy = (widgetHeight - scaledImageHeight) / 2.0; // Top offset
+                                  }
+                                  // Image is taller than the widget -> Pillarboxing (black bars on left/right)
+                                  else {
+                                    scale = widgetHeight / imageHeight;
+                                    double scaledImageWidth = imageWidth * scale;
+                                    dx = (widgetWidth - scaledImageWidth) / 2.0; // Left offset
+                                  }
+
+                                  // Local tap coordinate
+                                  final double localX = details.localPosition.dx;
+                                  final double localY = details.localPosition.dy;
+
+                                  // Remove offset and scale back to original resolution
+                                  final double rawX = (localX - dx) / scale;
+                                  final double rawY = (localY - dy) / scale;
+
+                                  // Only trigger if click was actually inside the image (not on letterbox)
+                                  if (rawX >= 0 && rawX <= imageWidth && rawY >= 0 && rawY <= imageHeight) {
+                                    notifier.sendHumanGuidance(rawX, rawY);
+                                  }
+                                },
+                                child: RepaintBoundary(
+                                  child: Image.memory(
+                                    base64Decode(agentState.base64Image!),
+                                    fit: BoxFit.contain,
+                                    gaplessPlayback: true,
+                                  ),
+                                ),
+                              );
+                            },
                           )
                         : const Center(
                             child: Text('No preview available', style: TextStyle(color: Colors.grey)),

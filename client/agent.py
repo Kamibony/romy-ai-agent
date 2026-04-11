@@ -1223,6 +1223,7 @@ class AgentStateMachine:
         self.previous_state_ui = None
         self.max_sub_task_iterations = 3
         self.any_subtask_failed = False
+        self.help_reason = None
 
     async def run(self, doc_id, command_text, audio_b64="", client_context=None):
         global ACTIVE_DOC_ID
@@ -1442,6 +1443,7 @@ class AgentStateMachine:
                               })
                           except Exception as fs_e:
                               logging.error(f"Error saving help request: {fs_e}")
+                          self.help_reason = f"Environment failure (e.g., target tab closed or timeout): {error_msg}"
                           self.state = AgentState.SUSPENDED_HITL
                      else:
                           self.command_text += f"\n[System Note: Environment error occurred: {error_msg}. Recovering state.]"
@@ -1562,6 +1564,7 @@ class AgentStateMachine:
                     logging.error(f"Failed to update firestore on replan limit: {e}")
             threading.Thread(target=firestore_update, daemon=True).start()
 
+            self.help_reason = "Dynamic replanning loop limit reached. The agent repeatedly failed to make progress."
             self.state = AgentState.SUSPENDED_HITL
             return
 
@@ -1765,6 +1768,7 @@ class AgentStateMachine:
                     })
                 except Exception as fs_e:
                     logging.error(f"Error saving help request to Firestore: {fs_e}")
+                self.help_reason = f"System error parsing AI response after retries. Payload: {resp_str}"
                 self.state = AgentState.SUSPENDED_HITL
             else:
                 self.command_text += f"\n[System Note: AI generated invalid JSON or invalid actions structure. Try again.]"
@@ -2171,6 +2175,7 @@ class AgentStateMachine:
         except Exception as e:
             logging.error(f"Failed to update firestore with TRAINING_NEEDED context: {e}")
 
+        self.help_reason = f"Fast-Fail Circuit Breaker tripped on physical bottleneck. Repeatedly failed on sub-task: [{current_sub_task}]"
         self.state = AgentState.SUSPENDED_HITL
 
     async def state_suspended_hitl(self):
@@ -3495,17 +3500,55 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
         parsed_path = urllib.parse.urlparse(self.path)
         if parsed_path.path.startswith('/api/status/'):
             doc_id = parsed_path.path.split('/')[-1]
+
+            if doc_id == "active":
+                doc_id = ACTIVE_DOC_ID
+
             status = LOCAL_STATUS.get(doc_id, "unknown")
 
             # Expose iteration count and state for active scenarios
             iteration = 0
             agent_state = "unknown"
             any_subtask_failed = False
+            intent = None
+            current_action = None
+            current_url = None
+            screenshot_base64 = None
+            original_width = None
+            original_height = None
+            help_reason = None
+
             global global_state_machine
             if global_state_machine and getattr(global_state_machine, "doc_id", None) == doc_id:
                 iteration = getattr(global_state_machine, "iteration", 0)
                 agent_state = getattr(global_state_machine, "state", AgentState.TERMINATED).name
                 any_subtask_failed = getattr(global_state_machine, "any_subtask_failed", False)
+
+                # Expose richer state variables
+                intent = getattr(global_state_machine, "intent", None)
+                help_reason = getattr(global_state_machine, "help_reason", None)
+                current_url = getattr(global_state_machine, "current_url", None)
+
+                # Current action / sub-task
+                try:
+                    current_idx = getattr(global_state_machine, "current_sub_task_index", 0)
+                    sub_tasks = getattr(global_state_machine, "sub_tasks", [])
+                    if current_idx < len(sub_tasks):
+                        current_action = sub_tasks[current_idx]
+                except Exception:
+                    pass
+
+                # Current screenshot
+                clean_screenshot_bytes = getattr(global_state_machine, "current_clean_screenshot", None)
+                if clean_screenshot_bytes:
+                    screenshot_base64 = base64.b64encode(clean_screenshot_bytes).decode('utf-8')
+                    try:
+                        from PIL import Image
+                        import io
+                        img = Image.open(io.BytesIO(clean_screenshot_bytes))
+                        original_width, original_height = img.size
+                    except Exception:
+                        pass
 
             self.send_response(HTTPStatus.OK)
             self.send_header('Content-type', 'application/json')
@@ -3515,7 +3558,14 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 "status": status,
                 "iteration": iteration,
                 "agent_state": agent_state,
-                "any_subtask_failed": any_subtask_failed
+                "any_subtask_failed": any_subtask_failed,
+                "intent": intent,
+                "current_action": current_action,
+                "current_url": current_url,
+                "screenshot": screenshot_base64,
+                "original_width": original_width,
+                "original_height": original_height,
+                "help_reason": help_reason
             }).encode())
         elif parsed_path.path == '/api/recording/steps':
             self.send_response(HTTPStatus.OK)
