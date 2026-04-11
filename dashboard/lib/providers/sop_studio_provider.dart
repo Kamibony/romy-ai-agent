@@ -9,7 +9,7 @@ class SopStudioState {
   final String goal;
   final String? clientId;
   final List<SopStep> steps;
-  final bool isSubmitting;
+  final bool isSaving;
   final String? errorMessage;
 
   SopStudioState({
@@ -17,7 +17,7 @@ class SopStudioState {
     this.goal = '',
     this.clientId,
     this.steps = const [],
-    this.isSubmitting = false,
+    this.isSaving = false,
     this.errorMessage,
   });
 
@@ -26,7 +26,7 @@ class SopStudioState {
     String? goal,
     String? clientId,
     List<SopStep>? steps,
-    bool? isSubmitting,
+    bool? isSaving,
     String? errorMessage,
   }) {
     return SopStudioState(
@@ -34,7 +34,7 @@ class SopStudioState {
       goal: goal ?? this.goal,
       clientId: clientId ?? this.clientId,
       steps: steps ?? this.steps,
-      isSubmitting: isSubmitting ?? this.isSubmitting,
+      isSaving: isSaving ?? this.isSaving,
       errorMessage: errorMessage ?? this.errorMessage,
     );
   }
@@ -149,7 +149,7 @@ class SopStudioNotifier extends Notifier<SopStudioState> {
       return false;
     }
 
-    state = state.copyWith(isSubmitting: true, errorMessage: null);
+    state = state.copyWith(isSaving: true, errorMessage: null);
 
     try {
       final payload = SopPayload(
@@ -166,11 +166,11 @@ class SopStudioNotifier extends Notifier<SopStudioState> {
       );
 
       if (response.statusCode == 200) {
-        state = state.copyWith(isSubmitting: false);
+        state = state.copyWith(isSaving: false);
         return true;
       } else {
         state = state.copyWith(
-          isSubmitting: false,
+          isSaving: false,
           errorMessage:
               'Failed to submit SOP: ${response.statusCode} - ${response.body}',
         );
@@ -178,7 +178,7 @@ class SopStudioNotifier extends Notifier<SopStudioState> {
       }
     } catch (e) {
       state = state.copyWith(
-        isSubmitting: false,
+        isSaving: false,
         errorMessage: 'An error occurred while submitting: $e',
       );
       return false;

@@ -58,7 +58,7 @@ class SynthesizePlaybookRequest(BaseModel):
     client_id: Optional[str] = None
     failed_sub_task: Optional[str] = None
 
-class InjectSOPRequest(BaseModel):
+class SOPSaveRequest(BaseModel):
     domain: str
     raw_sop: str
     client_id: Optional[str] = None
@@ -198,7 +198,7 @@ def synthesize_playbook(request: SynthesizePlaybookRequest, uid: str = Depends(v
     return {"status": "ok", "rule": rule}
 
 @app.post("/api/v1/memory/inject_sop")
-def inject_sop(request: InjectSOPRequest, uid: str = Depends(verify_firebase_token)):
+def inject_sop(request: SOPSaveRequest, uid: str = Depends(verify_firebase_token)):
     """
     Endpoint for B2B clients to manually inject a text-based SOP.
     The SOP Compiler translates it into an agent-friendly rule and saves it.
