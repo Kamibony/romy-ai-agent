@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'api_client_provider.dart';
 
 // Provides the telemetry URL
 final telemetryUrlProvider = Provider<String>((ref) => 'http://127.0.0.1:8764');

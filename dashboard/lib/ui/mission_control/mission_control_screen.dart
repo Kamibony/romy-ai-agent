@@ -117,8 +117,9 @@ class MissionControlScreen extends ConsumerWidget {
                               return GestureDetector(
                                 onTapDown: (details) {
                                   if (agentState.originalWidth == null ||
-                                      agentState.originalHeight == null)
+                                      agentState.originalHeight == null) {
                                     return;
+                                  }
 
                                   final double widgetWidth =
                                       constraints.maxWidth;
