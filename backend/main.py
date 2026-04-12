@@ -64,7 +64,7 @@ class SOPSaveRequest(BaseModel):
     client_id: Optional[str] = None
     target_sub_task: Optional[str] = None
 
-class SOPSaveRequest(BaseModel):
+class SOPStudioSaveRequest(BaseModel):
     domain: str
     goal: str
     recorded_steps: List[Dict[str, Any]]
@@ -219,7 +219,7 @@ def inject_sop(request: SOPSaveRequest, uid: str = Depends(verify_firebase_token
         )
 
 @app.post("/api/v1/memory/sops")
-def save_sop(request: SOPSaveRequest, uid: str = Depends(verify_firebase_token)):
+def save_sop(request: SOPStudioSaveRequest, uid: str = Depends(verify_firebase_token)):
     """
     Endpoint for SOP Studio to save a recorded process.
     The raw DOM steps are vectorized and saved via dual-write.
