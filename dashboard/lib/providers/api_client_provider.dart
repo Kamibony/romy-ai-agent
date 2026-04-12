@@ -39,13 +39,13 @@ class ApiClient {
   }
 
   Future<http.Response> get(String path) async {
-    final baseUrl = _ref.read(telemetryUrlProvider);
+    final baseUrl = _ref.read(backendUrlProvider);
     final headers = await _getHeaders();
     return _client.get(Uri.parse('$baseUrl$path'), headers: headers);
   }
 
   Future<http.Response> post(String path, {Object? body}) async {
-    final baseUrl = _ref.read(telemetryUrlProvider);
+    final baseUrl = _ref.read(backendUrlProvider);
     final headers = await _getHeaders();
     return _client.post(
       Uri.parse('$baseUrl$path'),
@@ -55,7 +55,7 @@ class ApiClient {
   }
 
   Future<http.Response> delete(String path) async {
-    final baseUrl = _ref.read(telemetryUrlProvider);
+    final baseUrl = _ref.read(backendUrlProvider);
     final headers = await _getHeaders();
     return _client.delete(Uri.parse('$baseUrl$path'), headers: headers);
   }
