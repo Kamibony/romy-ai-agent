@@ -23,8 +23,20 @@ from firebase_admin import firestore
 import traceback
 from fastapi.responses import JSONResponse
 from fastapi import Request
+from contextlib import asynccontextmanager
 
-app = FastAPI(title="ROMY AI Agent Backend")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize all external services explicitly
+    from firebase_config import initialize_firebase
+    initialize_firebase()
+
+    from ai_service import get_gemini_client
+    get_gemini_client()
+
+    yield
+
+app = FastAPI(title="ROMY AI Agent Backend", lifespan=lifespan)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
