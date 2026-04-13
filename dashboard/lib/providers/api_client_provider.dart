@@ -9,6 +9,12 @@ final apiClientProvider = Provider<ApiClient>((ref) {
 });
 
 class ApiClient {
+
+  String get _baseUrl {
+    const backendPort = String.fromEnvironment('BACKEND_PORT', defaultValue: '8000');
+    return 'http://127.0.0.1:$backendPort';
+  }
+
   final Ref _ref;
   final http.Client _client = http.Client();
 
@@ -39,13 +45,13 @@ class ApiClient {
   }
 
   Future<http.Response> get(String path) async {
-    final baseUrl = _ref.read(backendUrlProvider);
+    final baseUrl = _baseUrl;
     final headers = await _getHeaders();
     return _client.get(Uri.parse('$baseUrl$path'), headers: headers);
   }
 
   Future<http.Response> post(String path, {Object? body}) async {
-    final baseUrl = _ref.read(backendUrlProvider);
+    final baseUrl = _baseUrl;
     final headers = await _getHeaders();
     return _client.post(
       Uri.parse('$baseUrl$path'),
@@ -55,7 +61,7 @@ class ApiClient {
   }
 
   Future<http.Response> delete(String path) async {
-    final baseUrl = _ref.read(backendUrlProvider);
+    final baseUrl = _baseUrl;
     final headers = await _getHeaders();
     return _client.delete(Uri.parse('$baseUrl$path'), headers: headers);
   }

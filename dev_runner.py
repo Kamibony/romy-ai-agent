@@ -147,7 +147,7 @@ def main():
     client_cmd = [client_python, "main.py"]
 
     # Flutter Dashboard on port 3000
-    dashboard_cmd = ["flutter", "run", "-d", "chrome", "--web-port", "3000"]
+    dashboard_cmd = ["flutter", "run", "-d", "chrome", "--web-port", "3000", "--dart-define", "BACKEND_PORT=8000", "--dart-define", "TELEMETRY_PORT=8764"]
 
     # Colors: 36=Cyan, 32=Green, 35=Magenta
     threads = [
