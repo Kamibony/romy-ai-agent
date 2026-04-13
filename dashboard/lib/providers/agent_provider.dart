@@ -5,10 +5,11 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 // Provides the telemetry URL
-final telemetryUrlProvider = Provider<String>((ref) => 'http://127.0.0.1:8764');
+final telemetryUrlProvider = Provider<String>((ref) {
+  const telemetryPort = String.fromEnvironment('TELEMETRY_PORT', defaultValue: '8764');
+  return 'http://127.0.0.1:$telemetryPort';
+});
 
-// Provides the backend URL
-final backendUrlProvider = Provider<String>((ref) => 'http://127.0.0.1:8000');
 
 final agentStateProvider = NotifierProvider<AgentStateNotifier, AgentStatus>(
   AgentStateNotifier.new,
