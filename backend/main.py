@@ -2,10 +2,13 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables from the monorepo root .env file
-root_dir = Path(__file__).resolve().parent.parent
-dotenv_path = root_dir / ".env"
-load_dotenv(dotenv_path=dotenv_path)
+# Load environment variables from the backend .env file
+try:
+    backend_dir = Path(__file__).resolve().parent
+    dotenv_path = backend_dir / ".env"
+    load_dotenv(dotenv_path=dotenv_path)
+except Exception as e:
+    print(f"Failed to load .env file: {e}")
 
 from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
