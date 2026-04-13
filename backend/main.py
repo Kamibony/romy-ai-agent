@@ -20,8 +20,20 @@ from db import check_user_license, get_task_session, update_task_session, create
 from ai_service import process_with_gemini, transcribe_audio_with_gemini, classify_intent_with_gemini, pre_flight_check_with_gemini, supervisor_plan_with_gemini, critic_verify_with_gemini, synthesize_playbook_rule_with_gemini, compile_sop_with_gemini
 from memory import get_playbook_rules, list_playbook_rules_from_firestore, delete_playbook_rule, save_playbook_rule
 from firebase_admin import firestore
+import traceback
+from fastapi.responses import JSONResponse
+from fastapi import Request
 
 app = FastAPI(title="ROMY AI Agent Backend")
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    print(f"Global Exception Handler Caught: {exc}")
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error. Please check the server logs."},
+    )
 
 from typing import Optional, List, Dict, Any
 
@@ -236,31 +248,51 @@ def save_sop(request: SOPStudioSaveRequest, uid: str = Depends(verify_firebase_t
     Endpoint for SOP Studio to save a recorded process.
     The raw DOM steps are vectorized and saved via dual-write.
     """
-    if not check_user_license(uid):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User license is not active.",
-        )
-
-    # Convert recorded steps to a format that can be vectorized
-    raw_sop = f"Goal: {request.goal}\nSteps:\n" + str(request.recorded_steps)
-
-    # Synthesize the rule
-    rule = compile_sop_with_gemini(request.domain, raw_sop, client_id=request.client_id, target_sub_task=request.goal)
-
-    if rule:
-        save_playbook_rule(
-            domain=request.domain,
-            rule=rule,
-            client_id=request.client_id,
-            goal=request.goal,
-            source="sop_studio"
-        )
-        return {"status": "ok", "rule": rule}
-    else:
+    try:
+        if not check_user_license(uid):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User license is not active.",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error checking user license in save_sop: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to compile and save SOP.",
+            detail="Failed to verify user license.",
+        )
+
+    try:
+        # Convert recorded steps to a format that can be vectorized
+        raw_sop = f"Goal: {request.goal}\nSteps:\n" + str(request.recorded_steps)
+
+        # Synthesize the rule
+        rule = compile_sop_with_gemini(request.domain, raw_sop, client_id=request.client_id, target_sub_task=request.goal)
+
+        if rule:
+            save_playbook_rule(
+                domain=request.domain,
+                rule=rule,
+                client_id=request.client_id,
+                goal=request.goal,
+                source="sop_studio"
+            )
+            return {"status": "ok", "rule": rule}
+        else:
+            # If Gemini fails, we shouldn't crash the UI but we should indicate failure.
+            # We will use 500 but it's handled gracefully.
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to compile and save SOP.",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error saving SOP: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An error occurred while saving SOP: {str(e)}"
         )
 
 @app.get("/api/v1/memory/sops")
@@ -269,14 +301,29 @@ def get_sops(client_id: Optional[str] = None, uid: str = Depends(verify_firebase
     Endpoint for Memory Manager to fetch all recorded SOPs.
     Retrieves rules directly from Firestore.
     """
-    if not check_user_license(uid):
+    try:
+        if not check_user_license(uid):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User license is not active.",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error checking user license in get_sops: {e}")
+        # Graceful degradation if auth/DB fails entirely: Fail closed.
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User license is not active.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to verify user license.",
         )
 
-    rules = list_playbook_rules_from_firestore(client_id=client_id)
-    return {"status": "ok", "sops": rules}
+    try:
+        rules = list_playbook_rules_from_firestore(client_id=client_id)
+        return {"status": "ok", "sops": rules}
+    except Exception as e:
+        print(f"Error fetching SOPs: {e}")
+        # Graceful degradation: Return empty list if DB connection fails
+        return {"status": "ok", "sops": []}
 
 @app.delete("/api/v1/memory/sops/{doc_id}")
 def delete_sop(doc_id: str, client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token)):
@@ -304,14 +351,27 @@ def get_dashboard_rules(client_id: Optional[str] = None, uid: str = Depends(veri
     """
     Endpoint for Dashboard to fetch all memory rules from Firestore (fast, no vector search).
     """
-    if not check_user_license(uid):
+    try:
+        if not check_user_license(uid):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User license is not active.",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error checking user license in get_dashboard_rules: {e}")
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User license is not active.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to verify user license.",
         )
 
-    rules = list_playbook_rules_from_firestore(client_id=client_id)
-    return {"status": "ok", "rules": rules}
+    try:
+        rules = list_playbook_rules_from_firestore(client_id=client_id)
+        return {"status": "ok", "rules": rules}
+    except Exception as e:
+        print(f"Error fetching dashboard rules: {e}")
+        return {"status": "ok", "rules": []}
 
 @app.delete("/api/v1/memory/rules/{rule_id}")
 def delete_dashboard_rule(rule_id: str, client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token)):
