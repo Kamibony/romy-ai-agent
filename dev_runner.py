@@ -136,6 +136,9 @@ def main():
     print("\n=== Starting Monorepo E2E Environment ===")
     print("Press Ctrl+C to stop all services\n")
 
+    # Set LOCAL_DEV environment variable for all child processes
+    os.environ["LOCAL_DEV"] = "True"
+
     backend_python = get_python_cmd(BACKEND_VENV)
     client_python = get_python_cmd(CLIENT_VENV)
 

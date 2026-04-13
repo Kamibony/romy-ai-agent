@@ -1,3 +1,4 @@
+import os
 import firebase_admin
 from firebase_admin import firestore
 
@@ -51,6 +52,10 @@ def check_user_license(uid: str) -> bool:
     Connects to Firestore, checks the `users` collection for the given `uid`,
     and returns True if `is_active` is boolean True or if the user has a 'partner' or 'admin' role.
     """
+    # Bypass for local development
+    if uid == "local-dev-uid" and (os.environ.get("LOCAL_DEV") == "True" or os.environ.get("ROMY_TEST_MODE") == "1"):
+        return True
+
     try:
         db = firestore.client()
         user_ref = db.collection("users").document(uid)
