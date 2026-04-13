@@ -1,3 +1,12 @@
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from the monorepo root .env file
+root_dir = Path(__file__).resolve().parent.parent
+dotenv_path = root_dir / ".env"
+load_dotenv(dotenv_path=dotenv_path)
+
 from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
