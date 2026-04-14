@@ -11,6 +11,7 @@ except Exception as e:
     print(f"Failed to load .env file: {e}")
 
 from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -29,10 +30,10 @@ from contextlib import asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize all external services explicitly
     from firebase_config import initialize_firebase
-    initialize_firebase()
+    await run_in_threadpool(initialize_firebase)
 
     from ai_service import get_gemini_client
-    get_gemini_client()
+    await run_in_threadpool(get_gemini_client)
 
     yield
 
@@ -255,13 +256,14 @@ def inject_sop(request: SOPSaveRequest, uid: str = Depends(verify_firebase_token
         )
 
 @app.post("/api/v1/memory/sops")
-def save_sop(request: SOPStudioSaveRequest, uid: str = Depends(verify_firebase_token)):
+async def save_sop(request: SOPStudioSaveRequest, uid: str = Depends(verify_firebase_token)):
     """
     Endpoint for SOP Studio to save a recorded process.
     The raw DOM steps are vectorized and saved via dual-write.
     """
     try:
-        if not check_user_license(uid):
+        is_active = await run_in_threadpool(check_user_license, uid)
+        if not is_active:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="User license is not active.",
@@ -280,15 +282,15 @@ def save_sop(request: SOPStudioSaveRequest, uid: str = Depends(verify_firebase_t
         raw_sop = f"Goal: {request.goal}\nSteps:\n" + str(request.recorded_steps)
 
         # Synthesize the rule
-        rule = compile_sop_with_gemini(request.domain, raw_sop, client_id=request.client_id, target_sub_task=request.goal)
+        rule = await run_in_threadpool(
+            compile_sop_with_gemini,
+            request.domain, raw_sop, client_id=request.client_id, target_sub_task=request.goal
+        )
 
         if rule:
-            save_playbook_rule(
-                domain=request.domain,
-                rule=rule,
-                client_id=request.client_id,
-                goal=request.goal,
-                source="sop_studio"
+            await run_in_threadpool(
+                save_playbook_rule,
+                request.domain, rule, client_id=request.client_id, goal=request.goal, source="sop_studio"
             )
             return {"status": "ok", "rule": rule}
         else:
@@ -308,13 +310,14 @@ def save_sop(request: SOPStudioSaveRequest, uid: str = Depends(verify_firebase_t
         )
 
 @app.get("/api/v1/memory/sops")
-def get_sops(client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token)):
+async def get_sops(client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token)):
     """
     Endpoint for Memory Manager to fetch all recorded SOPs.
     Retrieves rules directly from Firestore.
     """
     try:
-        if not check_user_license(uid):
+        is_active = await run_in_threadpool(check_user_license, uid)
+        if not is_active:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="User license is not active.",
@@ -330,7 +333,7 @@ def get_sops(client_id: Optional[str] = None, uid: str = Depends(verify_firebase
         )
 
     try:
-        rules = list_playbook_rules_from_firestore(client_id=client_id)
+        rules = await run_in_threadpool(list_playbook_rules_from_firestore, client_id=client_id)
         return {"status": "ok", "sops": rules}
     except Exception as e:
         print(f"Error fetching SOPs: {e}")
