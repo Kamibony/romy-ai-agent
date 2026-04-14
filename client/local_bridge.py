@@ -150,36 +150,11 @@ class LocalBridgeManager:
         self.stop_event = asyncio.Event()
         logging.info(f"WebSocket local bridge server started on ws://127.0.0.1:{self.port}")
 
-
-        async def heartbeat_loop():
-            while not self.stop_event.is_set():
-                await asyncio.sleep(10)
-                ws = None
-                with self.lock:
-                    ws = self.active_websocket
-
-                if ws:
-                    try:
-                        pong_waiter = await ws.ping()
-                        await asyncio.wait_for(pong_waiter, timeout=5.0)
-                    except Exception as e:
-                        logging.warning(f"Heartbeat failed, closing dead connection: {e}")
-                        with self.lock:
-                            if self.active_websocket == ws:
-                                self.active_websocket = None
-                        try:
-                            await ws.close()
-                        except:
-                            pass
-
-        heartbeat_task = asyncio.create_task(heartbeat_loop())
-
         try:
             await self.stop_event.wait()
         except asyncio.CancelledError:
             pass
         finally:
-            heartbeat_task.cancel()
             self.server.close()
             await self.server.wait_closed()
             logging.info("WebSocket local bridge server stopped.")
