@@ -4,32 +4,37 @@ from unittest.mock import patch, MagicMock
 
 import sys
 import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Mock firebase and chromadb before importing main
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+
 sys.modules['firebase_admin'] = MagicMock()
 sys.modules['firebase_admin.credentials'] = MagicMock()
 sys.modules['firebase_admin.auth'] = MagicMock()
 sys.modules['firebase_admin.firestore'] = MagicMock()
 sys.modules['chromadb'] = MagicMock()
 
-# Instead of patching backend.main decorators directly which gets hairy, let's just
-# override the dependency for authentication
-from backend.main import app, verify_firebase_token
+os.environ["LOCAL_DEV"] = "True"
+
+from main import app, verify_firebase_token, get_memory_repository
+from repositories import InMemoryMemoryRepository
 
 def override_verify_firebase_token():
     return "fake_uid"
 
+shared_mock_repo = InMemoryMemoryRepository()
+
 app.dependency_overrides[verify_firebase_token] = override_verify_firebase_token
+app.dependency_overrides[get_memory_repository] = lambda: shared_mock_repo
 
 client = TestClient(app)
 
-@patch('backend.main.check_user_license')
-@patch('backend.main.compile_sop_with_gemini')
-@patch('backend.main.save_playbook_rule')
-def test_save_sop(mock_save, mock_compile, mock_check_license):
+@patch('main.check_user_license')
+@patch('main.compile_sop_with_gemini')
+def test_save_sop(mock_compile, mock_check_license):
     mock_check_license.return_value = True
     mock_compile.return_value = "Compiled SOP Rule"
+
+    shared_mock_repo.rules.clear()
 
     response = client.post(
         "/api/v1/memory/sops",
@@ -42,25 +47,34 @@ def test_save_sop(mock_save, mock_compile, mock_check_license):
     )
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "rule": "Compiled SOP Rule"}
-    mock_save.assert_called_once()
 
-@patch('backend.main.check_user_license')
-@patch('backend.main.list_playbook_rules_from_firestore')
-def test_get_sops(mock_list, mock_check_license):
+    assert len(shared_mock_repo.rules) == 1
+    saved_rule = list(shared_mock_repo.rules.values())[0]
+    assert saved_rule["rule"] == "Compiled SOP Rule"
+
+@patch('main.check_user_license')
+def test_get_sops(mock_check_license):
     mock_check_license.return_value = True
-    mock_list.return_value = [{"id": "doc1", "rule": "Rule 1"}]
+
+    shared_mock_repo.rules.clear()
+    shared_mock_repo.rules["doc1"] = {"id": "doc1", "rule": "Rule 1", "client_id": "test_client"}
 
     response = client.get("/api/v1/memory/sops?client_id=test_client")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "sops": [{"id": "doc1", "rule": "Rule 1"}]}
 
+    sops = response.json().get("sops", [])
+    assert len(sops) == 1
+    assert sops[0]["id"] == "doc1"
+    assert sops[0]["rule"] == "Rule 1"
 
-@patch('backend.main.check_user_license')
-@patch('backend.main.delete_playbook_rule')
-def test_delete_sop(mock_delete, mock_check_license):
+@patch('main.check_user_license')
+def test_delete_sop(mock_check_license):
     mock_check_license.return_value = True
-    mock_delete.return_value = True
+
+    shared_mock_repo.rules.clear()
+    shared_mock_repo.rules["doc1"] = {"id": "doc1", "rule": "Rule 1", "client_id": "test_client"}
 
     response = client.delete("/api/v1/memory/sops/doc1?client_id=test_client")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+    assert len(shared_mock_repo.rules) == 0

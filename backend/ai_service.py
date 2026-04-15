@@ -411,7 +411,7 @@ def classify_intent_with_gemini(command_text: str) -> str:
         print(f"Error classifying intent: {e}")
         return "OS"
 
-def compile_sop_with_gemini(domain: str, raw_sop: str, client_id: str = None, target_sub_task: str = None) -> Optional[str]:
+def compile_sop_with_gemini(domain: str, raw_sop: str, client_id: str = None, target_sub_task: str = None, memory_repo=None) -> Optional[str]:
     """
     SOP Compiler Pipeline: Takes raw human SOP text and translates it into an agent-friendly
     playbook rule, checking for existing rules to consolidate.
@@ -423,7 +423,10 @@ def compile_sop_with_gemini(domain: str, raw_sop: str, client_id: str = None, ta
     try:
         existing_rules = []
         if target_sub_task:
-            existing_rules = get_playbook_rules(domain, client_id=client_id, goal=target_sub_task)
+            if memory_repo:
+                existing_rules = memory_repo.get_playbook_rules(domain, client_id=client_id, goal=target_sub_task)
+            else:
+                existing_rules = get_playbook_rules(domain, client_id=client_id, goal=target_sub_task)
 
         system_instruction = (
             "You are an SOP Compiler Agent. A human operator has provided raw text outlining a "
