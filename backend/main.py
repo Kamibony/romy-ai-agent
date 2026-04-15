@@ -19,7 +19,7 @@ from typing import Optional, List, Dict, Any
 from auth import verify_firebase_token
 from db import check_user_license, get_task_session, update_task_session, create_task_session
 from ai_service import process_with_gemini, transcribe_audio_with_gemini, classify_intent_with_gemini, pre_flight_check_with_gemini, supervisor_plan_with_gemini, critic_verify_with_gemini, synthesize_playbook_rule_with_gemini, compile_sop_with_gemini
-from memory import get_playbook_rules, list_playbook_rules_from_firestore, delete_playbook_rule, save_playbook_rule
+from repositories import get_memory_repository, AbstractMemoryRepository
 from firebase_admin import firestore
 import traceback
 from fastapi.responses import JSONResponse
@@ -256,7 +256,7 @@ def inject_sop(request: SOPSaveRequest, uid: str = Depends(verify_firebase_token
         )
 
 @app.post("/api/v1/memory/sops")
-async def save_sop(request: SOPStudioSaveRequest, uid: str = Depends(verify_firebase_token)):
+async def save_sop(request: SOPStudioSaveRequest, uid: str = Depends(verify_firebase_token), memory_repo: AbstractMemoryRepository = Depends(get_memory_repository)):
     """
     Endpoint for SOP Studio to save a recorded process.
     The raw DOM steps are vectorized and saved via dual-write.
@@ -284,12 +284,12 @@ async def save_sop(request: SOPStudioSaveRequest, uid: str = Depends(verify_fire
         # Synthesize the rule
         rule = await run_in_threadpool(
             compile_sop_with_gemini,
-            request.domain, raw_sop, client_id=request.client_id, target_sub_task=request.goal
+            request.domain, raw_sop, client_id=request.client_id, target_sub_task=request.goal, memory_repo=memory_repo
         )
 
         if rule:
             await run_in_threadpool(
-                save_playbook_rule,
+                memory_repo.save_playbook_rule,
                 request.domain, rule, client_id=request.client_id, goal=request.goal, source="sop_studio"
             )
             return {"status": "ok", "rule": rule}
@@ -310,7 +310,7 @@ async def save_sop(request: SOPStudioSaveRequest, uid: str = Depends(verify_fire
         )
 
 @app.get("/api/v1/memory/sops")
-async def get_sops(client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token)):
+async def get_sops(client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token), memory_repo: AbstractMemoryRepository = Depends(get_memory_repository)):
     """
     Endpoint for Memory Manager to fetch all recorded SOPs.
     Retrieves rules directly from Firestore.
@@ -333,7 +333,7 @@ async def get_sops(client_id: Optional[str] = None, uid: str = Depends(verify_fi
         )
 
     try:
-        rules = await run_in_threadpool(list_playbook_rules_from_firestore, client_id=client_id)
+        rules = await run_in_threadpool(memory_repo.list_playbook_rules, client_id=client_id)
         return {"status": "ok", "sops": rules}
     except Exception as e:
         print(f"Error fetching SOPs: {e}")
@@ -341,7 +341,7 @@ async def get_sops(client_id: Optional[str] = None, uid: str = Depends(verify_fi
         return {"status": "ok", "sops": []}
 
 @app.delete("/api/v1/memory/sops/{doc_id}")
-def delete_sop(doc_id: str, client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token)):
+def delete_sop(doc_id: str, client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token), memory_repo: AbstractMemoryRepository = Depends(get_memory_repository)):
     """
     Endpoint for Memory Manager to delete a saved SOP.
     Deletes the rule from both ChromaDB and Firestore.
@@ -352,7 +352,7 @@ def delete_sop(doc_id: str, client_id: Optional[str] = None, uid: str = Depends(
             detail="User license is not active.",
         )
 
-    success = delete_playbook_rule(doc_id, client_id=client_id)
+    success = memory_repo.delete_playbook_rule(doc_id, client_id=client_id)
     if success:
         return {"status": "ok"}
     else:
