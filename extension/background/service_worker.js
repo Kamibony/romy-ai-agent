@@ -888,31 +888,54 @@ async function handleExecuteNativeAction(payload) {
             x = Math.round(x);
             y = Math.round(y);
 
-            // Draw a red dot for HITL feedback before clicking (using CSS pixels)
+            // B2B Demo Stability: Telegraphed Execution with Glowing Bounding Box + Delay
             try {
                 await cdpManager.sendCommand(activeSessionTabId, "Runtime.evaluate", {
                     expression: `
                         (function() {
-                            const dot = document.createElement('div');
-                            dot.style.position = 'fixed';
-                            dot.style.left = '${x}px';
-                            dot.style.top = '${y}px';
-                            dot.style.width = '10px';
-                            dot.style.height = '10px';
-                            dot.style.backgroundColor = 'rgba(255, 0, 0, 0.7)';
-                            dot.style.borderRadius = '50%';
-                            dot.style.zIndex = '2147483647'; // Max z-index
-                            dot.style.pointerEvents = 'none'; // Don't block the actual click
-                            dot.style.transform = 'translate(-50%, -50%)';
-                            document.body.appendChild(dot);
+                            const el = document.elementFromPoint(${x}, ${y});
+                            const highlight = document.createElement('div');
+                            highlight.style.position = 'fixed';
+                            highlight.style.zIndex = '2147483647';
+                            highlight.style.pointerEvents = 'none';
+                            highlight.style.boxSizing = 'border-box';
+                            highlight.style.transition = 'all 0.2s ease-in-out';
+
+                            if (el && el !== document.body && el !== document.documentElement) {
+                                const rect = el.getBoundingClientRect();
+                                highlight.style.left = (rect.left - 4) + 'px';
+                                highlight.style.top = (rect.top - 4) + 'px';
+                                highlight.style.width = (rect.width + 8) + 'px';
+                                highlight.style.height = (rect.height + 8) + 'px';
+                                highlight.style.border = '4px solid rgba(255, 50, 50, 0.9)';
+                                highlight.style.borderRadius = '6px';
+                                highlight.style.boxShadow = '0 0 15px rgba(255, 50, 50, 0.8), inset 0 0 10px rgba(255, 50, 50, 0.4)';
+                                highlight.style.backgroundColor = 'rgba(255, 50, 50, 0.15)';
+                            } else {
+                                // Fallback dot if no explicit element found
+                                highlight.style.left = '${x}px';
+                                highlight.style.top = '${y}px';
+                                highlight.style.width = '24px';
+                                highlight.style.height = '24px';
+                                highlight.style.backgroundColor = 'rgba(255, 50, 50, 0.4)';
+                                highlight.style.border = '3px solid rgba(255, 50, 50, 0.9)';
+                                highlight.style.borderRadius = '50%';
+                                highlight.style.boxShadow = '0 0 15px rgba(255, 50, 50, 0.8)';
+                                highlight.style.transform = 'translate(-50%, -50%)';
+                            }
+
+                            document.body.appendChild(highlight);
                             setTimeout(() => {
-                                if(dot.parentNode) dot.parentNode.removeChild(dot);
-                            }, 1000);
+                                if(highlight.parentNode) highlight.parentNode.removeChild(highlight);
+                            }, 1500); // Keep it visible for the delay
                         })();
                     `
                 });
+
+                // Implicit Stability Buffer: 1.5s hard delay to telegraph action and let SPA settle
+                await new Promise(r => setTimeout(r, 1500));
             } catch (err) {
-                sendTelemetryLog(`[CDP] Failed to draw HITL feedback dot: ${err.message}`);
+                sendTelemetryLog(`[CDP] Failed to draw Telegraphed Execution highlight: ${err.message}`);
             }
 
             if (actionData.stealth_mode !== false) {
@@ -1000,37 +1023,59 @@ async function handleExecuteNativeAction(payload) {
                 x = Math.round(x);
                 y = Math.round(y);
 
-                // Draw a red dot for HITL feedback before typing focus click (using CSS pixels)
+                // B2B Demo Stability: Telegraphed Execution for TYPE focus click
                 try {
                     await cdpManager.sendCommand(activeSessionTabId, "Runtime.evaluate", {
                         expression: `
                             (function() {
-                                // Attempt to focus the element directly under the coordinates BEFORE appending dot
+                                // Attempt to focus the element directly under the coordinates BEFORE appending highlight
                                 const el = document.elementFromPoint(${x}, ${y});
                                 if (el && typeof el.focus === 'function') {
                                     el.focus();
                                 }
 
-                                const dot = document.createElement('div');
-                                dot.style.position = 'fixed';
-                                dot.style.left = '${x}px';
-                                dot.style.top = '${y}px';
-                                dot.style.width = '10px';
-                                dot.style.height = '10px';
-                                dot.style.backgroundColor = 'rgba(0, 0, 255, 0.7)'; // Blue for type focus
-                                dot.style.borderRadius = '50%';
-                                dot.style.zIndex = '2147483647';
-                                dot.style.pointerEvents = 'none';
-                                dot.style.transform = 'translate(-50%, -50%)';
-                                document.body.appendChild(dot);
+                                const highlight = document.createElement('div');
+                                highlight.style.position = 'fixed';
+                                highlight.style.zIndex = '2147483647';
+                                highlight.style.pointerEvents = 'none';
+                                highlight.style.boxSizing = 'border-box';
+                                highlight.style.transition = 'all 0.2s ease-in-out';
+
+                                if (el && el !== document.body && el !== document.documentElement) {
+                                    const rect = el.getBoundingClientRect();
+                                    highlight.style.left = (rect.left - 4) + 'px';
+                                    highlight.style.top = (rect.top - 4) + 'px';
+                                    highlight.style.width = (rect.width + 8) + 'px';
+                                    highlight.style.height = (rect.height + 8) + 'px';
+                                    highlight.style.border = '4px solid rgba(50, 100, 255, 0.9)'; // Blue for TYPE
+                                    highlight.style.borderRadius = '6px';
+                                    highlight.style.boxShadow = '0 0 15px rgba(50, 100, 255, 0.8), inset 0 0 10px rgba(50, 100, 255, 0.4)';
+                                    highlight.style.backgroundColor = 'rgba(50, 100, 255, 0.15)';
+                                } else {
+                                    // Fallback dot
+                                    highlight.style.left = '${x}px';
+                                    highlight.style.top = '${y}px';
+                                    highlight.style.width = '24px';
+                                    highlight.style.height = '24px';
+                                    highlight.style.backgroundColor = 'rgba(50, 100, 255, 0.4)';
+                                    highlight.style.border = '3px solid rgba(50, 100, 255, 0.9)';
+                                    highlight.style.borderRadius = '50%';
+                                    highlight.style.boxShadow = '0 0 15px rgba(50, 100, 255, 0.8)';
+                                    highlight.style.transform = 'translate(-50%, -50%)';
+                                }
+
+                                document.body.appendChild(highlight);
                                 setTimeout(() => {
-                                    if(dot.parentNode) dot.parentNode.removeChild(dot);
-                                }, 1000);
+                                    if(highlight.parentNode) highlight.parentNode.removeChild(highlight);
+                                }, 1500); // Keep it visible for the delay
                             })();
                         `
                     });
+
+                    // Implicit Stability Buffer: 1.5s hard delay before typing
+                    await new Promise(r => setTimeout(r, 1500));
                 } catch (err) {
-                    sendTelemetryLog(`[CDP] Failed to draw HITL feedback dot or focus element: ${err.message}`);
+                    sendTelemetryLog(`[CDP] Failed to draw Telegraphed Execution TYPE highlight or focus element: ${err.message}`);
                 }
 
                 await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", { type: "mousePressed", x: x, y: y, button: "left", clickCount: 1 });
