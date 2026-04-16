@@ -3739,8 +3739,8 @@ def start_local_api(port=8764):
     """Starts the local API server in a daemon thread."""
     def run_server():
         try:
-            with socketserver.TCPServer(("127.0.0.1", port), LocalAPIHandler) as httpd:
-                logging.info(f"Started Local API Server on http://127.0.0.1:{port}")
+            with socketserver.ThreadingTCPServer(("0.0.0.0", port), LocalAPIHandler) as httpd:
+                logging.info(f"Started Local API Server on http://0.0.0.0:{port}")
                 httpd.serve_forever()
         except OSError as e:
             logging.error(f"Failed to start Local API Server: {e}")
