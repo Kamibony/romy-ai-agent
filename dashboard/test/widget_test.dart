@@ -9,6 +9,6 @@ void main() {
     // Build our app and trigger a frame.
     await tester.pumpWidget(const ProviderScope(child: DashboardApp()));
 
-    expect(find.text('Mission Control'), findsWidgets);
+    expect(find.text('Moje procesy'), findsWidgets);
   });
 }

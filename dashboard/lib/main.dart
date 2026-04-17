@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'ui/mission_control/mission_control_screen.dart';
 import 'ui/sop_studio/sop_studio_screen.dart';
 import 'ui/memory_manager/memory_manager_screen.dart';
+import 'ui/components/persistent_status_bar.dart';
 import 'firebase_options.dart';
 
 // Provides the initialization state of Firebase using a FutureProvider
@@ -62,12 +63,16 @@ class _MainLayoutState extends State<MainLayout> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Romy Dashboard'),
+        title: const Text('Romy AI'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
-      body: Row(
+      body: Column(
         children: [
-          NavigationRail(
+          const PersistentStatusBar(),
+          Expanded(
+            child: Row(
+              children: [
+                NavigationRail(
             selectedIndex: _selectedIndex,
             onDestinationSelected: (int index) {
               setState(() {
@@ -78,20 +83,23 @@ class _MainLayoutState extends State<MainLayout> {
             destinations: const [
               NavigationRailDestination(
                 icon: Icon(Icons.speed),
-                label: Text('Mission Control'),
+                label: Text('Moje procesy'),
               ),
               NavigationRailDestination(
                 icon: Icon(Icons.edit_document),
-                label: Text('SOP Studio'),
+                label: Text('Trénink Romy'),
               ),
               NavigationRailDestination(
                 icon: Icon(Icons.memory),
-                label: Text('Memory Manager'),
+                label: Text('Znalosti'),
               ),
             ],
           ),
           const VerticalDivider(thickness: 1, width: 1),
-          Expanded(child: _screens[_selectedIndex]),
+                Expanded(child: _screens[_selectedIndex]),
+              ],
+            ),
+          ),
         ],
       ),
     );
