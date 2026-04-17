@@ -1,7 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_auth/firebase_auth.dart';
-import 'agent_provider.dart';
+
 import '../main.dart';
 
 final apiClientProvider = Provider<ApiClient>((ref) {

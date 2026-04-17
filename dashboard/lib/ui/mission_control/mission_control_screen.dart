@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'dart:convert';
-import '../../providers/api_client_provider.dart';
+
+
 import '../../providers/agent_provider.dart';
 import '../memory_manager/memory_manager_screen.dart'; // To reuse memoryRulesProvider
 
