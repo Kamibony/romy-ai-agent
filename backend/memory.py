@@ -159,19 +159,22 @@ def get_playbook_rules(domain: str, query: str = "", n_results: int = 3, client_
                 )
 
                 all_rules = []
+                seen_rules = set()
 
                 if client_results and client_results.get("documents"):
                     for doc_list in client_results["documents"]:
                         for doc in doc_list:
-                            if doc not in all_rules:
+                            if doc not in seen_rules:
                                 all_rules.append(doc)
+                                seen_rules.add(doc)
 
                 if general_results and general_results.get("documents") and general_results.get("metadatas"):
                     for doc_list, meta_list in zip(general_results["documents"], general_results["metadatas"]):
                         for doc, meta in zip(doc_list, meta_list):
                             # Ensure it's a general rule (no client_id)
-                            if "client_id" not in meta and doc not in all_rules:
+                            if "client_id" not in meta and doc not in seen_rules:
                                 all_rules.append(doc)
+                                seen_rules.add(doc)
                 return all_rules
             else:
                 results = playbook_collection.query(
