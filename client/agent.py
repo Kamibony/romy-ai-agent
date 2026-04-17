@@ -3107,8 +3107,8 @@ def execute_voice_agent_loop() -> None:
                                 active_window = local_auto.GetForegroundControl()
                                 if active_window:
                                     initial_window_name = active_window.Name
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logging.warning(f"Failed to capture initial foreground window: {e}")
 
                             # Use os.startfile on Windows to allow app resolution from PATH safely
                             os.startfile(app_name)
@@ -3124,8 +3124,8 @@ def execute_voice_agent_loop() -> None:
                                     if current_window and current_window.Name != initial_window_name:
                                         logging.info(f"OS Quiescence Reached: Foreground window changed from '{initial_window_name}' to '{current_window.Name}'.")
                                         break
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logging.debug(f"Failed to capture current foreground window during polling: {e}")
 
                             had_terminal_action = True
                             break_outer = True
