@@ -31,7 +31,7 @@ class MemoryManagerScreen extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Memory Manager',
+            'Znalosti',
             style: Theme.of(context).textTheme.headlineMedium,
           ),
           const SizedBox(height: 8),
