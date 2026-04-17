@@ -1,6 +1,12 @@
-import logging
 import os
 import sys
+from dotenv import load_dotenv
+
+# Load environment variables as early as possible so that module-level constants
+# in other files (like config.py) can access them.
+load_dotenv()
+
+import logging
 
 # Inject app directory into sys.path to fix ModuleNotFoundError in embedded environment
 app_dir = os.path.dirname(os.path.abspath(__file__))
