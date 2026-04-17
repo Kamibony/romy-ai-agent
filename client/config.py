@@ -19,3 +19,6 @@ CRITIC_VERIFY_ENDPOINT = f"{BACKEND_BASE_URL}/api/critic_verify"
 CLASSIFY_INTENT_ENDPOINT = f"{BACKEND_BASE_URL}/api/classify_intent"
 SYNTHESIZE_PLAYBOOK_ENDPOINT = f"{BACKEND_BASE_URL}/api/synthesize_playbook"
 PLAYBOOK_RULES_ENDPOINT = f"{BACKEND_BASE_URL}/api/playbook_rules"
+
+# Firebase Configuration
+FIREBASE_API_KEY = os.environ.get("FIREBASE_API_KEY")
