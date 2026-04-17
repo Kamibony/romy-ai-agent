@@ -1,6 +1,7 @@
 import logging
 import tkinter as tk
 import requests
+from config import FIREBASE_API_KEY
 
 CURRENT_UID = None
 
@@ -36,9 +37,13 @@ def login_window() -> str | None:
             login_btn.config(text="Logging in... Please wait", state=tk.DISABLED)
             root.update()
 
+            if not FIREBASE_API_KEY:
+                status_label.config(text="Error: FIREBASE_API_KEY not configured", fg="red")
+                login_btn.config(text="Sign In", state=tk.NORMAL)
+                return
+
             try:
-                api_key = "AIzaSyBF2KBDgfYOzMbdSjFgCrGUygQbFaSfSxI"
-                url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={api_key}"
+                url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
                 payload = {
                     "email": email,
                     "password": password,
