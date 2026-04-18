@@ -3,6 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'ui/mission_control/mission_control_screen.dart';
+import 'ui/mission_composer/mission_composer_screen.dart';
 import 'ui/sop_studio/sop_studio_screen.dart';
 import 'ui/memory_manager/memory_manager_screen.dart';
 import 'ui/components/persistent_status_bar.dart';
@@ -55,6 +56,7 @@ class _MainLayoutState extends State<MainLayout> {
 
   final List<Widget> _screens = [
     const MissionControlScreen(),
+    const MissionComposerScreen(),
     const SopStudioScreen(),
     const MemoryManagerScreen(),
   ];
@@ -84,6 +86,10 @@ class _MainLayoutState extends State<MainLayout> {
               NavigationRailDestination(
                 icon: Icon(Icons.speed),
                 label: Text('Moje procesy'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.account_tree),
+                label: Text('Mission Composer'),
               ),
               NavigationRailDestination(
                 icon: Icon(Icons.edit_document),

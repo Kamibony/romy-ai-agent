@@ -13,7 +13,7 @@ except Exception as e:
 from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 
 from auth import verify_firebase_token
@@ -543,3 +543,28 @@ def agent_command(request: AgentCommandRequest, background_tasks: BackgroundTask
     except Exception as e:
         print(f"Error in AI pipeline: {e}")
         return [{"action": "PIPELINE_ERROR", "error": str(e)}]
+
+class MissionBlock(BaseModel):
+    block_id: str
+    type: str
+    sop_reference_id: Optional[str] = None
+    instruction: Optional[str] = None
+    inputs: Dict[str, str] = Field(default_factory=dict)
+    outputs: List[str] = Field(default_factory=list)
+
+class MissionGraph(BaseModel):
+    mission_id: str
+    name: str
+    blocks: List[MissionBlock]
+    execution_order: List[str]
+
+@app.post("/api/v1/mission/execute")
+async def execute_mission(mission: MissionGraph, uid: str = Depends(verify_firebase_token)):
+    if not check_user_license(uid):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User license is not active.",
+        )
+    print(f"Executing mission {mission.mission_id}: {mission.name}")
+    # Here we would do the actual execution, simulating success
+    return {"status": "ok", "message": "Mission started"}

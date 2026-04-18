@@ -1,0 +1,12 @@
+1. We need to implement a Mission Composer UI in Flutter. The UI will assemble a DAG of automation and logic blocks.
+2. The user has requested we implement the interface allowing users to assemble the DAG workflow.
+  - Block Assembly: A UI component to chain Automation and AI Logic blocks.
+  - Variable Binding Input: Intuitive fields that allow users to map outputs to inputs (e.g. `{{block.output}}`).
+  - Integration: Connect this UI directly to the backend orchestration execution loop (`/api/v1/mission/execute`).
+3. Set up the models (`MissionBlock`, `MissionGraph`) in Flutter and Riverpod provider (`MissionBuilderNotifier`) in `mission_provider.dart`.
+4. Create the `MissionComposerScreen` with a `ReorderableListView` that maps blocks and binds data between them.
+5. Create a bottom sheet or floating menu to add blocks of different types (`AUTOMATION`, `AI_LOGIC`).
+6. Update `MainLayout` in `main.dart` to add the `MissionComposerScreen` to the NavigationRail, using the `account_tree` icon.
+7. Update the backend to add the `MissionBlock`, `MissionGraph` models and the `/api/v1/mission/execute` endpoint.
+8. Call pre commit instructions to check what tests and validations are needed.
+9. Verify formatting and compile success before submission.
