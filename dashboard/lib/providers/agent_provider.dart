@@ -123,7 +123,24 @@ class AgentStateNotifier extends Notifier<AgentStatus> {
     }
   }
 
+
+  Future<bool> checkBridgeStatus() async {
+    try {
+      final baseUrl = ref.read(telemetryUrlProvider);
+      final response = await http.get(Uri.parse('$baseUrl/api/bridge_status'));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return data['active_websocket'] == true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint('Failed to check bridge status: $e');
+      return false;
+    }
+  }
+
   Future<void> startExecution(String intent) async {
+
     try {
       final baseUrl = ref.read(telemetryUrlProvider);
       final payload = json.encode({

@@ -79,9 +79,22 @@ class MissionControlScreen extends ConsumerWidget {
                         ),
                         leading: const Icon(Icons.play_circle_outline, size: 40, color: Colors.blue),
                         trailing: ElevatedButton.icon(
-                          onPressed: isExecuting ? null : () {
+                          onPressed: isExecuting ? null : () async {
+                            final isBridgeActive = await notifier.checkBridgeStatus();
+                            if (!isBridgeActive) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Chyba: Chrome Extenze (Bridge) není připojena! Nelze spustit proces.'),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
+                              }
+                              return;
+                            }
                             notifier.startExecution(goal);
                           },
+
                           icon: const Icon(Icons.play_arrow),
                           label: const Text('Spustit'),
                           style: ElevatedButton.styleFrom(
