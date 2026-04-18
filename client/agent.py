@@ -3735,6 +3735,110 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": "Not found"}).encode())
 
+def execute_mission(mission_graph, doc_id):
+    global LOCAL_STATUS, ACTIVE_DOC_ID, global_state_machine
+
+    LOCAL_STATUS[doc_id] = "executing_mission"
+    ACTIVE_DOC_ID = doc_id
+
+    execution_order = mission_graph.get("execution_order", [])
+    blocks = {b["block_id"]: b for b in mission_graph.get("blocks", [])}
+
+    context = {}
+
+    for idx, block_id in enumerate(execution_order):
+        block = blocks.get(block_id)
+        if not block:
+            continue
+
+        block_type = block.get("type")
+        inputs = block.get("inputs", {})
+
+        # Expose current action for UI visualization (Step X/Y)
+        try:
+            class DummyMachine:
+                pass
+            global_state_machine = DummyMachine()
+            global_state_machine.doc_id = doc_id
+            global_state_machine.state = AgentState.RUNNING
+            global_state_machine.sub_tasks = [f"Krok {idx+1}/{len(execution_order)}: {block_type} ({block_id})"]
+            global_state_machine.current_sub_task_index = 0
+            global_state_machine.intent = "WEB"
+            global_state_machine.any_subtask_failed = False
+        except Exception:
+            pass
+
+        # Resolve templates in inputs (loop through all matches)
+        resolved_inputs = {}
+        for k, v in inputs.items():
+            if isinstance(v, str):
+                import re
+                matches = re.findall(r"\{\{(.*?)\}\}", v)
+                for match in matches:
+                    v = v.replace(f"{{{{{match}}}}}", str(context.get(match, "")))
+            resolved_inputs[k] = v
+
+        if block_type == "AUTOMATION":
+            instruction = resolved_inputs.get("instruction", resolved_inputs.get("url", "Run SOP"))
+
+            global_state_machine = AgentStateMachine(instruction, doc_id=doc_id, client_context="Mission")
+            global_state_machine.intent = "WEB"
+
+            error_occurred = False
+            while global_state_machine.state not in [AgentState.TERMINATED, AgentState.ERROR, AgentState.SUSPENDED_HITL]:
+                try:
+                    # In MVP we might not have a full browser session, so we guard step()
+                    global_state_machine.step()
+                except Exception as e:
+                    import logging
+                    logging.error(f"Error in automation block {block_id}: {e}")
+                    global_state_machine.state = AgentState.ERROR
+                    error_occurred = True
+                    break
+
+            if global_state_machine.state == AgentState.ERROR or error_occurred:
+                LOCAL_STATUS[doc_id] = "failed"
+                logging.error(f"Mission aborted: Automation block {block_id} failed.")
+                return # GRACEFUL ABORT
+
+            # Simple context extraction - grab the thread history or a known state
+            thread_history = getattr(global_state_machine, "thread_history", "")
+            context[f"{block_id}.thread_history"] = thread_history
+            context[f"{block_id}.status"] = global_state_machine.state.name
+
+        elif block_type == "AI_LOGIC":
+            instruction = block.get("instruction", "")
+            raw_text = resolved_inputs.get("raw_text", "")
+
+            prompt = f"{instruction}\n\nData:\n{raw_text}"
+
+            try:
+                import sys
+                import os
+
+                # Try to use Gemini directly
+                import google.generativeai as genai
+                import config
+
+                if config.GEMINI_API_KEY:
+                    genai.configure(api_key=config.GEMINI_API_KEY)
+                    model = genai.GenerativeModel('gemini-2.5-flash')
+                    response = model.generate_content(prompt)
+                    context[f"{block_id}.output"] = response.text.strip()
+                else:
+                    context[f"{block_id}.output"] = "Error: GEMINI_API_KEY not found in config"
+                    LOCAL_STATUS[doc_id] = "failed"
+                    return # GRACEFUL ABORT
+
+            except Exception as e:
+                import logging
+                logging.error(f"Error in AI Logic block {block_id}: {e}")
+                context[f"{block_id}.output"] = f"Error: {e}"
+                LOCAL_STATUS[doc_id] = "failed"
+                return # GRACEFUL ABORT
+
+    LOCAL_STATUS[doc_id] = "completed"
+
 def start_local_api(port=8764):
     """Starts the local API server in a daemon thread."""
     def run_server():
