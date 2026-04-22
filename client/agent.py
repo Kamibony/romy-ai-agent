@@ -82,6 +82,7 @@ class AgentState(Enum):
     SUSPENDED_HITL = "SUSPENDED_HITL"
     TRAINING_NEEDED = "TRAINING_NEEDED"
     LEARNING_ROUTINE = "LEARNING_ROUTINE"
+    SELF_HEALING = "SELF_HEALING"
     TERMINATED = "TERMINATED"
 
 ABORT_AGENT = False
@@ -1335,6 +1336,8 @@ class AgentStateMachine:
                     await self.state_training_needed()
                 elif self.state == AgentState.LEARNING_ROUTINE:
                     await self.state_learning_routine()
+                elif self.state == AgentState.SELF_HEALING:
+                    await self.state_self_healing(bridge)
 
                 await asyncio.sleep(0.1)
             except Exception as e:
@@ -1999,6 +2002,16 @@ class AgentStateMachine:
                      except Exception as e:
                          pass
                      self.command_text += f"\n[System Note: Last action {action_type} failed: {error_msg}]"
+
+                     if action_type not in ["REPLY", "DONE", "SUB_TASK_COMPLETE"]:
+                         # Enter Self-Healing
+                         self.any_subtask_failed = True
+                         logging.info("Entering Phase 4: Self-Healing due to action failure.")
+                         self.failed_action = action_to_take
+                         self.failed_error = error_msg
+                         self.state = AgentState.SELF_HEALING
+                         return
+
                      bail_out = True
                      break
 
@@ -2197,6 +2210,101 @@ class AgentStateMachine:
         logging.info("Agent WOKE UP from HITL suspension.")
         self.hitl_event.clear()
         self.state = AgentState.LEARNING_ROUTINE
+
+    async def state_self_healing(self, bridge):
+        logging.info("=== State: SELF_HEALING ===")
+        current_sub_task = self.sub_tasks[self.current_sub_task_index]
+
+        failed_selector = self.failed_action.get("target_id", self.failed_action.get("xpath", "Unknown Selector"))
+        logging.info(f"Attempting to heal failure for intent: '{current_sub_task}', failed selector: '{failed_selector}'")
+
+        try:
+            # Capture current state visually
+            state_payload = {
+                "action_type": "GET_STATE",
+                "commandText": "Self-healing state capture",
+                "audioBase64": "",
+                "iteration": self.iteration
+            }
+            state_result = await asyncio.wait_for(
+                asyncio.to_thread(bridge.delegate_command, state_payload, timeout=60),
+                timeout=65
+            )
+
+            if not state_result.get("success"):
+                logging.error("Failed to capture state for healing.")
+                self.help_reason = "UI update failed and cannot capture state to self-heal."
+                self.state = AgentState.SUSPENDED_HITL
+                return
+
+            dom_snippet = state_result.get("state", {}).get("ui_elements", [])
+            # Convert UI elements back to string snippet for LLM
+            import json
+            dom_str = json.dumps(dom_snippet)[:5000] # Limiting to 5000 chars to avoid massive context
+
+            # Call backend to rescue element
+            import urllib.parse
+
+            domain = urllib.parse.urlparse(state_result.get("state", {}).get("metadata", {}).get("url", "")).netloc
+            if not domain:
+                domain = "unknown"
+
+            rescue_payload = {
+                "intent": current_sub_task,
+                "failed_selector": failed_selector,
+                "current_dom_snippet": dom_str
+            }
+
+            import config
+            global CURRENT_TOKEN
+            backend_url = f"{config.BACKEND_API_URL}/api/v1/agent/rescue"
+            headers = {
+                "Authorization": f"Bearer {CURRENT_TOKEN}",
+                "Content-Type": "application/json"
+            }
+
+            logging.info(f"Calling backend rescue endpoint: {backend_url}")
+            from agent import authenticated_request
+            response = await asyncio.to_thread(authenticated_request, "POST", backend_url, json=rescue_payload, headers=headers, timeout=15)
+
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("status") == "HEALED":
+                    new_selector = result.get("target_id")
+                    thought = result.get("thought", "")
+                    logging.info(f"Self-Healing SUCCESS! New selector: '{new_selector}'. Reason: {thought}")
+
+                    # Update action and retry
+                    self.failed_action["target_id"] = new_selector
+                    self.actions_to_execute = [self.failed_action]
+                    self.state = AgentState.ACTING
+
+                    # Store as a playbook rule for the future (lessons learned)
+                    try:
+                        rule_payload = {
+                            "domain": domain,
+                            "goal": current_sub_task,
+                            "action": str(self.failed_action),
+                            "rule": f"Element moved. Old selector: {failed_selector}. New selector: {new_selector}. Intent: {thought}"
+                        }
+                        rule_url = f"{config.BACKEND_API_URL}/api/v1/playbook/rules"
+                        await asyncio.to_thread(authenticated_request, "POST", rule_url, json=rule_payload, headers=headers, timeout=5)
+                    except Exception as e:
+                        logging.warning(f"Failed to save semantic recall rule to ChromaDB: {e}")
+
+                    return
+                else:
+                    logging.warning(f"Self-Healing failed to find a valid target: {result.get('reason')}")
+            else:
+                logging.error(f"Backend rescue API returned {response.status_code}: {response.text}")
+
+        except Exception as e:
+            logging.error(f"Exception during Self-Healing: {e}")
+
+        # Fallback if healing fails
+        logging.info("Self-healing could not resolve the issue. Falling back to HITL.")
+        self.help_reason = f"Action failed ({getattr(self, 'failed_error', 'Unknown Error')}) and Self-Healing was unable to find the new target."
+        self.state = AgentState.SUSPENDED_HITL
 
     async def state_learning_routine(self):
         logging.info(f"LEARNING_ROUTINE: Processing human guidance action: {self.hitl_action}")
