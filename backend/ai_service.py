@@ -974,3 +974,58 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
         import traceback
         traceback.print_exc()
         return {"actions": [{"action": "API_ERROR", "error": f"Exception occurred during model generation: {str(e)}"}], "memory_rules": playbook_rules_applied if 'playbook_rules_applied' in locals() else []}
+
+
+def rescue_element_with_gemini(intent: str, failed_selector: str, current_dom_snippet: str) -> dict:
+    """
+    Phase 3: Semantic Self-Healing - The Rescue Prompt.
+    Uses Gemini to identify the new target location or selector based on intent and the updated DOM state.
+    """
+    client = get_gemini_client()
+    if not client:
+        return {"status": "FAILED", "reason": "No Gemini client available"}
+
+    prompt = f"""You are an expert web automation recovery agent.
+A previously working automation step just failed because the UI changed.
+
+Original Intent: "{intent}"
+Failed Target Selector: "{failed_selector}"
+
+Here is the current structured DOM snippet (deduplicated) of the active viewport:
+```html
+{current_dom_snippet}
+```
+
+Based on the original intent and the current DOM state, find the newly intended target element.
+You must return a raw JSON object (and nothing else) with the new selector or coordinates.
+Use this JSON format:
+{{
+  "status": "HEALED",
+  "target_id": "the_new_id_or_attribute",
+  "thought": "I found the checkout button has been moved inside a new div..."
+}}
+If the element truly cannot be found, return:
+{{
+  "status": "FAILED",
+  "reason": "The checkout button is no longer present in the DOM snippet."
+}}
+"""
+    try:
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+        )
+        response_text = response.text.strip()
+
+        # Strip markdown code blocks if present
+        if response_text.startswith("```json"):
+            response_text = response_text[7:]
+        if response_text.endswith("```"):
+            response_text = response_text[:-3]
+        response_text = response_text.strip()
+
+        import json
+        return json.loads(response_text)
+    except Exception as e:
+        print(f"Error in rescue_element_with_gemini: {e}")
+        return {"status": "FAILED", "reason": str(e)}

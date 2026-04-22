@@ -18,7 +18,7 @@ from typing import Optional, List, Dict, Any
 
 from auth import verify_firebase_token
 from db import check_user_license, get_task_session, update_task_session, create_task_session
-from ai_service import process_with_gemini, transcribe_audio_with_gemini, classify_intent_with_gemini, pre_flight_check_with_gemini, supervisor_plan_with_gemini, critic_verify_with_gemini, synthesize_playbook_rule_with_gemini, compile_sop_with_gemini
+from ai_service import process_with_gemini, transcribe_audio_with_gemini, classify_intent_with_gemini, pre_flight_check_with_gemini, supervisor_plan_with_gemini, critic_verify_with_gemini, synthesize_playbook_rule_with_gemini, compile_sop_with_gemini, rescue_element_with_gemini
 from repositories import get_memory_repository, AbstractMemoryRepository
 from firebase_admin import firestore
 import traceback
@@ -568,3 +568,22 @@ async def execute_mission(mission: MissionGraph, uid: str = Depends(verify_fireb
     print(f"Executing mission {mission.mission_id}: {mission.name}")
     # Here we would do the actual execution, simulating success
     return {"status": "ok", "message": "Mission started"}
+
+
+class RescueRequest(BaseModel):
+    intent: str
+    failed_selector: str
+    current_dom_snippet: str
+
+@app.post("/api/v1/agent/rescue")
+async def api_rescue_element(request: RescueRequest, uid: str = Depends(verify_firebase_token)):
+    await run_in_threadpool(check_user_license, uid)
+    result = await run_in_threadpool(
+        rescue_element_with_gemini,
+        request.intent,
+        request.failed_selector,
+        request.current_dom_snippet
+    )
+    if result.get("status") == "FAILED":
+        raise HTTPException(status_code=404, detail=result.get("reason", "Element could not be rescued"))
+    return result
