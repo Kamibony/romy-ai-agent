@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Semantic Recovery Playground</title>
+    <style>
+        .button { padding: 10px 20px; background-color: #007bff; color: white; border: none; cursor: pointer; }
+        .hidden { display: none; }
+        .shifted { margin-left: 50px; }
+        .decoy { background-color: #6c757d; }
+    </style>
+</head>
+<body>
+    <h1>Self-Healing Test Playground</h1>
+
+    <div id="scenario-1-container">
+        <!-- Scenario 1: ID Change -->
+        <button id="login-btn-v1" class="button" onclick="alert('Login Clicked')">Login</button>
+    </div>
+
+    <div id="scenario-2-container">
+        <!-- Scenario 2: Semantic Text Change -->
+        <button id="checkout-btn" class="button" onclick="alert('Checkout Clicked')">Proceed to Checkout</button>
+    </div>
+
+    <div id="scenario-3-container">
+        <!-- Scenario 3: Structural Shift + Decoy -->
+        <div id="sidebar">
+            <button id="settings-btn" class="button" onclick="alert('Settings Clicked')">Settings</button>
+        </div>
+    </div>
+
+    <script>
+        // Simulate UI mutations
+        function mutateScenario1() {
+            const btn = document.getElementById('login-btn-v1');
+            if (btn) {
+                btn.id = 'auth-login-v2';
+                console.log('Mutated Scenario 1: Changed ID to auth-login-v2');
+            }
+        }
+
+        function mutateScenario2() {
+            const btn = document.getElementById('checkout-btn');
+            if (btn) {
+                btn.innerText = 'Complete Purchase';
+                console.log('Mutated Scenario 2: Changed text to Complete Purchase');
+            }
+        }
+
+        function mutateScenario3() {
+            const container = document.getElementById('scenario-3-container');
+            const sidebar = document.getElementById('sidebar');
+            if (sidebar) {
+                // Move button to a new header element, add a decoy in the sidebar
+                const btn = document.getElementById('settings-btn');
+
+                const header = document.createElement('div');
+                header.id = 'header';
+                header.appendChild(btn);
+
+                const decoy = document.createElement('button');
+                decoy.id = 'decoy-settings-btn';
+                decoy.className = 'button decoy';
+                decoy.innerText = 'Preferences'; // Similar intent, wrong element
+                sidebar.appendChild(decoy);
+
+                container.insertBefore(header, sidebar);
+                console.log('Mutated Scenario 3: Moved settings button to header, added decoy preferences button in sidebar');
+            }
+        }
+
+        // Expose to window for playwright to trigger
+        window.mutateUI = function(scenarioNum) {
+            if (scenarioNum === 1) mutateScenario1();
+            if (scenarioNum === 2) mutateScenario2();
+            if (scenarioNum === 3) mutateScenario3();
+        }
+    </script>
+</body>
+</html>
