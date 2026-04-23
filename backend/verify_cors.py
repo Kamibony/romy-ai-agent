@@ -2,7 +2,7 @@ import re
 import sys
 
 def verify_cors_fix():
-    with open('backend/main.py', 'r') as f:
+    with open('backend/main.py', 'r', encoding="utf-8") as f:
         content = f.read()
 
     # Check that allow_origins=["*"] is GONE

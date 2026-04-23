@@ -18,12 +18,12 @@ os.environ["LOCAL_DEV"] = "True"
 class Reporter:
     def __init__(self, filename="LIVE_HEALING_REPORT.md"):
         self.filename = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", filename))
-        with open(self.filename, "w") as f:
+        with open(self.filename, "w", encoding="utf-8") as f:
             f.write("# Automated Live E2E Healing Harness Report\n\n")
 
     def log(self, text):
         print(text)
-        with open(self.filename, "a") as f:
+        with open(self.filename, "a", encoding="utf-8") as f:
             f.write(text + "\n")
 
 reporter = Reporter()
