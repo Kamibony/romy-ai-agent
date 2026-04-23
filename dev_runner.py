@@ -83,7 +83,7 @@ def run_process(name, cmd, cwd, color_code):
         if process.returncode != 0 and process.returncode is not None and process.returncode > 0:
             crash_msg = f"[{name}] crashed with exit code {process.returncode}.\n"
             print(f"\033[31m{crash_msg}\033[0m")
-            with open(ROOT_DIR / "latest_crash.log", "a") as f:
+            with open(ROOT_DIR / "latest_crash.log", "a", encoding="utf-8") as f:
                 f.write(f"\n--- CRASH REPORT {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
                 f.write(crash_msg)
                 f.write(f"Command: {' '.join(cmd)}\n")
@@ -93,7 +93,7 @@ def run_process(name, cmd, cwd, color_code):
 
     except Exception as e:
         print(f"\033[{color_code}m[{name}] Error: {e}\033[0m")
-        with open(ROOT_DIR / "latest_crash.log", "a") as f:
+        with open(ROOT_DIR / "latest_crash.log", "a", encoding="utf-8") as f:
             f.write(f"\n--- CRASH REPORT {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
             f.write(f"[{name}] failed to start or encountered exception:\n{e}\n")
 

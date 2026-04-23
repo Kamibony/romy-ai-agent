@@ -136,7 +136,7 @@ class ChaosRunner:
         for d in self.diagnostics:
             report += f"* {d}\n"
 
-        with open("nightly_healing_report.md", "w") as f:
+        with open("nightly_healing_report.md", "w", encoding="utf-8") as f:
             f.write(report)
 
         print("Report generated at nightly_healing_report.md")
