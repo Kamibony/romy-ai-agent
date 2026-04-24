@@ -758,66 +758,67 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                     parsed_actions = []
                     for action_data in actions_data:
                         thought = action_data.get("thought", "")
-                        if action_data.get("action") == "CLICK":
+                        action = action_data.get("action")
+                        if action == "CLICK":
                             action_dict = {"action": "CLICK", "thought": thought}
                             if _extract_spatial(action_data, action_dict):
                                 parsed_actions.append(action_dict)
-                        elif action_data.get("action") == "TYPE" and "text" in action_data:
+                        elif action == "TYPE" and "text" in action_data:
                             action_dict = {"action": "TYPE", "text": str(action_data["text"]), "thought": thought}
                             if "submit" in action_data:
                                 action_dict["submit"] = bool(action_data["submit"])
                             # TYPE is allowed without explicit coordinates if it can use center fallback, but try to extract
                             _extract_spatial(action_data, action_dict)
                             parsed_actions.append(action_dict)
-                        elif action_data.get("action") == "SEARCH" and "text" in action_data:
+                        elif action == "SEARCH" and "text" in action_data:
                             # Map SEARCH directly to TYPE with submit=True to leverage existing native submit implementation
                             action_dict = {"action": "TYPE", "text": str(action_data["text"]), "submit": True, "thought": thought}
                             _extract_spatial(action_data, action_dict)
                             parsed_actions.append(action_dict)
-                        elif action_data.get("action") == "SCROLL" and "direction" in action_data:
+                        elif action == "SCROLL" and "direction" in action_data:
                             parsed_actions.append({
                                 "action": "SCROLL",
                                 "direction": str(action_data["direction"]),
                                 "thought": thought
                             })
-                        elif action_data.get("action") == "NAVIGATE" and "url" in action_data:
+                        elif action == "NAVIGATE" and "url" in action_data:
                             parsed_actions.append({
                                 "action": "NAVIGATE",
                                 "url": str(action_data["url"]),
                                 "thought": thought
                             })
-                        elif action_data.get("action") == "OPEN_TAB" and "url" in action_data:
+                        elif action == "OPEN_TAB" and "url" in action_data:
                             parsed_actions.append({
                                 "action": "OPEN_TAB",
                                 "url": str(action_data["url"]),
                                 "thought": thought
                             })
-                        elif action_data.get("action") == "LAUNCH_APP" and "app_name" in action_data:
+                        elif action == "LAUNCH_APP" and "app_name" in action_data:
                             parsed_actions.append({
                                 "action": "LAUNCH_APP",
                                 "app_name": str(action_data["app_name"]),
                                 "thought": thought
                             })
-                        elif action_data.get("action") == "PRESS_KEY" and "key" in action_data:
+                        elif action == "PRESS_KEY" and "key" in action_data:
                             parsed_actions.append({
                                 "action": "PRESS_KEY",
                                 "key": str(action_data["key"]),
                                 "thought": thought
                             })
-                        elif action_data.get("action") == "WAIT_FOR" and "selector" in action_data:
+                        elif action == "WAIT_FOR" and "selector" in action_data:
                             parsed_actions.append({
                                 "action": "WAIT_FOR",
                                 "selector": str(action_data["selector"]),
                                 "max_wait_seconds": float(action_data.get("max_wait_seconds", 5)),
                                 "thought": thought
                             })
-                        elif action_data.get("action") == "WAIT" and "seconds" in action_data:
+                        elif action == "WAIT" and "seconds" in action_data:
                             parsed_actions.append({
                                 "action": "WAIT",
                                 "seconds": float(action_data.get("seconds", 2)),
                                 "thought": thought
                             })
-                        elif action_data.get("action") == "DRAG_AND_DROP" and all(k in action_data for k in ["start_x", "start_y", "end_x", "end_y"]):
+                        elif action == "DRAG_AND_DROP" and all(k in action_data for k in ["start_x", "start_y", "end_x", "end_y"]):
                             parsed_actions.append({
                                 "action": "DRAG_AND_DROP",
                                 "start_x": float(action_data["start_x"]),
@@ -826,32 +827,32 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                                 "end_y": float(action_data["end_y"]),
                                 "thought": thought
                             })
-                        elif action_data.get("action") == "REPLY" and "text" in action_data:
+                        elif action == "REPLY" and "text" in action_data:
                             parsed_actions.append({
                                 "action": "REPLY",
                                 "text": str(action_data["text"]),
                                 "thought": thought
                             })
-                        elif action_data.get("action") == "ASK_HUMAN" and "reason" in action_data:
+                        elif action == "ASK_HUMAN" and "reason" in action_data:
                             parsed_actions.append({
                                 "action": "ASK_HUMAN",
                                 "reason": str(action_data["reason"]),
                                 "thought": thought
                             })
-                        elif action_data.get("action") == "RESET_VIEW":
+                        elif action == "RESET_VIEW":
                             parsed_actions.append({
                                 "action": "RESET_VIEW",
                                 "thought": thought
                             })
-                        elif action_data.get("action") == "EXECUTE_JS" and "code" in action_data:
+                        elif action == "EXECUTE_JS" and "code" in action_data:
                             parsed_actions.append({
                                 "action": "EXECUTE_JS",
                                 "code": str(action_data["code"]),
                                 "thought": thought
                             })
-                        elif action_data.get("action") == "SUB_TASK_COMPLETE":
+                        elif action == "SUB_TASK_COMPLETE":
                             parsed_actions.append({"action": "SUB_TASK_COMPLETE", "thought": thought})
-                        elif action_data.get("action") == "DONE":
+                        elif action == "DONE":
                             parsed_actions.append({"action": "DONE", "thought": thought})
                         else:
                             # Keep it but let client figure it out or log it
@@ -868,68 +869,69 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             try:
                 action_data = json.loads(match_single.group(0))
                 thought = action_data.get("thought", "")
-                if action_data.get("action") == "CLICK":
+                action = action_data.get("action")
+                if action == "CLICK":
                     action_dict = {"action": "CLICK", "thought": thought}
                     if _extract_spatial(action_data, action_dict):
                         return {"actions": [action_dict], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "HOVER":
+                elif action == "HOVER":
                     action_dict = {"action": "HOVER", "thought": thought}
                     if _extract_spatial(action_data, action_dict):
                         return {"actions": [action_dict], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "TYPE" and "text" in action_data:
+                elif action == "TYPE" and "text" in action_data:
                     action_dict = {"action": "TYPE", "text": str(action_data["text"]), "thought": thought}
                     if "submit" in action_data:
                         action_dict["submit"] = bool(action_data["submit"])
                     _extract_spatial(action_data, action_dict)
                     return {"actions": [action_dict], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "SEARCH" and "text" in action_data:
+                elif action == "SEARCH" and "text" in action_data:
                     action_dict = {"action": "TYPE", "text": str(action_data["text"]), "submit": True, "thought": thought}
                     _extract_spatial(action_data, action_dict)
                     return {"actions": [action_dict], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "SCROLL" and "direction" in action_data:
+                elif action == "SCROLL" and "direction" in action_data:
                     return {"actions": [{
                         "action": "SCROLL",
                         "direction": str(action_data["direction"]),
                         "thought": thought
                     }], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "NAVIGATE" and "url" in action_data:
+                elif action == "NAVIGATE" and "url" in action_data:
                     return {"actions": [{
                         "action": "NAVIGATE",
                         "url": str(action_data["url"]),
                         "thought": thought
                     }], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "OPEN_TAB" and "url" in action_data:
+                elif action == "OPEN_TAB" and "url" in action_data:
                     return {"actions": [{
                         "action": "OPEN_TAB",
                         "url": str(action_data["url"]),
                         "thought": thought
                     }], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "LAUNCH_APP" and "app_name" in action_data:
+                elif action == "LAUNCH_APP" and "app_name" in action_data:
                     return {"actions": [{
                         "action": "LAUNCH_APP",
                         "app_name": str(action_data["app_name"]),
                         "thought": thought
                     }], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "PRESS_KEY" and "key" in action_data:
+                elif action == "PRESS_KEY" and "key" in action_data:
                     return {"actions": [{
                         "action": "PRESS_KEY",
                         "key": str(action_data["key"]),
                         "thought": thought
                     }], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "WAIT_FOR" and "selector" in action_data:
+                elif action == "WAIT_FOR" and "selector" in action_data:
                     return {"actions": [{
                         "action": "WAIT_FOR",
                         "selector": str(action_data["selector"]),
                         "max_wait_seconds": float(action_data.get("max_wait_seconds", 5)),
                         "thought": thought
                     }], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "WAIT" and "seconds" in action_data:
+                elif action == "WAIT" and "seconds" in action_data:
                     return {"actions": [{
                         "action": "WAIT",
                         "seconds": float(action_data.get("seconds", 2)),
                         "thought": thought
                     }], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "DRAG_AND_DROP" and all(k in action_data for k in ["start_x", "start_y", "end_x", "end_y"]):
+                elif action == "DRAG_AND_DROP" and all(k in action_data for k in ["start_x", "start_y", "end_x", "end_y"]):
                     return {"actions": [{
                         "action": "DRAG_AND_DROP",
                         "start_x": float(action_data["start_x"]),
@@ -938,32 +940,32 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                         "end_y": float(action_data["end_y"]),
                         "thought": thought
                     }], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "REPLY" and "text" in action_data:
+                elif action == "REPLY" and "text" in action_data:
                     return {"actions": [{
                         "action": "REPLY",
                         "text": str(action_data["text"]),
                         "thought": thought
                     }], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "ASK_HUMAN" and "reason" in action_data:
+                elif action == "ASK_HUMAN" and "reason" in action_data:
                     return {"actions": [{
                         "action": "ASK_HUMAN",
                         "reason": str(action_data["reason"]),
                         "thought": thought
                     }], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "RESET_VIEW":
+                elif action == "RESET_VIEW":
                     return {"actions": [{
                         "action": "RESET_VIEW",
                         "thought": thought
                     }], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "EXECUTE_JS" and "code" in action_data:
+                elif action == "EXECUTE_JS" and "code" in action_data:
                     return {"actions": [{
                         "action": "EXECUTE_JS",
                         "code": str(action_data["code"]),
                         "thought": thought
                     }], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "SUB_TASK_COMPLETE":
+                elif action == "SUB_TASK_COMPLETE":
                     return {"actions": [{"action": "SUB_TASK_COMPLETE", "thought": thought}], "memory_rules": playbook_rules_applied}
-                elif action_data.get("action") == "DONE":
+                elif action == "DONE":
                     return {"actions": [{"action": "DONE", "thought": thought}], "memory_rules": playbook_rules_applied}
             except json.JSONDecodeError as e:
                 logging.debug(f"JSON decode error during model response single object parsing: {e}")
