@@ -996,7 +996,7 @@ def pre_flight_check(command_text: str) -> dict:
     payload = {"command_text": command_text}
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
     try:
-        response = authenticated_request("POST", url, json=payload, headers=headers, timeout=(10, 20))
+        response = authenticated_request("POST", url, json=payload, headers=headers, timeout=(15, 120))
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -1018,7 +1018,7 @@ def supervisor_plan(command_text: str, completed_tasks: list = None, task_index:
         payload["roadblock_reason"] = roadblock_reason
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
     try:
-        response = authenticated_request("POST", url, json=payload, headers=headers, timeout=(10, 30))
+        response = authenticated_request("POST", url, json=payload, headers=headers, timeout=(15, 120))
         response.raise_for_status()
         return response.json().get("sub_tasks", [])
     except Exception as e:
@@ -1050,7 +1050,7 @@ def evaluate_plan_progress(command_text: str, current_sub_task: str, remaining_p
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
     try:
         # Use authenticated request for silent token refresh
-        response = authenticated_request("POST", url, json=payload, headers=headers, timeout=(10, 20))
+        response = authenticated_request("POST", url, json=payload, headers=headers, timeout=(15, 120))
         response.raise_for_status()
         return response.json()
     except requests.exceptions.ChunkedEncodingError as e:
@@ -1154,7 +1154,8 @@ def critic_verify(sub_task: str, action_taken: dict, before_state: dict, after_s
     }
     headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
     try:
-        response = authenticated_request("POST", url, json=payload, headers=headers, timeout=(10, 30))
+        # Use a larger timeout for Gemini-backed critic verification
+        response = authenticated_request("POST", url, json=payload, headers=headers, timeout=(15, 120))
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -1184,7 +1185,7 @@ def classify_intent(command_text: str, audio_b64: str) -> Tuple[str, str]:
     }
 
     try:
-        response = authenticated_request("POST", url, json=payload, headers=headers, timeout=(10, 20))
+        response = authenticated_request("POST", url, json=payload, headers=headers, timeout=(15, 120))
         response.raise_for_status()
         data = response.json()
 
@@ -2265,7 +2266,7 @@ class AgentStateMachine:
 
             logging.info(f"Calling backend rescue endpoint: {backend_url}")
             from agent import authenticated_request
-            response = await asyncio.to_thread(authenticated_request, "POST", backend_url, json=rescue_payload, headers=headers, timeout=15)
+            response = await asyncio.to_thread(authenticated_request, "POST", backend_url, json=rescue_payload, headers=headers, timeout=(15, 120))
 
             if response.status_code == 200:
                 result = response.json()
@@ -2734,7 +2735,7 @@ def execute_voice_agent_loop() -> None:
                         retry_delay = 5
                         for attempt in range(max_retries):
                             try:
-                                response = authenticated_request("POST", config.GET_COMMAND_ENDPOINT, json=payload, headers=headers, timeout=(15, 60))
+                                response = authenticated_request("POST", config.GET_COMMAND_ENDPOINT, json=payload, headers=headers, timeout=(15, 120))
                                 response.raise_for_status()
                                 backend_data = response.json()
                                 break
@@ -3074,7 +3075,7 @@ def execute_voice_agent_loop() -> None:
                 retry_delay = 5
                 for attempt in range(max_retries):
                     try:
-                        response = authenticated_request("POST", config.GET_COMMAND_ENDPOINT, json=payload, headers=headers, timeout=(15, 60))
+                        response = authenticated_request("POST", config.GET_COMMAND_ENDPOINT, json=payload, headers=headers, timeout=(15, 120))
                         response.raise_for_status()
                         backend_data = response.json()
                         break
