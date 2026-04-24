@@ -269,14 +269,19 @@
             try {
                 unsubscribeActivity = onSnapshot(q, (snapshot) => {
                     if (snapshot.empty) {
-                        activityFeed.innerHTML = '<p class="text-gray-400 italic">No activity yet.</p>';
+                        activityFeed.innerHTML = '';
+                        const emptyMsg = document.createElement('p');
+                        emptyMsg.className = 'text-gray-400 italic text-center mt-10';
+                        emptyMsg.textContent = 'No activity yet.';
+                        activityFeed.appendChild(emptyMsg);
                         return;
                     }
 
-                    let html = '';
                     let foundActionNeeded = false;
                     let firstActionNeededData = null;
                     let firstActionNeededId = null;
+
+                    const newEntries = [];
 
                     snapshot.forEach((doc) => {
                         const data = doc.data();
@@ -314,24 +319,42 @@
                         if (status === "help_needed" || status === "AWAITING_HUMAN_INPUT") statusColor = "text-orange-600";
                         if (status === "pending") statusColor = "text-yellow-600";
 
-                        // Sanitize command text to prevent XSS
-                        const tempDiv = document.createElement('div');
-                        tempDiv.textContent = command;
-                        const sanitizedCommand = tempDiv.innerHTML;
+                        const entryDiv = document.createElement('div');
+                        entryDiv.className = 'border-b border-gray-100 pb-2 mb-2';
 
-                        let displayMessage = `Command: "${sanitizedCommand}"`;
+                        const timeSpan = document.createElement('span');
+                        timeSpan.className = 'font-semibold text-gray-500';
+                        timeSpan.textContent = time;
+                        entryDiv.appendChild(timeSpan);
+
+                        entryDiv.appendChild(document.createTextNode(` - Command: "${command}"`));
+
                         if (telemetryHistory[doc.id] && telemetryHistory[doc.id].length > 0) {
-                            let teleLogs = telemetryHistory[doc.id].map(t => {
-                                const tempTele = document.createElement('div');
-                                tempTele.textContent = t;
-                                return `<div class="mt-1 ml-4 border-l-2 border-indigo-200 pl-2"><span class="text-indigo-600 text-xs font-bold">[Telemetry]</span> ${tempTele.innerHTML}</div>`;
-                            }).join('');
-                            displayMessage += teleLogs;
+                            telemetryHistory[doc.id].forEach(t => {
+                                const teleDiv = document.createElement('div');
+                                teleDiv.className = 'mt-1 ml-4 border-l-2 border-indigo-200 pl-2';
+
+                                const teleLabel = document.createElement('span');
+                                teleLabel.className = 'text-indigo-600 text-xs font-bold';
+                                teleLabel.textContent = '[Telemetry]';
+
+                                teleDiv.appendChild(teleLabel);
+                                teleDiv.appendChild(document.createTextNode(` ${t}`));
+                                entryDiv.appendChild(teleDiv);
+                            });
                         }
 
-                        html += `<div class="border-b border-gray-100 pb-2 mb-2"><span class="font-semibold text-gray-500">${time}</span> - ${displayMessage} | Status: <span class="${statusColor} font-semibold">${status}</span></div>`;
+                        entryDiv.appendChild(document.createTextNode(' | Status: '));
+                        const statusSpan = document.createElement('span');
+                        statusSpan.className = `${statusColor} font-semibold`;
+                        statusSpan.textContent = status;
+                        entryDiv.appendChild(statusSpan);
+
+                        newEntries.push(entryDiv);
                     });
-                    activityFeed.innerHTML = html;
+
+                    activityFeed.innerHTML = '';
+                    newEntries.forEach(entry => activityFeed.appendChild(entry));
 
                     if (foundActionNeeded) {
                         if (activeTaskId !== firstActionNeededId) {
@@ -361,7 +384,11 @@
                     }
                 }, (error) => {
                     console.warn("Firestore read error (activity):", error);
-                    activityFeed.innerHTML = `<p class="text-red-500">Error loading activity. Check console.</p>`;
+                    activityFeed.innerHTML = '';
+                    const errorMsg = document.createElement('p');
+                    errorMsg.className = 'text-red-500';
+                    errorMsg.textContent = 'Error loading activity. Check console.';
+                    activityFeed.appendChild(errorMsg);
                 });
             } catch (error) {
                 console.error("Error setting up activity listener:", error);
@@ -612,7 +639,12 @@
                 clearInterval(localAgentPingInterval);
                 localAgentPingInterval = null;
             }
-            activityFeed.innerHTML = '<p class="text-gray-400 italic">Waiting for activity...</p>';
+            activityFeed.innerHTML = '';
+            const waitMsg = document.createElement('p');
+            waitMsg.className = 'text-gray-400 italic text-center mt-10';
+            waitMsg.textContent = 'Waiting for activity...';
+            activityFeed.appendChild(waitMsg);
+
             osAgentStatusDot.classList.replace('bg-green-500', 'bg-red-500');
             localAgentStatusDot.classList.replace('bg-green-500', 'bg-red-500');
             currentUserId = null;
@@ -759,13 +791,21 @@
         btnLoadPlaybook.addEventListener('click', async () => {
             const domain = playbookDomainInput.value.trim();
             if (!domain) {
-                playbookRulesContainer.innerHTML = '<p class="text-red-500 text-sm">Please enter a domain.</p>';
+                playbookRulesContainer.innerHTML = '';
+                const errorMsg = document.createElement('p');
+                errorMsg.className = 'text-red-500 text-sm';
+                errorMsg.textContent = 'Please enter a domain.';
+                playbookRulesContainer.appendChild(errorMsg);
                 return;
             }
 
             btnLoadPlaybook.disabled = true;
             btnLoadPlaybook.textContent = 'Loading...';
-            playbookRulesContainer.innerHTML = '<p class="text-gray-500 text-sm animate-pulse">Fetching rules from Vector DB...</p>';
+            playbookRulesContainer.innerHTML = '';
+            const loadingMsg = document.createElement('p');
+            loadingMsg.className = 'text-gray-500 text-sm animate-pulse';
+            loadingMsg.textContent = 'Fetching rules from Vector DB...';
+            playbookRulesContainer.appendChild(loadingMsg);
 
             try {
                 // Determine active client id
@@ -790,19 +830,35 @@
                 const data = await response.json();
                 const rules = data.rules || [];
 
+                playbookRulesContainer.innerHTML = '';
                 if (rules.length === 0) {
-                    playbookRulesContainer.innerHTML = `<p class="text-gray-500 text-sm">No specific playbook rules found for ${domain}.</p>`;
+                    const noRulesMsg = document.createElement('p');
+                    noRulesMsg.className = 'text-gray-500 text-sm';
+                    noRulesMsg.textContent = `No specific playbook rules found for ${domain}.`;
+                    playbookRulesContainer.appendChild(noRulesMsg);
                 } else {
-                    let html = '<ul class="list-disc pl-5 space-y-2">';
+                    const ul = document.createElement('ul');
+                    ul.className = 'list-disc pl-5 space-y-2';
                     rules.forEach(rule => {
-                        html += `<li class="text-sm text-gray-800 bg-white p-2 rounded border border-gray-100 shadow-sm">${rule}</li>`;
+                        const li = document.createElement('li');
+                        li.className = 'text-sm text-gray-800 bg-white p-2 rounded border border-gray-100 shadow-sm';
+                        li.textContent = rule;
+                        ul.appendChild(li);
                     });
-                    html += '</ul>';
-                    playbookRulesContainer.innerHTML = html;
+                    playbookRulesContainer.appendChild(ul);
                 }
             } catch (error) {
                 console.error("Error loading playbook:", error);
-                playbookRulesContainer.innerHTML = `<p class="text-red-500 text-sm">Error connecting to local backend: ${error.message}</p><p class="text-xs text-gray-400 mt-1">Make sure the Python backend is running.</p>`;
+                playbookRulesContainer.innerHTML = '';
+                const errorMsg = document.createElement('p');
+                errorMsg.className = 'text-red-500 text-sm';
+                errorMsg.textContent = `Error connecting to local backend: ${error.message}`;
+                playbookRulesContainer.appendChild(errorMsg);
+
+                const helpMsg = document.createElement('p');
+                helpMsg.className = 'text-xs text-gray-400 mt-1';
+                helpMsg.textContent = 'Make sure the Python backend is running.';
+                playbookRulesContainer.appendChild(helpMsg);
             } finally {
                 btnLoadPlaybook.disabled = false;
                 btnLoadPlaybook.textContent = 'Load Rules';
