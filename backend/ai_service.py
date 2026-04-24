@@ -3,6 +3,7 @@ import json
 import base64
 import io
 import re
+import logging
 from typing import Dict, Any, Optional, Tuple
 
 try:
@@ -231,7 +232,7 @@ def evaluate_plan_progress_with_gemini(command_text: str, current_sub_task: str,
                 )
             )
         except Exception as e:
-            pass
+            logging.warning(f"Error decoding screenshot in evaluate_plan_progress: {e}")
 
     contents.append(prompt)
 
@@ -303,7 +304,7 @@ def _run_critic_verification(sub_task: str, action_taken: dict, before_state: di
                     )
                 )
             except Exception as e:
-                pass
+                logging.warning(f"Error decoding before_screenshot in critic verification: {e}")
 
         after_screenshot = after_state.get("screenshot_base64")
         if after_screenshot:
@@ -326,7 +327,7 @@ def _run_critic_verification(sub_task: str, action_taken: dict, before_state: di
                     )
                 )
             except Exception as e:
-                pass
+                logging.warning(f"Error decoding after_screenshot in critic verification: {e}")
 
     contents.append(prompt)
 
@@ -858,8 +859,8 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
 
                     if parsed_actions:
                         return {"actions": parsed_actions, "memory_rules": playbook_rules_applied}
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as e:
+                logging.debug(f"JSON decode error during model response array parsing: {e}")
 
         # Fallback to single object if model ignored array instruction
         match_single = re.search(r'\{[^{}]*\}', response_text)
@@ -964,8 +965,8 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                     return {"actions": [{"action": "SUB_TASK_COMPLETE", "thought": thought}], "memory_rules": playbook_rules_applied}
                 elif action_data.get("action") == "DONE":
                     return {"actions": [{"action": "DONE", "thought": thought}], "memory_rules": playbook_rules_applied}
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as e:
+                logging.debug(f"JSON decode error during model response single object parsing: {e}")
 
         return {"actions": [{"action": "PARSE_ERROR", "error": "Model response could not be parsed as valid JSON actions.", "raw_response": str(response_text)}], "memory_rules": playbook_rules_applied}
 
