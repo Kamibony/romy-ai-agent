@@ -62,7 +62,7 @@ if os.environ.get("ROMY_TEST_MODE") == "1":
     except ImportError:
         pass
 else:
-    pass
+    from local_bridge import bridge
 
 
 
