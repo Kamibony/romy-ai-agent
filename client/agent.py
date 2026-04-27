@@ -72,6 +72,7 @@ COMMAND_QUEUE = queue.Queue()
 PROCESSED_DOC_IDS = set()
 global_state_machine = None
 global_asyncio_loop = None
+LATEST_STATE_PAYLOAD = None
 
 
 class AgentState(Enum):
@@ -1440,6 +1441,13 @@ class AgentStateMachine:
                      asyncio.to_thread(bridge.delegate_command, state_payload, timeout=60),
                     timeout=65
                 )
+                if state_result.get("success") and state_result.get("state_delivered_via_http"):
+                    global LATEST_STATE_PAYLOAD
+                    if LATEST_STATE_PAYLOAD:
+                        state_result = LATEST_STATE_PAYLOAD
+                        LATEST_STATE_PAYLOAD = None
+                    else:
+                        state_result = {"success": False, "error": "HTTP state payload missing"}
             except asyncio.TimeoutError:
                 logging.error("Bridge communication timeout during GET_STATE. Triggering fallback recovery.")
                 state_result = {"success": False, "error": "WebSocket Timeout"}
@@ -2256,6 +2264,14 @@ class AgentStateMachine:
                 timeout=65
             )
 
+            if state_result.get("success") and state_result.get("state_delivered_via_http"):
+                global LATEST_STATE_PAYLOAD
+                if LATEST_STATE_PAYLOAD:
+                    state_result = LATEST_STATE_PAYLOAD
+                    LATEST_STATE_PAYLOAD = None
+                else:
+                    state_result = {"success": False, "error": "HTTP state payload missing"}
+
             if not state_result.get("success"):
                 logging.error("Failed to capture state for healing.")
                 self.help_reason = "UI update failed and cannot capture state to self-heal."
@@ -2709,6 +2725,14 @@ def execute_voice_agent_loop() -> None:
                     }
                     logging.info(f"Requesting WEB state from extension (iteration {iteration})...")
                     state_result = bridge.delegate_command(state_payload)
+
+                    if state_result.get("success") and state_result.get("state_delivered_via_http"):
+                        global LATEST_STATE_PAYLOAD
+                        if LATEST_STATE_PAYLOAD:
+                            state_result = LATEST_STATE_PAYLOAD
+                            LATEST_STATE_PAYLOAD = None
+                        else:
+                            state_result = {"success": False, "error": "HTTP state payload missing"}
 
                     if not state_result.get("success"):
                         logging.error(f"Failed to get state from extension: {state_result.get('error')}")
@@ -3453,7 +3477,31 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         global LOCAL_STATUS, ACTIVE_DOC_ID, RECORDING_MODE, RECORDED_STEPS, BACKGROUND_RECORDER_PROCESS
-        if self.path == '/api/run_command':
+        if self.path == '/api/state':
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+
+            try:
+                data = json.loads(post_data.decode('utf-8'))
+                global LATEST_STATE_PAYLOAD
+                LATEST_STATE_PAYLOAD = data
+
+                self.send_response(HTTPStatus.OK)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "ok"}).encode())
+            except json.JSONDecodeError:
+                self.send_response(HTTPStatus.BAD_REQUEST)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
+            except Exception as e:
+                logging.error(f"Error handling /api/state: {e}")
+                self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode())
+        elif self.path == '/api/run_command':
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length)
 

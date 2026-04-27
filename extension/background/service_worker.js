@@ -91,24 +91,29 @@ function connectLocalBridge() {
                     try {
                         if (cmd.action_type === 'GET_STATE') {
                             result = await handleGetState(cmd);
-                            if (ws.readyState === WebSocket.OPEN) {
-                                const payloadStr = JSON.stringify(result);
-                                // Safely chunk base64 instead of raw utf-16 string to avoid severing multibyte characters
-                                // We'll convert the whole payload to base64, chunk it, and decode on Python side
-                                // In JS, btoa() requires Latin1, so we encode URI component and unescape first
-                                const base64Payload = btoa(unescape(encodeURIComponent(payloadStr)));
-                                const chunkSize = 128 * 1024; // 128KB chunks
-                                const totalChunks = Math.ceil(base64Payload.length / chunkSize);
-                                const messageId = crypto.randomUUID();
-
-                                for (let i = 0; i < totalChunks; i++) {
-                                    const chunk = base64Payload.substring(i * chunkSize, (i + 1) * chunkSize);
+                            // POST massive payload directly to Python REST API
+                            try {
+                                const res = await fetch('http://127.0.0.1:8764/api/state', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(result)
+                                });
+                                if (!res.ok) {
+                                    throw new Error(`Local API responded with ${res.status}`);
+                                }
+                                if (ws.readyState === WebSocket.OPEN) {
+                                    // Send minimal ACK over WebSocket
                                     ws.send(JSON.stringify({
-                                        type: 'chunk',
-                                        message_id: messageId,
-                                        chunk_index: i,
-                                        total_chunks: totalChunks,
-                                        chunk_data: chunk
+                                        type: 'result',
+                                        payload: { success: true, state_delivered_via_http: true }
+                                    }));
+                                }
+                            } catch (httpErr) {
+                                console.error("Failed to post state to local API:", httpErr);
+                                if (ws.readyState === WebSocket.OPEN) {
+                                    ws.send(JSON.stringify({
+                                        type: 'result',
+                                        payload: { success: false, error: "Failed to post state via HTTP: " + httpErr.message }
                                     }));
                                 }
                             }
