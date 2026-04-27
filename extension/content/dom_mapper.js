@@ -84,14 +84,17 @@ window.RomyDomMapper = {
                 }
             }
 
-            // Check computed styles for interactivity
-            try {
-                const style = window.getComputedStyle(el);
-                if (style.cursor === 'pointer' && el.tagName !== 'BODY' && el.tagName !== 'HTML') {
-                    return true;
+            // Performance: Only check computed style for cursor if it's explicitly one of the structural tags
+            // that might be interactive, rather than thousands of spans and divs, unless it has an onclick handler.
+            if (el.hasAttribute('onclick') || ['div', 'span', 'li'].includes(el.tagName.toLowerCase())) {
+                try {
+                    const style = window.getComputedStyle(el);
+                    if (style.cursor === 'pointer') {
+                        return true;
+                    }
+                } catch (e) {
+                    // Ignore errors reading computed styles
                 }
-            } catch (e) {
-                // Ignore errors reading computed styles
             }
 
             return false;
@@ -117,6 +120,9 @@ window.RomyDomMapper = {
 
         function getAllNodes(root) {
             let nodes = [];
+            // Reverting the destructive querySelectorAll optimization because many SPAs use
+            // <div> or <span> as clickable elements and we shouldn't filter them early here.
+            // We'll rely on the spatial filtering before getComputedStyle as our main optimization.
             const elements = root.querySelectorAll('*');
             elements.forEach(el => {
                 // Hierarchical Semantic Weighting: capture both interactive UI and static Information Nodes
@@ -309,27 +315,35 @@ window.RomyDomMapper = {
         allNodes.forEach((node) => {
             const rect = node.getBoundingClientRect();
 
-            // Simplified visibility check
-            const computedStyle = window.getComputedStyle(node);
-
-            // Allow elements that are partially visible / slightly out of viewport bounds
+            // Optimization: Fast spatial filter before triggering getComputedStyle
             let isVisible = (
                 rect.width > 0 &&
                 rect.height > 0 &&
                 rect.bottom > 0 && // Element's bottom edge is below top of viewport
                 rect.top < (window.innerHeight || document.documentElement.clientHeight) && // Top edge is above bottom of viewport
                 rect.right > 0 && // Right edge is past left side
-                rect.left < (window.innerWidth || document.documentElement.clientWidth) && // Left edge is before right side
-                computedStyle.visibility !== 'hidden' &&
-                computedStyle.display !== 'none' &&
-                computedStyle.opacity !== '0'
+                rect.left < (window.innerWidth || document.documentElement.clientWidth) // Left edge is before right side
             );
+
+            let computedStyle = null;
+            if (isVisible) {
+                // Only compute style if it passed the spatial bounds check
+                computedStyle = window.getComputedStyle(node);
+                isVisible = (
+                    computedStyle.visibility !== 'hidden' &&
+                    computedStyle.display !== 'none' &&
+                    computedStyle.opacity !== '0'
+                );
+            }
 
             // Relax visibility checks for inputs and textareas which might be visually hidden behind custom UI
             const tagName = node.tagName.toLowerCase();
             const isInputLike = tagName === 'input' || tagName === 'textarea' || tagName === 'select' || node.hasAttribute('contenteditable');
-            if (!isVisible && isInputLike && computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden') {
-                isVisible = true;
+            if (!isVisible && isInputLike) {
+                if (!computedStyle) computedStyle = window.getComputedStyle(node);
+                if (computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden') {
+                    isVisible = true;
+                }
             }
 
             if (isVisible) {

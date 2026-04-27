@@ -1438,8 +1438,8 @@ class AgentStateMachine:
 
             try:
                 state_result = await asyncio.wait_for(
-                     asyncio.to_thread(bridge.delegate_command, state_payload, timeout=60),
-                    timeout=65
+                     asyncio.to_thread(bridge.delegate_command, state_payload, timeout=120),
+                    timeout=125
                 )
                 if state_result.get("success") and state_result.get("state_delivered_via_http"):
                     global LATEST_STATE_PAYLOAD
@@ -1998,8 +1998,8 @@ class AgentStateMachine:
                  try:
                      # local_bridge's delegate_command signature is delegate_command(self, payload: dict, timeout=300)
                      exec_result = await asyncio.wait_for(
-                         asyncio.to_thread(bridge.delegate_command, exec_payload, timeout=60),
-                         timeout=65
+                         asyncio.to_thread(bridge.delegate_command, exec_payload, timeout=120),
+                         timeout=125
                      )
                  except asyncio.TimeoutError:
                      logging.error("Bridge communication timeout during execution. Triggering fallback recovery.")
@@ -2260,8 +2260,8 @@ class AgentStateMachine:
                 "iteration": self.iteration
             }
             state_result = await asyncio.wait_for(
-                asyncio.to_thread(bridge.delegate_command, state_payload, timeout=60),
-                timeout=65
+                asyncio.to_thread(bridge.delegate_command, state_payload, timeout=120),
+                timeout=125
             )
 
             if state_result.get("success") and state_result.get("state_delivered_via_http"):
