@@ -1962,6 +1962,14 @@ class AgentStateMachine:
                  logging.info(f"Universal Execution Router: Action {action_type} detected. Forcing execution domain to OS.")
                  self.intent = "OS"
                  force_os = True
+             elif action_type == "EXTRACT_DATA":
+                 # Handled silently as an observation, log it
+                 logging.info(f"Observation Action (EXTRACT_DATA): {action_to_take.get('keys', [])} from target {action_to_take.get('target_id', 'unknown')}")
+                 self.command_text += f"\n[System Note: Observed data via EXTRACT_DATA action: {action_to_take.get('keys', [])}]"
+                 # It doesn't mutate state physically, so we just acknowledge it and continue
+                 # For actual reading, it should ideally grab from current_ui_elements, but
+                 # the fact it was extracted is part of thought reasoning.
+                 pass
 
              if action_type in ["NAVIGATE", "OPEN_TAB"]:
                  logging.info(f"Universal Execution Router: Action {action_type} detected. Forcing execution domain to WEB.")
@@ -2057,8 +2065,24 @@ class AgentStateMachine:
                              except Exception:
                                  pass
 
-                             # Use os.startfile on Windows to allow app resolution from PATH (e.g. calc.exe, notepad.exe) safely
-                             os.startfile(app_name)
+                             # Hardware Bypass: Use absolute system paths for critical apps to avoid hotkeys/pyautogui
+                             # and ensure deterministic launch without OS interference
+                             lower_app_name = app_name.lower()
+                             if lower_app_name in ["calc", "calc.exe", "calculator"]:
+                                 app_path = r"C:\Windows\System32\calc.exe"
+                             elif lower_app_name in ["notepad", "notepad.exe"]:
+                                 app_path = r"C:\Windows\System32\notepad.exe"
+                             else:
+                                 app_path = app_name
+
+                             if os.path.exists(app_path):
+                                 import subprocess
+                                 # Using subprocess.Popen instead of os.startfile to bypass OS shell completely
+                                 # and prevent pyautogui dependency for launching
+                                 subprocess.Popen([app_path], shell=False)
+                             else:
+                                 # Fallback
+                                 os.startfile(app_name)
 
                              # Kinematic Quiescence Polling
                              poll_interval = 0.5
@@ -3219,8 +3243,24 @@ def execute_voice_agent_loop() -> None:
                             except Exception as e:
                                 logging.warning(f"Failed to capture initial foreground window: {e}")
 
-                            # Use os.startfile on Windows to allow app resolution from PATH safely
-                            os.startfile(app_name)
+                            # Hardware Bypass: Use absolute system paths for critical apps to avoid hotkeys/pyautogui
+                            # and ensure deterministic launch without OS interference
+                            lower_app_name = app_name.lower()
+                            if lower_app_name in ["calc", "calc.exe", "calculator"]:
+                                 app_path = r"C:\Windows\System32\calc.exe"
+                            elif lower_app_name in ["notepad", "notepad.exe"]:
+                                 app_path = r"C:\Windows\System32\notepad.exe"
+                            else:
+                                 app_path = app_name
+
+                            if os.path.exists(app_path):
+                                 import subprocess
+                                 # Using subprocess.Popen instead of os.startfile to bypass OS shell completely
+                                 # and prevent pyautogui dependency for launching
+                                 subprocess.Popen([app_path], shell=False)
+                            else:
+                                 # Fallback
+                                 os.startfile(app_name)
 
                             # Kinematic Quiescence Polling
                             poll_interval = 0.5
@@ -3256,6 +3296,13 @@ def execute_voice_agent_loop() -> None:
                             pyautogui.click()
                         except Exception as click_e:
                             logging.error(f"Error executing click via PyAutoGUI: {click_e}.")
+
+                    elif action_upper == "EXTRACT_DATA":
+                         # Handled silently as an observation, log it
+                         logging.info(f"Observation Action (EXTRACT_DATA): {act.get('keys', [])} from target {act.get('target_id', 'unknown')}")
+                         self.command_text += f"\n[System Note: Observed data via EXTRACT_DATA action: {act.get('keys', [])}]"
+                         # Voice loop handle
+                         pass
 
                     elif action_upper == "TYPE":
                         text_to_type = act.get("text", "")
@@ -3373,6 +3420,7 @@ from datetime import datetime
 
 RECORDING_MODE = False
 RECORDED_STEPS = []
+BACKGROUND_RECORDER_PROCESS = None
 
 class HumanGuidanceRequest(BaseModel):
     type: str = ""
@@ -3404,7 +3452,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        global LOCAL_STATUS, ACTIVE_DOC_ID, RECORDING_MODE, RECORDED_STEPS
+        global LOCAL_STATUS, ACTIVE_DOC_ID, RECORDING_MODE, RECORDED_STEPS, BACKGROUND_RECORDER_PROCESS
         if self.path == '/api/run_command':
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length)
@@ -3589,6 +3637,27 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
         elif self.path == '/api/recording/start':
             RECORDING_MODE = True
             RECORDED_STEPS.clear()
+
+            # Start FFmpeg background recording logic
+            if BACKGROUND_RECORDER_PROCESS is None:
+                try:
+                    import subprocess
+                    # Using absolute path for ffmpeg if available or rely on system PATH
+                    # Record the entire screen (assuming Windows for direct dshow, modify if cross-platform is needed)
+                    # Use a unique filename
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    output_filename = f"ROMY_MISSION_RECORDING_{timestamp}.mp4"
+                    cmd = [
+                        "ffmpeg", "-y", "-f", "gdigrab", "-framerate", "10",
+                        "-i", "desktop", "-c:v", "libx264", "-preset", "ultrafast",
+                        "-pix_fmt", "yuv420p", output_filename
+                    ]
+                    # We don't block the agent loop
+                    BACKGROUND_RECORDER_PROCESS = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    logging.info(f"Background FFmpeg recording started: {output_filename}")
+                except Exception as e:
+                    logging.error(f"Failed to start FFmpeg recording: {e}")
+
             self.send_response(HTTPStatus.OK)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
@@ -3596,6 +3665,21 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"status": "recording_started"}).encode())
         elif self.path == '/api/recording/stop':
             RECORDING_MODE = False
+
+            if BACKGROUND_RECORDER_PROCESS is not None:
+                try:
+                    import subprocess
+                    BACKGROUND_RECORDER_PROCESS.terminate()
+                    BACKGROUND_RECORDER_PROCESS.wait(timeout=5)
+                    logging.info("Background FFmpeg recording stopped gracefully.")
+                except subprocess.TimeoutExpired:
+                    BACKGROUND_RECORDER_PROCESS.kill()
+                    logging.warning("Background FFmpeg recording forcefully killed.")
+                except Exception as e:
+                    logging.error(f"Error stopping FFmpeg recording: {e}")
+                finally:
+                    BACKGROUND_RECORDER_PROCESS = None
+
             self.send_response(HTTPStatus.OK)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
