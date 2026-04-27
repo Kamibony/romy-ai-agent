@@ -52,9 +52,6 @@ class LocalBridgeManager:
         self.condition = threading.Condition(self.lock)
         self.result_event = threading.Event()
 
-        # Chunk reassembly buffer
-        self.chunk_buffers = {}
-
     async def _handle_client(self, websocket):
         logging.info(f"WebSocket client connected from {websocket.remote_address}")
 
@@ -76,32 +73,6 @@ class LocalBridgeManager:
                     data = json.loads(message)
                     if 'type' in data and data['type'] == 'ping':
                         await websocket.send(json.dumps({"type": "pong"}))
-                    elif 'type' in data and data['type'] == 'chunk':
-                        # Handle chunked data
-                        msg_id = data.get('message_id')
-                        chunk_idx = data.get('chunk_index')
-                        total_chunks = data.get('total_chunks')
-                        chunk_data = data.get('chunk_data', '')
-
-                        if msg_id not in self.chunk_buffers:
-                            self.chunk_buffers[msg_id] = {}
-
-                        self.chunk_buffers[msg_id][chunk_idx] = chunk_data
-
-                        # Check if all chunks are received
-                        if len(self.chunk_buffers[msg_id]) == total_chunks:
-                            # Reassemble
-                            import base64
-                            full_payload_base64 = "".join([self.chunk_buffers[msg_id][i] for i in range(total_chunks)])
-                            del self.chunk_buffers[msg_id]
-
-                            try:
-                                full_payload_bytes = base64.b64decode(full_payload_base64)
-                                full_payload_str = full_payload_bytes.decode('utf-8')
-                                full_payload = json.loads(full_payload_str)
-                                self.receive_result(full_payload)
-                            except Exception as e:
-                                logging.error(f"Failed to decode and parse reassembled base64 chunk payload: {e}")
                     elif 'type' in data and data['type'] == 'result':
                         self.receive_result(data.get('payload', {}))
                     elif 'type' in data and data['type'] == 'telemetry':
