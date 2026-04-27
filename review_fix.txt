@@ -1,0 +1,3 @@
+The review caught two logic errors:
+1. DOM mapper optimization drops div/span which breaks extraction on modern SPAs.
+2. The URL tab matching logic fails on about:blank or file:// URLs because new URL("about:blank").hostname is an empty string and string.includes("") is always true.

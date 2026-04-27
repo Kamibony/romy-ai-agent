@@ -73,6 +73,8 @@ class LocalBridgeManager:
                     data = json.loads(message)
                     if 'type' in data and data['type'] == 'ping':
                         await websocket.send(json.dumps({"type": "pong"}))
+                    elif 'type' in data and data['type'] == 'ack':
+                        logging.info(f"Extension ACK received: {data.get('payload')}")
                     elif 'type' in data and data['type'] == 'result':
                         self.receive_result(data.get('payload', {}))
                     elif 'type' in data and data['type'] == 'telemetry':

@@ -87,56 +87,70 @@ function connectLocalBridge() {
                 } else if (msg.type === 'command') {
                     const cmd = msg.payload;
                     console.log("Received command from Python Agent:", cmd);
-                    let result;
                     try {
                         if (cmd.action_type === 'GET_STATE') {
-                            result = await handleGetState(cmd);
-                            // POST massive payload directly to Python REST API
-                            try {
-                                const res = await fetch('http://127.0.0.1:8764/api/state', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify(result)
-                                });
-                                if (!res.ok) {
-                                    throw new Error(`Local API responded with ${res.status}`);
-                                }
-                                if (ws.readyState === WebSocket.OPEN) {
-                                    // Send minimal ACK over WebSocket
-                                    ws.send(JSON.stringify({
-                                        type: 'result',
-                                        payload: { success: true, state_delivered_via_http: true }
-                                    }));
-                                }
-                            } catch (httpErr) {
-                                console.error("Failed to post state to local API:", httpErr);
-                                if (ws.readyState === WebSocket.OPEN) {
-                                    ws.send(JSON.stringify({
-                                        type: 'result',
-                                        payload: { success: false, error: "Failed to post state via HTTP: " + httpErr.message }
-                                    }));
-                                }
+                            // Immediate ACK so Python knows we are working and WS event loop doesn't block
+                            if (ws.readyState === WebSocket.OPEN) {
+                                ws.send(JSON.stringify({
+                                    type: 'ack',
+                                    payload: { status: 'started' }
+                                }));
                             }
+
+                            // Background extraction to prevent blocking SW
+                            handleGetState(cmd).then(async (result) => {
+                                // POST massive payload directly to Python REST API
+                                try {
+                                    const res = await fetch('http://127.0.0.1:8764/api/state', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify(result)
+                                    });
+                                    if (!res.ok) {
+                                        throw new Error(`Local API responded with ${res.status}`);
+                                    }
+                                    if (ws.readyState === WebSocket.OPEN) {
+                                        // Send minimal Result over WebSocket
+                                        ws.send(JSON.stringify({
+                                            type: 'result',
+                                            payload: { success: true, state_delivered_via_http: true }
+                                        }));
+                                    }
+                                } catch (httpErr) {
+                                    console.error("Failed to post state to local API:", httpErr);
+                                    if (ws.readyState === WebSocket.OPEN) {
+                                        ws.send(JSON.stringify({
+                                            type: 'result',
+                                            payload: { success: false, error: "Failed to post state via HTTP: " + httpErr.message }
+                                        }));
+                                    }
+                                }
+                            }).catch(err => {
+                                console.error("Error in handleGetState:", err);
+                                if (ws.readyState === WebSocket.OPEN) {
+                                    ws.send(JSON.stringify({ type: 'result', payload: { success: false, error: err.message || String(err) } }));
+                                }
+                            });
                         } else if (cmd.action_type === 'EXECUTE_ACTION') {
-                            result = await handleExecuteNativeAction(cmd);
+                            let result = await handleExecuteNativeAction(cmd);
                             if (ws.readyState === WebSocket.OPEN) {
                                 ws.send(JSON.stringify({ type: 'result', payload: result }));
                             }
                         } else if (cmd.action_type === 'GET_FRESH_TOKEN') {
                             const token = await getAuthToken();
-                            result = { success: !!token, token: token };
+                            let result = { success: !!token, token: token };
                             if (ws.readyState === WebSocket.OPEN) {
                                 ws.send(JSON.stringify({ type: 'result', payload: result }));
                             }
                         } else {
-                            result = { success: false, error: "Unknown action_type." };
+                            let result = { success: false, error: "Unknown action_type." };
                             if (ws.readyState === WebSocket.OPEN) {
                                 ws.send(JSON.stringify({ type: 'result', payload: result }));
                             }
                         }
                     } catch (err) {
                         console.error("Error processing command internally:", err);
-                        result = { success: false, error: err.message || String(err) };
+                        let result = { success: false, error: err.message || String(err) };
                         if (ws.readyState === WebSocket.OPEN) {
                             ws.send(JSON.stringify({ type: 'result', payload: result }));
                         }
@@ -461,8 +475,62 @@ async function handleGetState(payload) {
         }
     };
 
-    if (iteration === 0) {
-        // Start of a new session: always create a new tab
+    const isEmptyOrNewTab = (url) => {
+        return !url || url === 'about:blank' || url.startsWith('chrome://newtab') || url.startsWith('edge://newtab');
+    };
+
+    const isRestrictedUrl = (url) => {
+        if (!url) return true;
+        return (url.startsWith('chrome://') && !url.startsWith('chrome://newtab')) ||
+               (url.startsWith('edge://') && !url.startsWith('edge://newtab')) ||
+               (url.startsWith('about:') && url !== 'about:blank') ||
+               url.startsWith('chrome-extension://');
+    };
+
+    // Tab duplication fix: check if activeSessionTabId is still valid and matches the domain,
+    // or search for an existing tab with targetUrl before spawning duplicates.
+    let existingTabMatch = false;
+
+    const isMatch = (tabUrl, targetUrl) => {
+        if (!tabUrl || !targetUrl) return false;
+        if (tabUrl.includes(targetUrl)) return true;
+        try {
+            const hostname = new URL(tabUrl).hostname;
+            if (hostname && targetUrl.includes(hostname)) return true;
+        } catch(e) {}
+        return false;
+    };
+
+    if (activeSessionTabId) {
+        try {
+            tab = await chrome.tabs.get(activeSessionTabId);
+            if (tab && isMatch(tab.url, targetUrl)) {
+                existingTabMatch = true;
+            }
+        } catch (e) {
+            tab = null;
+        }
+    }
+
+    if (!existingTabMatch && targetUrl) {
+        // Broad search for a tab that matches targetUrl
+        try {
+            const tabs = await chrome.tabs.query({ windowType: 'normal' });
+            for (let t of tabs) {
+                if (isMatch(t.url, targetUrl)) {
+                    tab = t;
+                    activeSessionTabId = t.id;
+                    existingTabMatch = true;
+                    // Make it active
+                    await chrome.tabs.update(t.id, { active: true });
+                    break;
+                }
+            }
+        } catch (e) { }
+    }
+
+    if (iteration === 0 && !existingTabMatch) {
+        // Start of a new session ONLY if we didn't find an existing tab for the target
         const urlToOpen = targetUrl || 'https://www.google.com';
         sendTelemetryLog(`New session. Creating new tab: ${urlToOpen}`);
         tab = await new Promise((resolve, reject) => {
@@ -476,8 +544,8 @@ async function handleGetState(payload) {
         activeSessionTabId = tab.id;
         await new Promise(r => setTimeout(r, 1000));
     } else {
-        // Ongoing session: use tracked tab if it exists
-        if (activeSessionTabId) {
+        // Ongoing session or we matched an existing tab: use tracked tab if it exists
+        if (!tab && activeSessionTabId) {
             try {
                 tab = await chrome.tabs.get(activeSessionTabId);
             } catch (e) {
@@ -496,18 +564,6 @@ async function handleGetState(payload) {
             tab = activeTab;
             activeSessionTabId = tab.id;
         }
-
-        const isEmptyOrNewTab = (url) => {
-            return !url || url === 'about:blank' || url.startsWith('chrome://newtab') || url.startsWith('edge://newtab');
-        };
-
-        const isRestrictedUrl = (url) => {
-            if (!url) return true;
-            return (url.startsWith('chrome://') && !url.startsWith('chrome://newtab')) ||
-                   (url.startsWith('edge://') && !url.startsWith('edge://newtab')) ||
-                   (url.startsWith('about:') && url !== 'about:blank') ||
-                   url.startsWith('chrome-extension://');
-        };
 
         if (targetUrl && isEmptyOrNewTab(tab.url)) {
             sendTelemetryLog(`Navigating empty/new tab to extracted URL: ${targetUrl}`);
