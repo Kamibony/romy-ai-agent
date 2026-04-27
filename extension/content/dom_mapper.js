@@ -97,11 +97,30 @@ window.RomyDomMapper = {
             return false;
         }
 
+        function isInformationNode(el) {
+            const tagName = el.tagName.toLowerCase();
+            // Data dense nodes: Paragraphs, spans with text, headings, table cells
+            if (['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'td', 'th', 'li', 'dd', 'dt'].includes(tagName)) {
+                return el.innerText.trim().length > 0;
+            }
+            // Allow generic spans/divs or custom structural elements if they hold text
+            // Remove domain-specific (e.g., fin-streamer) logic to remain universal
+            if (tagName === 'span' || tagName === 'div' || el.tagName.includes('-')) {
+                // If it's a generic container or custom element, map it if it contains pure text
+                // and has a non-trivial amount of text
+                if (el.children.length === 0 && el.innerText.trim().length > 0) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         function getAllNodes(root) {
             let nodes = [];
             const elements = root.querySelectorAll('*');
             elements.forEach(el => {
-                if (isInteractive(el)) {
+                // Hierarchical Semantic Weighting: capture both interactive UI and static Information Nodes
+                if (isInteractive(el) || isInformationNode(el)) {
                     nodes.push(el);
                 }
                 if (el.shadowRoot) {
@@ -271,7 +290,7 @@ window.RomyDomMapper = {
         // unless they are explicitly semantic
         allNodes = allNodes.filter(node => {
             const rect = node.getBoundingClientRect();
-            const isSemantic = isDistinctSemanticElement(node);
+            const isSemantic = isDistinctSemanticElement(node) || isInformationNode(node);
 
             // If it's just a generic container marked interactive via CSS (cursor: pointer)
             // and it takes up more than 50% of the screen, we probably don't want it.

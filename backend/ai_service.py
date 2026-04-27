@@ -604,6 +604,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             "Based on the user's command, the current sub-task, and the visual state, locate the correct target element. "
             "You must output the exact target_id of the Set-of-Mark box, or if unavailable, the [x, y] coordinates representing the center of the target element.\n\n"
             "Supported actions:\n"
+            "- {\"action\": \"EXTRACT_DATA\", \"target_id\": \"<id>\", \"keys\": [\"key1\", \"key2\"], \"thought\": \"Reading information from screen.\"} (CRITICAL: Prioritize OBSERVE before ACT. Use this explicitly to state what data you are observing/reading from the DOM/Image before taking a mutating action like CLICK or TYPE.)\n"
             "- {\"action\": \"CLICK\", \"target_id\": \"<id>\", \"coordinates\": [x, y]} (CRUCIAL: If there is a GDPR cookie banner, consent modal, or popup overlapping the page, your VERY FIRST action MUST be to CLICK its \"Accept\", \"Agree\", or \"Close\" button before attempting to interact with any other elements on the main page.)\n"
             "- {\"action\": \"HOVER\", \"target_id\": \"<id>\", \"coordinates\": [x, y]} (CRITICAL: When interacting with complex navigation bars, mega-menus, or elements that might be hidden inside dropdowns (like on e-commerce sites), you MUST output a HOVER action on the parent category to reveal the sub-menu BEFORE attempting to CLICK the child item.)\n"
             "- {\"action\": \"TYPE\", \"target_id\": \"<id>\", \"coordinates\": [x, y], \"text\": \"<text to type>\", \"submit\": true} (this automatically focuses the element, types, and natively submits by pressing Enter if submit=true)\n"
@@ -690,7 +691,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                         properties={
                             "action": types.Schema(
                                 type=types.Type.STRING,
-                                    enum=["CLICK", "TYPE", "SEARCH", "SCROLL", "NAVIGATE", "OPEN_TAB", "LAUNCH_APP", "PRESS_KEY", "WAIT_FOR", "WAIT", "RESET_VIEW", "EXECUTE_JS", "REPLY", "SUB_TASK_COMPLETE", "DONE", "ASK_HUMAN", "DRAG_AND_DROP", "HOVER"]
+                                    enum=["CLICK", "TYPE", "SEARCH", "SCROLL", "NAVIGATE", "OPEN_TAB", "LAUNCH_APP", "PRESS_KEY", "WAIT_FOR", "WAIT", "RESET_VIEW", "EXECUTE_JS", "REPLY", "SUB_TASK_COMPLETE", "DONE", "ASK_HUMAN", "DRAG_AND_DROP", "HOVER", "EXTRACT_DATA"]
                             ),
                             "target_id": types.Schema(
                                 type=types.Type.STRING,
@@ -723,6 +724,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                             "max_wait_seconds": types.Schema(type=types.Type.NUMBER),
                             "reason": types.Schema(type=types.Type.STRING),
                             "code": types.Schema(type=types.Type.STRING, description="JavaScript code to execute"),
+                            "keys": types.Schema(type=types.Type.ARRAY, items=types.Schema(type=types.Type.STRING), description="Keys to extract for EXTRACT_DATA"),
                             "thought": types.Schema(type=types.Type.STRING, description="The reasoning behind why this action was chosen")
                         },
                         required=["action", "thought"]
@@ -850,6 +852,13 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                                 "code": str(action_data["code"]),
                                 "thought": thought
                             })
+                        elif action == "EXTRACT_DATA" and "keys" in action_data:
+                            parsed_actions.append({
+                                "action": "EXTRACT_DATA",
+                                "keys": action_data["keys"],
+                                "target_id": str(action_data.get("target_id", "")),
+                                "thought": thought
+                            })
                         elif action == "SUB_TASK_COMPLETE":
                             parsed_actions.append({"action": "SUB_TASK_COMPLETE", "thought": thought})
                         elif action == "DONE":
@@ -961,6 +970,13 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                     return {"actions": [{
                         "action": "EXECUTE_JS",
                         "code": str(action_data["code"]),
+                        "thought": thought
+                    }], "memory_rules": playbook_rules_applied}
+                elif action == "EXTRACT_DATA" and "keys" in action_data:
+                    return {"actions": [{
+                        "action": "EXTRACT_DATA",
+                        "keys": action_data["keys"],
+                        "target_id": str(action_data.get("target_id", "")),
                         "thought": thought
                     }], "memory_rules": playbook_rules_applied}
                 elif action == "SUB_TASK_COMPLETE":
