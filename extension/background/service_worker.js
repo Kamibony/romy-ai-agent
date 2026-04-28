@@ -27,6 +27,8 @@ async function setupOffscreenDocument(path) {
     });
 }
 
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 // Local bridge WebSocket to receive commands from the Desktop Agent Orchestrator
 let localBridgeWs = null;
 let reconnectTimeout = null;
@@ -994,7 +996,7 @@ async function handleExecuteNativeAction(payload) {
                 });
 
                 // Implicit Stability Buffer: 1.5s hard delay to telegraph action and let SPA settle
-                await new Promise(r => setTimeout(r, 1500));
+                await delay(1500);
             } catch (err) {
                 sendTelemetryLog(`[CDP] Failed to draw Telegraphed Execution highlight: ${err.message}`);
             }
@@ -1031,9 +1033,9 @@ async function handleExecuteNativeAction(payload) {
             if (actionData.stealth_mode !== false) {
                 // Stealth Kinematics: Randomized click duration
                 const clickDuration = Math.floor(Math.random() * (120 - 40 + 1)) + 40;
-                await new Promise(r => setTimeout(r, clickDuration));
+                await delay(clickDuration);
             } else {
-                await new Promise(r => setTimeout(r, 50)); // Fast fixed delay
+                await delay(50); // Fast fixed delay
             }
 
             await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", {
@@ -1134,15 +1136,15 @@ async function handleExecuteNativeAction(payload) {
                     });
 
                     // Implicit Stability Buffer: 1.5s hard delay before typing
-                    await new Promise(r => setTimeout(r, 1500));
+                    await delay(1500);
                 } catch (err) {
                     sendTelemetryLog(`[CDP] Failed to draw Telegraphed Execution TYPE highlight or focus element: ${err.message}`);
                 }
 
                 await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", { type: "mousePressed", x: x, y: y, button: "left", clickCount: 1 });
-                await new Promise(r => setTimeout(r, 50));
+                await delay(50);
                 await cdpManager.sendCommand(activeSessionTabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x: x, y: y, button: "left", clickCount: 1 });
-                await new Promise(r => setTimeout(r, 100)); // Allow focus to settle
+                await delay(100); // Allow focus to settle
             }
 
             for (let i = 0; i < text.length; i++) {
@@ -1154,9 +1156,9 @@ async function handleExecuteNativeAction(payload) {
                 if (actionData.stealth_mode !== false) {
                     // Stealth Kinematics: Randomized human-like typing jitter (50ms - 150ms)
                     const jitterDelay = Math.floor(Math.random() * (150 - 50 + 1)) + 50;
-                    await new Promise(r => setTimeout(r, jitterDelay));
+                    await delay(jitterDelay);
                 } else {
-                    await new Promise(r => setTimeout(r, 10)); // Typematic delay
+                    await delay(10); // Typematic delay
                 }
             }
 
@@ -1445,7 +1447,7 @@ async function handleExecuteNativeAction(payload) {
             } catch (e) {
                 // Fallback to static timeout if message fails
                 sendTelemetryLog(`Dynamic stability check failed (${e.message}). Falling back to static 1.5s wait.`);
-                await new Promise(r => setTimeout(r, 1500));
+                await delay(1500);
             }
         }
 

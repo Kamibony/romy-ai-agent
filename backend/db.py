@@ -1,3 +1,4 @@
+import logging
 import os
 import firebase_admin
 from firebase_admin import firestore
@@ -16,7 +17,7 @@ def get_task_session(session_id: str) -> Optional[Dict[str, Any]]:
             return doc.to_dict()
         return None
     except Exception as e:
-        print(f"Error getting task session {session_id}: {e}")
+        logging.info(f"Error getting task session {session_id}: {e}")
         return None
 
 def update_task_session(session_id: str, updates: Dict[str, Any]) -> None:
@@ -28,7 +29,7 @@ def update_task_session(session_id: str, updates: Dict[str, Any]) -> None:
         doc_ref = db.collection("task_sessions").document(session_id)
         doc_ref.set(updates, merge=True)
     except Exception as e:
-        print(f"Error updating task session {session_id}: {e}")
+        logging.info(f"Error updating task session {session_id}: {e}")
 
 def create_task_session(session_id: str, initial_command: str = "") -> None:
     """
@@ -45,7 +46,7 @@ def create_task_session(session_id: str, initial_command: str = "") -> None:
                 "created_at": firestore.SERVER_TIMESTAMP
             })
     except Exception as e:
-        print(f"Error creating task session {session_id}: {e}")
+        logging.info(f"Error creating task session {session_id}: {e}")
 
 def check_user_license(uid: str) -> bool:
     """
@@ -71,5 +72,5 @@ def check_user_license(uid: str) -> bool:
             return user_data.get("is_active") is True
         return False
     except Exception as e:
-        print(f"Error checking user license for {uid}: {e}")
+        logging.info(f"Error checking user license for {uid}: {e}")
         return False

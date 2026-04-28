@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -8,7 +9,7 @@ try:
     dotenv_path = backend_dir / ".env"
     load_dotenv(dotenv_path=dotenv_path)
 except Exception as e:
-    print(f"Failed to load .env file: {e}")
+    logging.info(f"Failed to load .env file: {e}")
 
 from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks
 from fastapi.concurrency import run_in_threadpool
@@ -20,6 +21,7 @@ from auth import verify_firebase_token
 from db import check_user_license, get_task_session, update_task_session, create_task_session
 from ai_service import process_with_gemini, transcribe_audio_with_gemini, classify_intent_with_gemini, pre_flight_check_with_gemini, supervisor_plan_with_gemini, critic_verify_with_gemini, synthesize_playbook_rule_with_gemini, compile_sop_with_gemini, rescue_element_with_gemini
 from repositories import get_memory_repository, AbstractMemoryRepository
+from mission_orchestrator import execute_mission_orchestrator
 from firebase_admin import firestore
 import traceback
 from fastapi.responses import JSONResponse
@@ -41,7 +43,7 @@ app = FastAPI(title="ROMY AI Agent Backend", lifespan=lifespan)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    print(f"Global Exception Handler Caught: {exc}")
+    logging.info(f"Global Exception Handler Caught: {exc}")
     traceback.print_exc()
     return JSONResponse(
         status_code=500,
@@ -204,7 +206,7 @@ def evaluate_plan_progress(request: EvaluatePlanProgressRequest, uid: str = Depe
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Graceful fallback in evaluate_plan_progress due to error: {e}")
+        logging.info(f"Graceful fallback in evaluate_plan_progress due to error: {e}")
         return {"is_accomplished": False, "reason": f"Backend fallback due to error: {str(e)}"}
 
 @app.get("/api/playbook_rules")
@@ -271,7 +273,7 @@ async def save_sop(request: SOPStudioSaveRequest, uid: str = Depends(verify_fire
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error checking user license in save_sop: {e}")
+        logging.info(f"Error checking user license in save_sop: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to verify user license.",
@@ -303,7 +305,7 @@ async def save_sop(request: SOPStudioSaveRequest, uid: str = Depends(verify_fire
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error saving SOP: {e}")
+        logging.info(f"Error saving SOP: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred while saving SOP: {str(e)}"
@@ -325,7 +327,7 @@ async def get_sops(client_id: Optional[str] = None, uid: str = Depends(verify_fi
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error checking user license in get_sops: {e}")
+        logging.info(f"Error checking user license in get_sops: {e}")
         # Graceful degradation if auth/DB fails entirely: Fail closed.
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -336,7 +338,7 @@ async def get_sops(client_id: Optional[str] = None, uid: str = Depends(verify_fi
         rules = await run_in_threadpool(memory_repo.list_playbook_rules, client_id=client_id)
         return {"status": "ok", "sops": rules}
     except Exception as e:
-        print(f"Error fetching SOPs: {e}")
+        logging.info(f"Error fetching SOPs: {e}")
         # Graceful degradation: Return empty list if DB connection fails
         return {"status": "ok", "sops": []}
 
@@ -362,7 +364,7 @@ def delete_sop(doc_id: str, client_id: Optional[str] = None, uid: str = Depends(
         )
 
 @app.get("/api/v1/memory/rules")
-def get_dashboard_rules(client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token)):
+async def get_dashboard_rules(client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token), memory_repo: AbstractMemoryRepository = Depends(get_memory_repository)):
     """
     Endpoint for Dashboard to fetch all memory rules from Firestore (fast, no vector search).
     """
@@ -375,17 +377,17 @@ def get_dashboard_rules(client_id: Optional[str] = None, uid: str = Depends(veri
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error checking user license in get_dashboard_rules: {e}")
+        logging.info(f"Error checking user license in get_dashboard_rules: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to verify user license.",
         )
 
     try:
-        rules = list_playbook_rules_from_firestore(client_id=client_id)
+        rules = await run_in_threadpool(memory_repo.list_playbook_rules, client_id=client_id)
         return {"status": "ok", "rules": rules}
     except Exception as e:
-        print(f"Error fetching dashboard rules: {e}")
+        logging.info(f"Error fetching dashboard rules: {e}")
         return {"status": "ok", "rules": []}
 
 @app.delete("/api/v1/memory/rules/{rule_id}")
@@ -451,9 +453,9 @@ def _background_update_session_and_telemetry(session_id: str, updates: dict, act
             "claude_action": str(action_list), # Kept for backward compatibility if needed by frontend
             "uid": uid
         })
-        print("Telemetry written to Firestore in background")
+        logging.info("Telemetry written to Firestore in background")
     except Exception as e:
-        print(f"Error writing telemetry in background: {e}")
+        logging.info(f"Error writing telemetry in background: {e}")
 
 @app.post("/api/v1/agent/command")
 def agent_command(request: AgentCommandRequest, background_tasks: BackgroundTasks, uid: str = Depends(verify_firebase_token)):
@@ -469,9 +471,9 @@ def agent_command(request: AgentCommandRequest, background_tasks: BackgroundTask
 
     elements_count = len(request.ui_elements)
     audio_len = len(request.audio_base64) if request.audio_base64 else 0
-    print(f"Received {elements_count} UI elements")
-    print(f"Received audio length: {audio_len}")
-    print(f"Received command text: {request.command_text}")
+    logging.info(f"Received {elements_count} UI elements")
+    logging.info(f"Received audio length: {audio_len}")
+    logging.info(f"Received command text: {request.command_text}")
 
     try:
         thread_history = ""
@@ -505,7 +507,7 @@ def agent_command(request: AgentCommandRequest, background_tasks: BackgroundTask
             clipboard_status=request.clipboard_status,
             differential_passing_active=differential_passing_active
         )
-        print(f"Gemini action list: {action_list}")
+        logging.info(f"Gemini action list: {action_list}")
 
         updates = {}
         if request.session_id and session:
@@ -541,7 +543,7 @@ def agent_command(request: AgentCommandRequest, background_tasks: BackgroundTask
         # Directly return the list of actions to match extension expectations
         return action_list
     except Exception as e:
-        print(f"Error in AI pipeline: {e}")
+        logging.info(f"Error in AI pipeline: {e}")
         return [{"action": "PIPELINE_ERROR", "error": str(e)}]
 
 class MissionBlock(BaseModel):
@@ -565,8 +567,9 @@ async def execute_mission(mission: MissionGraph, uid: str = Depends(verify_fireb
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User license is not active.",
         )
-    print(f"Executing mission {mission.mission_id}: {mission.name}")
-    # Here we would do the actual execution, simulating success
+    logging.info(f"Executing mission {mission.mission_id}: {mission.name}")
+    import asyncio
+    asyncio.create_task(execute_mission_orchestrator(mission, "dummy_doc_id"))
     return {"status": "ok", "message": "Mission started"}
 
 

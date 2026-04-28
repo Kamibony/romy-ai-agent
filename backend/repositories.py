@@ -1,3 +1,4 @@
+import logging
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 import os
@@ -33,7 +34,7 @@ class FirestoreMemoryRepository(AbstractMemoryRepository):
             self.chroma_client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
             self.playbook_collection = self.chroma_client.get_or_create_collection(name="site_playbooks")
         except Exception as e:
-            print(f"Failed to initialize ChromaDB: {e}")
+            logging.info(f"Failed to initialize ChromaDB: {e}")
             self.chroma_client = None
             self.playbook_collection = None
 
@@ -47,7 +48,7 @@ class FirestoreMemoryRepository(AbstractMemoryRepository):
                 rule_hash = hashlib.sha256(rule.encode()).hexdigest()
                 doc_id = f"{domain}_{client_id}_{rule_hash}" if client_id else f"{domain}_{rule_hash}"
         except Exception as e:
-            print(f"Error generating ID for playbook rule: {e}")
+            logging.info(f"Error generating ID for playbook rule: {e}")
             return
 
         # 2. Write to ChromaDB (for vector search)
@@ -64,11 +65,11 @@ class FirestoreMemoryRepository(AbstractMemoryRepository):
                     metadatas=[metadata],
                     ids=[doc_id]
                 )
-                print(f"Saved playbook rule to ChromaDB for {domain} (client: {client_id}): {rule}")
+                logging.info(f"Saved playbook rule to ChromaDB for {domain} (client: {client_id}): {rule}")
             except Exception as e:
-                print(f"Error saving playbook rule to ChromaDB: {e}")
+                logging.info(f"Error saving playbook rule to ChromaDB: {e}")
         else:
-            print("ChromaDB not initialized, skipping ChromaDB save.")
+            logging.info("ChromaDB not initialized, skipping ChromaDB save.")
 
         # 3. Write to Firestore (for Dashboard UI & CRUD)
         try:
@@ -94,9 +95,9 @@ class FirestoreMemoryRepository(AbstractMemoryRepository):
                 collection_ref = db.collection("global_memory_rules")
 
             collection_ref.document(doc_id).set(payload, merge=True)
-            print(f"Saved playbook rule to Firestore (client: {client_id}, doc_id: {doc_id})")
+            logging.info(f"Saved playbook rule to Firestore (client: {client_id}, doc_id: {doc_id})")
         except Exception as e:
-            print(f"Error saving playbook rule to Firestore: {e}")
+            logging.info(f"Error saving playbook rule to Firestore: {e}")
 
     def delete_playbook_rule(self, doc_id: str, client_id: Optional[str] = None) -> bool:
         success = True
@@ -105,9 +106,9 @@ class FirestoreMemoryRepository(AbstractMemoryRepository):
         if self.playbook_collection:
             try:
                 self.playbook_collection.delete(ids=[doc_id])
-                print(f"Deleted playbook rule {doc_id} from ChromaDB")
+                logging.info(f"Deleted playbook rule {doc_id} from ChromaDB")
             except Exception as e:
-                print(f"Error deleting playbook rule {doc_id} from ChromaDB: {e}")
+                logging.info(f"Error deleting playbook rule {doc_id} from ChromaDB: {e}")
                 success = False
 
         # 2. Delete from Firestore
@@ -117,9 +118,9 @@ class FirestoreMemoryRepository(AbstractMemoryRepository):
                 db.collection("tenants").document(client_id).collection("memory_rules").document(doc_id).delete()
             else:
                 db.collection("global_memory_rules").document(doc_id).delete()
-            print(f"Deleted playbook rule {doc_id} from Firestore")
+            logging.info(f"Deleted playbook rule {doc_id} from Firestore")
         except Exception as e:
-            print(f"Error deleting playbook rule {doc_id} from Firestore: {e}")
+            logging.info(f"Error deleting playbook rule {doc_id} from Firestore: {e}")
             success = False
 
         return success
@@ -139,12 +140,12 @@ class FirestoreMemoryRepository(AbstractMemoryRepository):
                 rules.append(rule_data)
             return rules
         except Exception as e:
-            print(f"Error listing playbook rules from Firestore: {e}")
+            logging.info(f"Error listing playbook rules from Firestore: {e}")
             return []
 
     def get_playbook_rules(self, domain: str, query: str = "", n_results: int = 3, client_id: Optional[str] = None, goal: Optional[str] = None) -> List[str]:
         if not self.playbook_collection:
-            print("ChromaDB not initialized, cannot retrieve rules.")
+            logging.info("ChromaDB not initialized, cannot retrieve rules.")
             return []
 
         try:
@@ -196,7 +197,7 @@ class FirestoreMemoryRepository(AbstractMemoryRepository):
                         return all_rules
                     return []
             except Exception as filter_e:
-                print(f"Warning: ChromaDB advanced filter failed, falling back to simple query: {filter_e}")
+                logging.info(f"Warning: ChromaDB advanced filter failed, falling back to simple query: {filter_e}")
                 results = self.playbook_collection.query(
                     query_texts=[search_query],
                     n_results=n_results,
@@ -212,7 +213,7 @@ class FirestoreMemoryRepository(AbstractMemoryRepository):
 
 
         except Exception as e:
-            print(f"Error retrieving playbook rules: {e}")
+            logging.info(f"Error retrieving playbook rules: {e}")
             return []
 
 class InMemoryMemoryRepository(AbstractMemoryRepository):
@@ -228,7 +229,7 @@ class InMemoryMemoryRepository(AbstractMemoryRepository):
                 rule_hash = hashlib.sha256(rule.encode()).hexdigest()
                 doc_id = f"{domain}_{client_id}_{rule_hash}" if client_id else f"{domain}_{rule_hash}"
         except Exception as e:
-            print(f"Error generating ID for playbook rule: {e}")
+            logging.info(f"Error generating ID for playbook rule: {e}")
             return
 
         payload = {
@@ -244,7 +245,7 @@ class InMemoryMemoryRepository(AbstractMemoryRepository):
             "client_id": client_id
         }
         self.rules[doc_id] = payload
-        print(f"[InMemory] Saved playbook rule (client: {client_id}, doc_id: {doc_id})")
+        logging.info(f"[InMemory] Saved playbook rule (client: {client_id}, doc_id: {doc_id})")
 
     def delete_playbook_rule(self, doc_id: str, client_id: Optional[str] = None) -> bool:
         if doc_id in self.rules:
@@ -252,7 +253,7 @@ class InMemoryMemoryRepository(AbstractMemoryRepository):
             if client_id and rule.get("client_id") != client_id:
                 return False
             del self.rules[doc_id]
-            print(f"[InMemory] Deleted playbook rule {doc_id}")
+            logging.info(f"[InMemory] Deleted playbook rule {doc_id}")
             return True
         return False
 
