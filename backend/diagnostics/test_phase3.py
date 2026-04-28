@@ -1,3 +1,4 @@
+import logging
 import sys
 import os
 import time
@@ -37,13 +38,13 @@ mock_client = MagicMock()
 ai_service.gemini_client = mock_client
 
 def run_diagnostics():
-    print("--- Phase 3 Multi-Agent Diagnostics (LIVE) ---")
+    logging.info("--- Phase 3 Multi-Agent Diagnostics (LIVE) ---")
 
     if not os.environ.get("GEMINI_API_KEY"):
-        print("Warning: GEMINI_API_KEY environment variable is not set!")
+        logging.info("Warning: GEMINI_API_KEY environment variable is not set!")
         return
     else:
-        print("Success: GEMINI_API_KEY loaded successfully.")
+        logging.info("Success: GEMINI_API_KEY loaded successfully.")
 
     cmd = "Book a flight to Tokyo for next Friday."
 
@@ -73,23 +74,23 @@ def run_diagnostics():
     ]
 
     # [1] Pre-Flight Agent
-    print(f"\n[1] Testing Pre-Flight Agent with command: '{cmd}'")
+    logging.info(f"\n[1] Testing Pre-Flight Agent with command: '{cmd}'")
     pre_flight_res = ai_service.pre_flight_check_with_gemini(cmd)
-    print(f"Result: {pre_flight_res}")
+    logging.info(f"Result: {pre_flight_res}")
 
     # [2] Supervisor Agent
-    print(f"\n[2] Testing Supervisor Agent with command: '{cmd}'")
+    logging.info(f"\n[2] Testing Supervisor Agent with command: '{cmd}'")
     plan_res = ai_service.supervisor_plan_with_gemini(cmd)
-    print(f"Result: {plan_res}")
+    logging.info(f"Result: {plan_res}")
 
     # [3] Navigator Agent
-    print("\n[3] Testing Navigator Agent (process_with_gemini) with heavy payload")
+    logging.info("\n[3] Testing Navigator Agent (process_with_gemini) with heavy payload")
 
     # Generate a large mock ui_elements array
     ui_elements = [{"id": str(i), "xpath": f"//div[{i}]/input", "description": f"Input field {i}"} for i in range(100)]
     ui_elements.append({"id": "100", "xpath": "//input[@name='destination']", "description": "Destination input"})
 
-    print(f"Generated {len(ui_elements)} UI elements. Sending to Navigator...")
+    logging.info(f"Generated {len(ui_elements)} UI elements. Sending to Navigator...")
 
     start_time = time.time()
     nav_res = ai_service.process_with_gemini(
@@ -100,20 +101,20 @@ def run_diagnostics():
     )
     end_time = time.time()
 
-    print(f"Navigator Time: {end_time - start_time:.2f} seconds")
-    print(f"Result: {nav_res}")
+    logging.info(f"Navigator Time: {end_time - start_time:.2f} seconds")
+    logging.info(f"Result: {nav_res}")
 
     # [4] Critic Agent
-    print("\n[4] Testing Critic Agent (critic_verify_with_gemini)")
+    logging.info("\n[4] Testing Critic Agent (critic_verify_with_gemini)")
     critic_res = ai_service.critic_verify_with_gemini(
         sub_task="Enter destination city",
         before_state={"ui_elements": ui_elements},
         action_taken={"action": "TYPE", "target_id": "100", "text": "Tokyo"},
         after_state={"ui_elements": [{"id": "100", "xpath": "//input[@name='destination']", "description": "Destination input with text Tokyo"}]}
     )
-    print(f"Result: {critic_res}")
+    logging.info(f"Result: {critic_res}")
 
-    print("\n--- Diagnostics Complete ---")
+    logging.info("\n--- Diagnostics Complete ---")
 
 if __name__ == "__main__":
     run_diagnostics()

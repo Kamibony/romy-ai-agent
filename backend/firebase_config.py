@@ -1,3 +1,4 @@
+import logging
 import os
 import firebase_admin
 
@@ -14,7 +15,7 @@ def initialize_firebase() -> firebase_admin.App | None:
                 if is_local and os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") is None:
                     # In local mode without explicit credentials, default to mock to prevent ADC from throwing
                     app = firebase_admin.initialize_app(MockCredential(), options={'projectId': 'demo-project'})
-                    print("Firebase Admin initialized successfully using mock credentials.")
+                    logging.info("Firebase Admin initialized successfully using mock credentials.")
                     return app
 
                 # Try to initialize with default credentials
@@ -24,7 +25,7 @@ def initialize_firebase() -> firebase_admin.App | None:
                 # We attempt to get the credential to see if it throws DefaultCredentialsError
                 app.credential.get_credential()
 
-                print("Firebase Admin initialized successfully using ADC.")
+                logging.info("Firebase Admin initialized successfully using ADC.")
                 return app
             except Exception as e:
                 # Clean up the failed default app initialization if any
@@ -32,16 +33,16 @@ def initialize_firebase() -> firebase_admin.App | None:
                     del firebase_admin._apps["[DEFAULT]"]
 
                 if is_local:
-                    print(f"ADC initialization failed, falling back to mock credentials for local dev. Reason: {e}")
+                    logging.info(f"ADC initialization failed, falling back to mock credentials for local dev. Reason: {e}")
                     app = firebase_admin.initialize_app(MockCredential(), options={'projectId': 'demo-project'})
-                    print("Firebase Admin initialized successfully using mock credentials (fallback).")
+                    logging.info("Firebase Admin initialized successfully using mock credentials (fallback).")
                     return app
                 else:
                     raise e
         else:
             return firebase_admin.get_app()
     except Exception as e:
-        print(f"Error initializing Firebase Admin: {e}")
+        logging.info(f"Error initializing Firebase Admin: {e}")
         # Depending on strictness, we might want to raise here
         return None
 

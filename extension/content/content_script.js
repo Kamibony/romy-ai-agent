@@ -65,7 +65,7 @@ document.addEventListener('click', (e) => {
                 dpr: dpr
             }
         }).catch(err => {
-            console.warn("Failed to send ghost click to background (maybe disconnected):", err);
+            console.error("Failed to send ghost click to background (maybe disconnected):", err);
         });
     } catch (err) {
         console.error("Error computing coordinates for ghost click:", err);

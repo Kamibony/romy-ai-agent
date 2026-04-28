@@ -1,3 +1,4 @@
+import logging
 import os
 import json
 import base64
@@ -12,7 +13,7 @@ try:
 except ImportError:
     genai = None
 
-from memory import save_playbook_rule, get_playbook_rules
+from repositories import get_memory_repository
 
 # Initialize clients globally if possible
 gemini_client = None
@@ -28,7 +29,7 @@ def get_gemini_client():
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        print("WARNING: GEMINI_API_KEY environment variable is missing. AI functionality will be severely limited or return mock responses.")
+        logging.info("WARNING: GEMINI_API_KEY environment variable is missing. AI functionality will be severely limited or return mock responses.")
         return None
 
     try:
@@ -45,7 +46,7 @@ def get_gemini_client():
         )
         return gemini_client
     except Exception as e:
-        print(f"Failed to initialize Gemini client: {e}")
+        logging.info(f"Failed to initialize Gemini client: {e}")
         return None
 
 # Attempt to initialize immediately if the key is already present
@@ -83,7 +84,7 @@ def transcribe_audio_with_gemini(audio_b64: str) -> str:
         )
         return response.text.strip()
     except Exception as e:
-        print(f"Error transcribing audio: {e}")
+        logging.info(f"Error transcribing audio: {e}")
         return ""
 
 def pre_flight_check_with_gemini(command_text: str) -> dict:
@@ -127,7 +128,7 @@ def pre_flight_check_with_gemini(command_text: str) -> dict:
         result = json.loads(response.text.strip())
         return result
     except Exception as e:
-        print(f"Error in pre-flight check: {e}")
+        logging.info(f"Error in pre-flight check: {e}")
         return {"status": "ok"}
 
 def supervisor_plan_with_gemini(command_text: str, completed_tasks: list[str] = None, task_index: int = None, roadblock_reason: str = None) -> list[str]:
@@ -180,7 +181,7 @@ def supervisor_plan_with_gemini(command_text: str, completed_tasks: list[str] = 
             return result
         return []
     except Exception as e:
-        print(f"Error in supervisor planning: {e}")
+        logging.info(f"Error in supervisor planning: {e}")
         return []
 
 
@@ -256,7 +257,7 @@ def evaluate_plan_progress_with_gemini(command_text: str, current_sub_task: str,
         )
         return json.loads(response.text.strip())
     except Exception as e:
-        print(f"Error in evaluate_plan_progress: {e}")
+        logging.info(f"Error in evaluate_plan_progress: {e}")
         return {"is_accomplished": False, "reason": str(e)}
 
 def _run_critic_verification(sub_task: str, action_taken: dict, before_state: dict, after_state: dict, include_images: bool) -> dict:
@@ -368,13 +369,13 @@ def critic_verify_with_gemini(sub_task: str, before_state: dict, action_taken: d
             has_after_image = bool(after_state.get("screenshot_base64"))
 
             if has_before_image or has_after_image:
-                print("Text-based critic verify failed, falling back to multimodal verification...")
+                logging.info("Text-based critic verify failed, falling back to multimodal verification...")
                 fallback_result = _run_critic_verification(sub_task, action_taken, before_state, after_state, include_images=True)
                 return fallback_result
 
         return result
     except Exception as e:
-        print(f"Error in critic verification: {e}")
+        logging.info(f"Error in critic verification: {e}")
         return {"success": False, "reason": str(e)}
 
 
@@ -409,7 +410,7 @@ def classify_intent_with_gemini(command_text: str) -> str:
             return "WEB"
         return "OS"
     except Exception as e:
-        print(f"Error classifying intent: {e}")
+        logging.info(f"Error classifying intent: {e}")
         return "OS"
 
 def compile_sop_with_gemini(domain: str, raw_sop: str, client_id: str = None, target_sub_task: str = None, memory_repo=None) -> Optional[str]:
@@ -468,11 +469,12 @@ def compile_sop_with_gemini(domain: str, raw_sop: str, client_id: str = None, ta
 
         rule = response.text.strip()
         if rule:
-            save_playbook_rule(domain, rule, client_id=client_id, goal=target_sub_task, source="manual_sop")
+            repo = get_memory_repository()
+            repo.save_playbook_rule(domain, rule, client_id=client_id, goal=target_sub_task, source="manual_sop")
             return rule
         return None
     except Exception as e:
-        print(f"Error compiling SOP: {e}")
+        logging.info(f"Error compiling SOP: {e}")
         return None
 
 def synthesize_playbook_rule_with_gemini(domain: str, execution_telemetry: str, client_id: str = None, failed_sub_task: str = None) -> Optional[str]:
@@ -523,11 +525,12 @@ def synthesize_playbook_rule_with_gemini(domain: str, execution_telemetry: str, 
 
         rule = response.text.strip()
         if rule:
-            save_playbook_rule(domain, rule, client_id=client_id, goal=failed_sub_task)
+            repo = get_memory_repository()
+            repo.save_playbook_rule(domain, rule, client_id=client_id, goal=failed_sub_task)
             return rule
         return None
     except Exception as e:
-        print(f"Error synthesizing playbook rule: {e}")
+        logging.info(f"Error synthesizing playbook rule: {e}")
         return None
 
 def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[str] = None, command_text: Optional[str] = None, thread_history: str = "", screenshot_base64: Optional[str] = None, current_sub_task: Optional[str] = None, current_url: Optional[str] = None, client_context: Optional[Dict[str, Any]] = None, clipboard_status: Optional[str] = "unknown", differential_passing_active: bool = False) -> Dict[str, Any]:
@@ -539,7 +542,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
 
     client = get_gemini_client()
     if client is None:
-        print("Gemini client not initialized.")
+        logging.info("Gemini client not initialized.")
         return {"actions": [{"action": "API_ERROR", "error": "Gemini client not initialized (missing API Key)."}], "memory_rules": []}
 
     try:
@@ -552,7 +555,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             if settings_doc.exists:
                 global_prompt = settings_doc.to_dict().get("prompt", "")
         except Exception as e:
-            print(f"Error reading global prompt from Firestore: {e}")
+            logging.info(f"Error reading global prompt from Firestore: {e}")
 
         contents = []
 
@@ -577,7 +580,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                     )
                 )
             except Exception as e:
-                print(f"Error decoding screenshot: {e}")
+                logging.info(f"Error decoding screenshot: {e}")
 
         if audio_b64:
             audio_data = base64.b64decode(audio_b64)
@@ -641,6 +644,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
             system_instruction += f"You are acting on behalf of the following client profile:\n"
             system_instruction += json.dumps(client_context, indent=2) + "\n"
             system_instruction += "Adhere to these business rules, preferred UI behaviors, and roles when executing tasks.\n\n"
+            system_instruction += "SCIENTIST PERSONA INSTRUCTIONS: You are also embodying the 'Scientist' persona. When evaluating data and making decisions, provide detailed scientific reasoning, emphasize clear data-driven hypotheses, and generate a structured analytical report of your findings internally before concluding your response.\n\n"
             client_id = client_context.get("client_id")
 
         if current_url:
@@ -652,14 +656,15 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
                     # Optionally, if it's an OS app, it might not have 'www.'. We can use the current_url as domain.
                     if "://" not in current_url:
                         domain = current_url
-                    playbook_rules = get_playbook_rules(domain, client_id=client_id, goal=current_sub_task)
+                    repo = get_memory_repository()
+                    playbook_rules = repo.get_playbook_rules(domain, client_id=client_id, goal=current_sub_task)
                     if playbook_rules:
                         playbook_rules_applied = playbook_rules
                         system_instruction += f"\n\n[SITE_SPECIFIC_RULE] for {domain}:\n"
                         for rule in playbook_rules:
                             system_instruction += f"- {rule}\n"
             except Exception as e:
-                print(f"Error fetching playbook rules for {current_url}: {e}")
+                logging.info(f"Error fetching playbook rules for {current_url}: {e}")
 
         prompt = f"Determine the correct target element from the image and output the JSON array of actions using target_id or [x, y] coordinates."
 
@@ -989,7 +994,7 @@ def process_with_gemini(ui_elements: list[Dict[str, Any]], audio_b64: Optional[s
         return {"actions": [{"action": "PARSE_ERROR", "error": "Model response could not be parsed as valid JSON actions.", "raw_response": str(response_text)}], "memory_rules": playbook_rules_applied}
 
     except Exception as e:
-        print(f"Error calling Gemini: {e}")
+        logging.info(f"Error calling Gemini: {e}")
         import traceback
         traceback.print_exc()
         return {"actions": [{"action": "API_ERROR", "error": f"Exception occurred during model generation: {str(e)}"}], "memory_rules": playbook_rules_applied if 'playbook_rules_applied' in locals() else []}
@@ -1046,5 +1051,5 @@ If the element truly cannot be found, return:
         import json
         return json.loads(response_text)
     except Exception as e:
-        print(f"Error in rescue_element_with_gemini: {e}")
+        logging.info(f"Error in rescue_element_with_gemini: {e}")
         return {"status": "FAILED", "reason": str(e)}
