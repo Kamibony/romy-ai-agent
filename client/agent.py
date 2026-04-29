@@ -1,3 +1,4 @@
+import logger_setup
 import logging
 import base64
 import io
@@ -715,6 +716,7 @@ class DesktopEnvironment:
             element_id = 1
             # Filter generic control types to reduce noise
             target_types = ['ButtonControl', 'HyperlinkControl', 'TextControl', 'EditControl', 'MenuItemControl', 'ListItemControl', 'TabItemControl', 'DocumentControl', 'CheckBoxControl']
+            active_rect = active_window.BoundingRectangle if active_window else None
 
             for walk_result in auto.WalkTree(active_window, getChildren=lambda c: c.GetChildren(), includeTop=True, maxDepth=15):
                 if isinstance(walk_result, (tuple, list)):
@@ -733,8 +735,19 @@ class DesktopEnvironment:
 
                 if control_type in target_types:
                     try:
+                        # Prune if IsOffscreen
+                        if hasattr(control, 'IsOffscreen') and control.IsOffscreen:
+                            continue
+                    except Exception:
+                        pass
+                    try:
                         rect = control.BoundingRectangle
                         if rect and rect.width() > 0 and rect.height() > 0:
+                            # Prune if completely outside active window
+                            if active_rect:
+                                if rect.right <= active_rect.left or rect.left >= active_rect.right or rect.bottom <= active_rect.top or rect.top >= active_rect.bottom:
+                                    continue
+
                             center_x = rect.left + rect.width() // 2
                             center_y = rect.top + rect.height() // 2
 
@@ -790,21 +803,46 @@ class DesktopEnvironment:
 
         return ui_elements, memory_map, window_name, clipboard_status
 
-    async def click(self, x: int, y: int, dpr: float = 1.0):
-        await self._submit_task(self._sync_click, x, y, dpr)
+    async def click(self, x: int, y: int, dpr: float = 1.0, target_id: Optional[str] = None):
+        await self._submit_task(self._sync_click, x, y, dpr, target_id)
 
-    def _sync_click(self, x, y, dpr=1.0):
+    def _sync_click(self, x, y, dpr=1.0, target_id=None):
         try:
-            x, y = int(x * dpr), int(y * dpr)
-            if config.STEALTH_MODE:
-                duration = random.uniform(0.15, 0.45)
-                # Use a basic tween if available, otherwise default
-                tween = pyautogui.easeInOutQuad if hasattr(pyautogui, 'easeInOutQuad') else pyautogui.linear
-                pyautogui.moveTo(x, y, duration=duration, tween=tween)
-                time.sleep(random.uniform(0.05, 0.15))
-            else:
-                pyautogui.moveTo(x, y, duration=0.2)
-            pyautogui.click()
+            # 1. Attempt Native COM click if target_id is provided
+            click_success = False
+            if target_id and target_id in self.native_controls:
+                try:
+                    control = self.native_controls[target_id]
+                    import uiautomation as auto
+                    # Different controls have different patterns. Let's try InvokePattern, TogglePattern, or a generic click if it has it.
+                    if hasattr(control, 'Invoke') and callable(control.Invoke):
+                        control.Invoke()
+                        click_success = True
+                    elif hasattr(control, 'Toggle') and callable(control.Toggle):
+                        control.Toggle()
+                        click_success = True
+                    elif hasattr(control, 'Click') and callable(control.Click):
+                        control.Click()
+                        click_success = True
+
+                    if click_success:
+                        logging.info(f"Successfully performed Native COM click on target {target_id}")
+                except Exception as e:
+                    logging.warning(f"Native COM click failed for target {target_id}: {e}")
+
+            # 2. Defense-in-depth: Fallback to physical coordinates if native click failed
+            if not click_success:
+                logging.info(f"Using coordinate-based physical click fallback at ({x}, {y})")
+                x, y = int(x * dpr), int(y * dpr)
+                if config.STEALTH_MODE:
+                    duration = random.uniform(0.15, 0.45)
+                    # Use a basic tween if available, otherwise default
+                    tween = pyautogui.easeInOutQuad if hasattr(pyautogui, 'easeInOutQuad') else pyautogui.linear
+                    pyautogui.moveTo(x, y, duration=duration, tween=tween)
+                    time.sleep(random.uniform(0.05, 0.15))
+                else:
+                    pyautogui.moveTo(x, y, duration=0.2)
+                pyautogui.click()
         except Exception as e:
             logging.error(f"Error clicking at ({x}, {y}): {e}")
 
@@ -1769,7 +1807,7 @@ class AgentStateMachine:
                     validated_actions.append({
                         "action": "ERROR",
                         "error": f"Invalid action payload generated by AI: {error_reason}",
-                        "raw_response": json.dumps(act)
+                        "raw_response": json.dumps(act, ensure_ascii=False)
                     })
                 else:
                     validated_actions.append(act)
@@ -1814,7 +1852,7 @@ class AgentStateMachine:
         is_only_wait = len(actions) == 1 and str(actions[0].get("action")).upper() == "WAIT"
 
         # Fast-Fail to Memory (Action Hash Circuit Breaker)
-        current_actions_str = json.dumps(actions, sort_keys=True)
+        current_actions_str = json.dumps(actions, sort_keys=True, ensure_ascii=False)
         current_action_hash = hashlib.md5(current_actions_str.encode('utf-8')).hexdigest()
 
         if hasattr(self, 'previous_action_hash') and self.previous_action_hash == current_action_hash:
@@ -2085,9 +2123,12 @@ class AgentStateMachine:
 
                              if os.path.exists(app_path):
                                  import subprocess
+                                 import os as os_mod
                                  # Using subprocess.Popen instead of os.startfile to bypass OS shell completely
                                  # and prevent pyautogui dependency for launching
-                                 subprocess.Popen([app_path], shell=False)
+                                 env = os_mod.environ.copy()
+                                 env["PYTHONIOENCODING"] = "utf-8"
+                                 subprocess.Popen([app_path], shell=False, env=env, encoding='utf-8', errors='replace')
                              else:
                                  # Fallback
                                  os.startfile(app_name)
@@ -2118,7 +2159,7 @@ class AgentStateMachine:
                          if "target_id" in action_to_take:
                              target_id = str(action_to_take.get("target_id"))
                              el = getattr(self, "os_memory_map", {})[target_id]
-                             await desktop_env.click(el["center"]["x"], el["center"]["y"])
+                             await desktop_env.click(el["center"]["x"], el["center"]["y"], dpr=getattr(self, 'current_dpr', 1.0), target_id=target_id)
                          else:
                              await desktop_env.click(int(action_to_take["x"]), int(action_to_take["y"]), getattr(self, 'current_dpr', 1.0))
                      elif action_type == "TYPE":
@@ -2281,7 +2322,7 @@ class AgentStateMachine:
             dom_snippet = state_result.get("state", {}).get("ui_elements", [])
             # Convert UI elements back to string snippet for LLM
             import json
-            dom_str = json.dumps(dom_snippet)[:5000] # Limiting to 5000 chars to avoid massive context
+            dom_str = json.dumps(dom_snippet, ensure_ascii=False)[:5000] # Limiting to 5000 chars to avoid massive context
 
             # Call backend to rescue element
             import urllib.parse
@@ -3279,9 +3320,12 @@ def execute_voice_agent_loop() -> None:
 
                             if os.path.exists(app_path):
                                  import subprocess
+                                 import os as os_mod
                                  # Using subprocess.Popen instead of os.startfile to bypass OS shell completely
                                  # and prevent pyautogui dependency for launching
-                                 subprocess.Popen([app_path], shell=False)
+                                 env = os_mod.environ.copy()
+                                 env["PYTHONIOENCODING"] = "utf-8"
+                                 subprocess.Popen([app_path], shell=False, env=env, encoding='utf-8', errors='replace')
                             else:
                                  # Fallback
                                  os.startfile(app_name)
@@ -3489,18 +3533,18 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(HTTPStatus.OK)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"status": "ok"}).encode())
+                self.wfile.write(json.dumps({"status": "ok"}, ensure_ascii=False).encode('utf-8'))
             except json.JSONDecodeError:
                 self.send_response(HTTPStatus.BAD_REQUEST)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
+                self.wfile.write(json.dumps({"error": "Invalid JSON"}, ensure_ascii=False).encode('utf-8'))
             except Exception as e:
                 logging.error(f"Error handling /api/state: {e}")
                 self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode())
+                self.wfile.write(json.dumps({"error": str(e)}, ensure_ascii=False).encode('utf-8'))
         elif self.path == '/api/run_command':
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length)
@@ -3515,7 +3559,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                     self.send_response(HTTPStatus.BAD_REQUEST)
                     self.send_header('Content-type', 'application/json')
                     self.end_headers()
-                    self.wfile.write(json.dumps({"error": "Missing doc_id or command_text"}).encode())
+                    self.wfile.write(json.dumps({"error": "Missing doc_id or command_text"}, ensure_ascii=False).encode('utf-8'))
                     return
 
                 # Update status locally to pending immediately
@@ -3553,13 +3597,13 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(HTTPStatus.OK)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"status": "queued", "doc_id": doc_id}).encode())
+                self.wfile.write(json.dumps({"status": "queued", "doc_id": doc_id}, ensure_ascii=False).encode('utf-8'))
 
             except json.JSONDecodeError:
                 self.send_response(HTTPStatus.BAD_REQUEST)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
+                self.wfile.write(json.dumps({"error": "Invalid JSON"}, ensure_ascii=False).encode('utf-8'))
         elif self.path == '/api/human_guidance':
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length)
@@ -3575,7 +3619,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                     self.send_response(HTTPStatus.BAD_REQUEST)
                     self.send_header('Content-type', 'application/json')
                     self.end_headers()
-                    self.wfile.write(json.dumps({"error": "Validation failed", "details": ve.errors()}).encode())
+                    self.wfile.write(json.dumps({"error": "Validation failed", "details": ve.errors()}, ensure_ascii=False).encode('utf-8'))
                     return
 
                 type_of_guidance = validated_request.type
@@ -3650,19 +3694,19 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
-                self.wfile.write(json.dumps({"status": "ok"}).encode())
+                self.wfile.write(json.dumps({"status": "ok"}, ensure_ascii=False).encode('utf-8'))
                 return
             except json.JSONDecodeError:
                 self.send_response(HTTPStatus.BAD_REQUEST)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
+                self.wfile.write(json.dumps({"error": "Invalid JSON"}, ensure_ascii=False).encode('utf-8'))
             except Exception as e:
                 logging.error(f"Error processing human guidance: {e}")
                 self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode())
+                self.wfile.write(json.dumps({"error": str(e)}, ensure_ascii=False).encode('utf-8'))
 
         elif self.path == '/api/focus_tab':
             try:
@@ -3675,13 +3719,13 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(HTTPStatus.OK)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"status": "ok"}).encode())
+                self.wfile.write(json.dumps({"status": "ok"}, ensure_ascii=False).encode('utf-8'))
             except Exception as e:
                 logging.error(f"Error focusing tab: {e}")
                 self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode())
+                self.wfile.write(json.dumps({"error": str(e)}, ensure_ascii=False).encode('utf-8'))
         elif self.path == '/api/recording/start':
             RECORDING_MODE = True
             RECORDED_STEPS.clear()
@@ -3701,7 +3745,9 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                         "-pix_fmt", "yuv420p", output_filename
                     ]
                     # We don't block the agent loop
-                    BACKGROUND_RECORDER_PROCESS = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    env = os.environ.copy()
+                    env["PYTHONIOENCODING"] = "utf-8"
+                    BACKGROUND_RECORDER_PROCESS = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, encoding='utf-8', errors='replace')
                     logging.info(f"Background FFmpeg recording started: {output_filename}")
                 except Exception as e:
                     logging.error(f"Failed to start FFmpeg recording: {e}")
@@ -3710,7 +3756,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
-            self.wfile.write(json.dumps({"status": "recording_started"}).encode())
+            self.wfile.write(json.dumps({"status": "recording_started"}, ensure_ascii=False).encode('utf-8'))
         elif self.path == '/api/recording/stop':
             RECORDING_MODE = False
 
@@ -3732,7 +3778,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
-            self.wfile.write(json.dumps({"status": "recording_stopped"}).encode())
+            self.wfile.write(json.dumps({"status": "recording_stopped"}, ensure_ascii=False).encode('utf-8'))
         elif self.path == '/api/reset':
             # Handle clean state reset
             try:
@@ -3754,18 +3800,18 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(HTTPStatus.OK)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"status": "reset"}).encode())
+                self.wfile.write(json.dumps({"status": "reset"}, ensure_ascii=False).encode('utf-8'))
             except Exception as e:
                 logging.error(f"Error handling /api/reset: {e}")
                 self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode())
+                self.wfile.write(json.dumps({"error": str(e)}, ensure_ascii=False).encode('utf-8'))
         else:
             self.send_response(HTTPStatus.NOT_FOUND)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps({"error": "Not found"}).encode())
+            self.wfile.write(json.dumps({"error": "Not found"}, ensure_ascii=False).encode('utf-8'))
 
     def do_GET(self):
         global RECORDED_STEPS
@@ -3853,18 +3899,18 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
             if screenshot_base64 is not None:
                 response_data["screenshot"] = screenshot_base64
 
-            self.wfile.write(json.dumps(response_data).encode())
+            self.wfile.write(json.dumps(response_data, ensure_ascii=False).encode('utf-8'))
         elif parsed_path.path == '/api/recording/steps':
             self.send_response(HTTPStatus.OK)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
-            self.wfile.write(json.dumps({"steps": RECORDED_STEPS}).encode())
+            self.wfile.write(json.dumps({"steps": RECORDED_STEPS}, ensure_ascii=False).encode('utf-8'))
         elif parsed_path.path == '/api/ping':
             self.send_response(HTTPStatus.OK)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps({"status": "ok"}).encode())
+            self.wfile.write(json.dumps({"status": "ok"}, ensure_ascii=False).encode('utf-8'))
         elif parsed_path.path == '/api/bridge_status':
             try:
                 pass
@@ -3875,12 +3921,12 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(HTTPStatus.OK)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"status": "ok", "active_websocket": has_active_ws}).encode())
+                self.wfile.write(json.dumps({"status": "ok", "active_websocket": has_active_ws}, ensure_ascii=False).encode('utf-8'))
             except Exception as e:
                 self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode())
+                self.wfile.write(json.dumps({"error": str(e)}, ensure_ascii=False).encode('utf-8'))
         elif parsed_path.path == '/api/playbook_rules':
             # Extract domain and client_id from query params
             query_params = urllib.parse.parse_qs(parsed_path.query)
@@ -3891,14 +3937,14 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(HTTPStatus.BAD_REQUEST)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": "Missing domain parameter"}).encode())
+                self.wfile.write(json.dumps({"error": "Missing domain parameter"}, ensure_ascii=False).encode('utf-8'))
                 return
 
             if not CURRENT_TOKEN:
                 self.send_response(HTTPStatus.UNAUTHORIZED)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": "Not authenticated"}).encode())
+                self.wfile.write(json.dumps({"error": "Not authenticated"}, ensure_ascii=False).encode('utf-8'))
                 return
 
             backend_url = f"{config.PLAYBOOK_RULES_ENDPOINT}?domain={urllib.parse.quote(domain)}"
@@ -3923,7 +3969,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode())
+                self.wfile.write(json.dumps({"error": str(e)}, ensure_ascii=False).encode('utf-8'))
         else:
             # Try to serve static files from web/public
             import mimetypes
@@ -3949,7 +3995,7 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(HTTPStatus.FORBIDDEN)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": "Forbidden"}).encode())
+                self.wfile.write(json.dumps({"error": "Forbidden"}, ensure_ascii=False).encode('utf-8'))
                 return
 
             if os.path.exists(full_path) and os.path.isfile(full_path):
@@ -3969,12 +4015,12 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                     self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
                     self.send_header('Content-type', 'application/json')
                     self.end_headers()
-                    self.wfile.write(json.dumps({"error": str(e)}).encode())
+                    self.wfile.write(json.dumps({"error": str(e)}, ensure_ascii=False).encode('utf-8'))
             else:
                 self.send_response(HTTPStatus.NOT_FOUND)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": "Not found"}).encode())
+                self.wfile.write(json.dumps({"error": "Not found"}, ensure_ascii=False).encode('utf-8'))
 
 def execute_mission(mission_graph, doc_id):
     global LOCAL_STATUS, ACTIVE_DOC_ID, global_state_machine
