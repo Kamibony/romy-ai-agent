@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -121,10 +122,23 @@ origins = [
     "http://127.0.0.1:8764",
 ]
 
+# Dynamically construct CORS regex for authorized Chrome Extensions
+allowed_extension_ids = os.getenv("ALLOWED_EXTENSION_IDS", "").split(",")
+allowed_extension_ids = [eid.strip() for eid in allowed_extension_ids if eid.strip()]
+
+if allowed_extension_ids:
+    # Construct regex like "chrome-extension://(id1|id2|id3)"
+    # re.escape ensures special characters in IDs don't break the regex
+    extension_ids_pattern = "|".join([re.escape(eid) for eid in allowed_extension_ids])
+    allow_origin_regex = f"chrome-extension://({extension_ids_pattern})"
+else:
+    # Fallback to none if no IDs provided to maintain security by default
+    allow_origin_regex = None
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_origin_regex="chrome-extension://.*",
+    allow_origin_regex=allow_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
