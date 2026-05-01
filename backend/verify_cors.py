@@ -1,39 +1,46 @@
 import logging
-import re
+import os
 import sys
+from unittest.mock import patch
+
+# Mock environment variable for testing the verification script itself if needed
+os.environ["ALLOWED_EXTENSION_IDS"] = "abc123def456,ghi789jkl012"
 
 def verify_cors_fix():
+    logging.basicConfig(level=logging.INFO)
+
     with open('backend/main.py', 'r', encoding="utf-8") as f:
         content = f.read()
 
-    # Check that allow_origins=["*"] is GONE
+    # 1. Check that allow_origins=["*"] is GONE (if it ever was there)
     if 'allow_origins=["*"]' in content:
-        logging.info("❌ FAILED: allow_origins=['*'] still present in backend/main.py")
+        logging.error("❌ FAILED: allow_origins=['*'] still present in backend/main.py")
         sys.exit(1)
 
-    # Check for restricted origins list
+    # 2. Check for restricted origins list
     if 'origins = [' not in content:
-        logging.info("❌ FAILED: origins list not found in backend/main.py")
+        logging.error("❌ FAILED: origins list not found in backend/main.py")
         sys.exit(1)
 
-    # Check for specific trusted domains
-    trusted_domains = [
-        "https://romy-ai-agent.web.app",
-        "https://romy-ai-agent.firebaseapp.com",
-        "chrome-extension://.*"
+    # 3. Check for the new dynamic logic
+    dynamic_indicators = [
+        'os.getenv("ALLOWED_EXTENSION_IDS", "").split(",")',
+        'allow_origin_regex = f"chrome-extension://({extension_ids_pattern})"',
+        'allow_origin_regex = None',
+        're.escape(eid)'
     ]
 
-    for domain in trusted_domains:
-        if domain not in content:
-            logging.info(f"❌ FAILED: Trusted domain '{domain}' not found in backend/main.py")
+    for indicator in dynamic_indicators:
+        if indicator not in content:
+            logging.error(f"❌ FAILED: Dynamic CORS logic indicator '{indicator}' not found in backend/main.py")
             sys.exit(1)
 
-    # Check for allow_origin_regex
-    if 'allow_origin_regex="chrome-extension://.*"' not in content:
-        logging.info("❌ FAILED: allow_origin_regex not found or incorrect in backend/main.py")
+    # 4. Check that the generic wildcard regex is GONE
+    if 'allow_origin_regex="chrome-extension://.*"' in content:
+        logging.error("❌ FAILED: Generic 'chrome-extension://.*' regex still present in backend/main.py")
         sys.exit(1)
 
-    logging.info("✅ SUCCESS: CORS policy is restricted to trusted origins.")
+    logging.info("✅ SUCCESS: CORS policy is dynamically restricted to authorized extension IDs.")
 
 if __name__ == "__main__":
     verify_cors_fix()
