@@ -3652,7 +3652,16 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
             post_data = self.rfile.read(content_length)
 
             try:
-                data = json.loads(post_data.decode('utf-8'))
+                decoded_data = post_data.decode('utf-8')
+            except UnicodeDecodeError:
+                self.send_response(HTTPStatus.BAD_REQUEST)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Invalid payload encoding. Strict UTF-8 required."}, ensure_ascii=False).encode('utf-8'))
+                return
+
+            try:
+                data = json.loads(decoded_data)
                 global LATEST_STATE_PAYLOAD
                 LATEST_STATE_PAYLOAD = data
 
@@ -3676,7 +3685,16 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
             post_data = self.rfile.read(content_length)
 
             try:
-                data = json.loads(post_data.decode('utf-8'))
+                decoded_data = post_data.decode('utf-8')
+            except UnicodeDecodeError:
+                self.send_response(HTTPStatus.BAD_REQUEST)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Invalid payload encoding. Strict UTF-8 required."}, ensure_ascii=False).encode('utf-8'))
+                return
+
+            try:
+                data = json.loads(decoded_data)
                 doc_id = data.get("doc_id")
                 command_text = data.get("command_text", "")
                 client_context = data.get("client_context")
@@ -3735,7 +3753,16 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
             post_data = self.rfile.read(content_length)
 
             try:
-                raw_data = json.loads(post_data.decode('utf-8'))
+                decoded_data = post_data.decode('utf-8')
+            except UnicodeDecodeError:
+                self.send_response(HTTPStatus.BAD_REQUEST)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Invalid payload encoding. Strict UTF-8 required."}, ensure_ascii=False).encode('utf-8'))
+                return
+
+            try:
+                raw_data = json.loads(decoded_data)
 
                 # Strict Data Validation Layer via Pydantic
                 try:
