@@ -111,7 +111,7 @@ class DefaultFirebaseOptions {
     ),
     iosBundleId: String.fromEnvironment(
       'FIREBASE_IOS_BUNDLE_ID',
-      defaultValue: 'com.example.dashboard',
+      defaultValue: 'ai.romy.dashboard',
     ),
   );
 
@@ -138,7 +138,7 @@ class DefaultFirebaseOptions {
     ),
     iosBundleId: String.fromEnvironment(
       'FIREBASE_IOS_BUNDLE_ID',
-      defaultValue: 'com.example.dashboard',
+      defaultValue: 'ai.romy.dashboard',
     ),
   );
 
