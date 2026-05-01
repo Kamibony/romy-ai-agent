@@ -4,6 +4,10 @@ import re
 from pathlib import Path
 from dotenv import load_dotenv
 
+# Initialize structured logging first
+import logger_setup
+import logging
+
 # Load environment variables from the backend .env file
 try:
     backend_dir = Path(__file__).resolve().parent
@@ -405,7 +409,7 @@ async def get_dashboard_rules(client_id: Optional[str] = None, uid: str = Depend
         return {"status": "ok", "rules": []}
 
 @app.delete("/api/v1/memory/rules/{rule_id}")
-def delete_dashboard_rule(rule_id: str, client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token)):
+def delete_dashboard_rule(rule_id: str, client_id: Optional[str] = None, uid: str = Depends(verify_firebase_token), memory_repo: AbstractMemoryRepository = Depends(get_memory_repository)):
     """
     Endpoint for Dashboard to delete a memory rule from both ChromaDB and Firestore.
     """
@@ -415,7 +419,7 @@ def delete_dashboard_rule(rule_id: str, client_id: Optional[str] = None, uid: st
             detail="User license is not active.",
         )
 
-    success = delete_playbook_rule(rule_id, client_id=client_id)
+    success = memory_repo.delete_playbook_rule(rule_id, client_id=client_id)
     if success:
         return {"status": "ok"}
     else:
