@@ -8,7 +8,7 @@
 PRODUCT_NAME = dashboard
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.example.dashboard
+PRODUCT_BUNDLE_IDENTIFIER = ai.romy.dashboard
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 com.example. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 ai.romy. All rights reserved.
