@@ -207,6 +207,34 @@ def agent_worker_loop() -> None:
                 run_remote_agent_loop(doc_id, command_text, audio_b64, client_context)
             elif task_type == "voice":
                 execute_voice_agent_loop()
+            elif task_type == "mission_block":
+                doc_id = task.get("doc_id")
+                block_id = task.get("block_id")
+                command_text = task.get("command_text", "")
+                url = task.get("url", "")
+
+                # Execute single mission block synchronously
+                global global_state_machine, LOCAL_STATUS, ACTIVE_DOC_ID
+                ACTIVE_DOC_ID = doc_id
+
+                global_state_machine = AgentStateMachine(command_text, doc_id=doc_id, client_context="Mission Block")
+                global_state_machine.intent = "WEB"
+                try:
+                    global_state_machine.step()
+                except Exception as e:
+                    logging.error(f"Error in mission block {block_id}: {e}")
+                    global_state_machine.state = AgentState.ERROR
+
+                # Update task session status when done
+                firestore_update_document("task_sessions", doc_id, {
+                    "status": "block_completed",
+                    "block_outputs": {
+                        block_id: {
+                            f"{block_id}.status": global_state_machine.state.name,
+                            f"{block_id}.thread_history": getattr(global_state_machine, "thread_history", "")
+                        }
+                    }
+                })
 
             COMMAND_QUEUE.task_done()
         except queue.Empty:
@@ -297,7 +325,9 @@ def firestore_update_document(collection: str, doc_id: str, updates: Dict[str, A
         logging.error("Missing token, cannot update Firestore.")
         return
 
-    url = f"https://firestore.googleapis.com/v1/projects/romy-ai-agent/databases/(default)/documents/{collection}/{doc_id}"
+    import config
+    project_id = getattr(config, 'FIREBASE_PROJECT_ID', 'romy-ai-agent')
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/{collection}/{doc_id}"
 
     fields = {}
     update_mask = []
@@ -442,13 +472,106 @@ def set_agent_offline() -> None:
         logging.error(f"Failed to set agent offline status: {e}")
 
 def start_remote_listener() -> None:
-    """Starts a polling loop for pending remote commands using REST API in a background thread."""
+    """Starts polling loops for pending remote commands and mission blocks using REST API in background threads."""
     import threading
+
+    def _poll_sessions_loop():
+        # New loop: poll the "task_sessions" collection to listen for Mission blocks to execute
+        import config
+        project_id = getattr(config, 'FIREBASE_PROJECT_ID', 'romy-ai-agent')
+        logging.info("Started listening for mission blocks on Firestore task_sessions via REST polling.")
+        url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
+        session = get_resilient_session()
+
+        while True:
+            if not CURRENT_TOKEN or PAUSE_AGENT:
+                time.sleep(3)
+                continue
+
+            payload = {
+                "structuredQuery": {
+                    "from": [{"collectionId": "task_sessions"}],
+                    "where": {
+                        "fieldFilter": {
+                            "field": {"fieldPath": "status"},
+                            "op": "IN",
+                            "value": {
+                                "arrayValue": {
+                                    "values": [
+                                        {"stringValue": "executing_block"},
+                                        {"stringValue": "recording_start_requested"},
+                                        {"stringValue": "recording_stop_requested"}
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            headers = {"Authorization": f"Bearer {CURRENT_TOKEN}", "Content-Type": "application/json"}
+
+            try:
+                response = session.post(url, json=payload, headers=headers, timeout=10)
+                if response.status_code == 401:
+                    time.sleep(3)
+                    continue
+                if response.status_code == 200:
+                    results = response.json()
+                    for res in results:
+                        if "document" in res:
+                            doc = res["document"]
+                            doc_id = doc["name"].split("/")[-1]
+                            fields = doc.get("fields", {})
+                            status = fields.get("status", {}).get("stringValue")
+
+                            try:
+                                if status == "recording_start_requested":
+                                    # Use a combined doc_id tracking to avoid blocking same doc multiple times
+                                    tracking_id = f"{doc_id}_recording_start"
+                                    if tracking_id not in PROCESSED_DOC_IDS:
+                                        PROCESSED_DOC_IDS.add(tracking_id)
+                                        requests.post("http://127.0.0.1:8764/api/recording/start")
+                                        firestore_update_document("task_sessions", doc_id, {"status": "recording_started"})
+
+                                elif status == "recording_stop_requested":
+                                    tracking_id = f"{doc_id}_recording_stop"
+                                    if tracking_id not in PROCESSED_DOC_IDS:
+                                        PROCESSED_DOC_IDS.add(tracking_id)
+                                        requests.post("http://127.0.0.1:8764/api/recording/stop")
+                                        firestore_update_document("task_sessions", doc_id, {"status": "completed"})
+
+                                elif status == "executing_block":
+                                    current_block = fields.get("current_block", {}).get("mapValue", {}).get("fields", {})
+                                    if current_block:
+                                        block_id = current_block.get("block_id", {}).get("stringValue", "")
+                                        tracking_id = f"{doc_id}_{block_id}"
+
+                                        if tracking_id not in PROCESSED_DOC_IDS:
+                                            PROCESSED_DOC_IDS.add(tracking_id)
+                                            instruction = current_block.get("instruction", {}).get("stringValue", "")
+                                            url_val = current_block.get("url", {}).get("stringValue", "")
+
+                                            # Queue command to main agent loop
+                                            command_payload = {
+                                                "type": "mission_block",
+                                                "doc_id": doc_id,
+                                                "block_id": block_id,
+                                                "command_text": instruction,
+                                                "url": url_val
+                                            }
+                                            COMMAND_QUEUE.put(command_payload)
+                            except Exception as e:
+                                logging.error(f"Error handling task_session command {doc_id}: {e}")
+            except Exception as e:
+                pass
+            time.sleep(2)
 
     def _poll_loop():
         global _GLOBAL_SESSION
+        import config
+        project_id = getattr(config, 'FIREBASE_PROJECT_ID', 'romy-ai-agent')
         logging.info("Started listening for remote commands on Firestore via REST polling.")
-        url = "https://firestore.googleapis.com/v1/projects/romy-ai-agent/databases/(default)/documents:runQuery"
+        url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
 
         # Keep track of loops to periodically update online status
         loop_counter = 0
@@ -555,9 +678,12 @@ def start_remote_listener() -> None:
             sleep_time = min(3 * (2 ** max(0, error_count - 1)), 15) if error_count > 0 else 3
             time.sleep(sleep_time)
 
-    # Start the polling loop in a background thread
-    t = threading.Thread(target=_poll_loop, daemon=True)
-    t.start()
+    # Start the polling loops in background threads
+    t1 = threading.Thread(target=_poll_loop, daemon=True)
+    t1.start()
+
+    t2 = threading.Thread(target=_poll_sessions_loop, daemon=True)
+    t2.start()
 
 def handle_token_expiry():
     """Handles 401 Unauthorized by deleting the token and prompting for re-login."""
@@ -4021,110 +4147,6 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": "Not found"}, ensure_ascii=False).encode('utf-8'))
-
-def execute_mission(mission_graph, doc_id):
-    global LOCAL_STATUS, ACTIVE_DOC_ID, global_state_machine
-
-    LOCAL_STATUS[doc_id] = "executing_mission"
-    ACTIVE_DOC_ID = doc_id
-
-    execution_order = mission_graph.get("execution_order", [])
-    blocks = {b["block_id"]: b for b in mission_graph.get("blocks", [])}
-
-    context = {}
-
-    for idx, block_id in enumerate(execution_order):
-        block = blocks.get(block_id)
-        if not block:
-            continue
-
-        block_type = block.get("type")
-        inputs = block.get("inputs", {})
-
-        # Expose current action for UI visualization (Step X/Y)
-        try:
-            class DummyMachine:
-                pass
-            global_state_machine = DummyMachine()
-            global_state_machine.doc_id = doc_id
-            global_state_machine.state = AgentState.RUNNING
-            global_state_machine.sub_tasks = [f"Krok {idx+1}/{len(execution_order)}: {block_type} ({block_id})"]
-            global_state_machine.current_sub_task_index = 0
-            global_state_machine.intent = "WEB"
-            global_state_machine.any_subtask_failed = False
-        except Exception:
-            pass
-
-        # Resolve templates in inputs (loop through all matches)
-        resolved_inputs = {}
-        for k, v in inputs.items():
-            if isinstance(v, str):
-                import re
-                matches = re.findall(r"\{\{(.*?)\}\}", v)
-                for match in matches:
-                    v = v.replace(f"{{{{{match}}}}}", str(context.get(match, "")))
-            resolved_inputs[k] = v
-
-        if block_type == "AUTOMATION":
-            instruction = resolved_inputs.get("instruction", resolved_inputs.get("url", "Run SOP"))
-
-            global_state_machine = AgentStateMachine(instruction, doc_id=doc_id, client_context="Mission")
-            global_state_machine.intent = "WEB"
-
-            error_occurred = False
-            while global_state_machine.state not in [AgentState.TERMINATED, AgentState.ERROR, AgentState.SUSPENDED_HITL]:
-                try:
-                    # In MVP we might not have a full browser session, so we guard step()
-                    global_state_machine.step()
-                except Exception as e:
-                    import logging
-                    logging.error(f"Error in automation block {block_id}: {e}")
-                    global_state_machine.state = AgentState.ERROR
-                    error_occurred = True
-                    break
-
-            if global_state_machine.state == AgentState.ERROR or error_occurred:
-                LOCAL_STATUS[doc_id] = "failed"
-                logging.error(f"Mission aborted: Automation block {block_id} failed.")
-                return # GRACEFUL ABORT
-
-            # Simple context extraction - grab the thread history or a known state
-            thread_history = getattr(global_state_machine, "thread_history", "")
-            context[f"{block_id}.thread_history"] = thread_history
-            context[f"{block_id}.status"] = global_state_machine.state.name
-
-        elif block_type == "AI_LOGIC":
-            instruction = block.get("instruction", "")
-            raw_text = resolved_inputs.get("raw_text", "")
-
-            prompt = f"{instruction}\n\nData:\n{raw_text}"
-
-            try:
-                import sys
-                import os
-
-                # Try to use Gemini directly
-                import google.generativeai as genai
-                import config
-
-                if config.GEMINI_API_KEY:
-                    genai.configure(api_key=config.GEMINI_API_KEY)
-                    model = genai.GenerativeModel('gemini-2.5-flash')
-                    response = model.generate_content(prompt)
-                    context[f"{block_id}.output"] = response.text.strip()
-                else:
-                    context[f"{block_id}.output"] = "Error: GEMINI_API_KEY not found in config"
-                    LOCAL_STATUS[doc_id] = "failed"
-                    return # GRACEFUL ABORT
-
-            except Exception as e:
-                import logging
-                logging.error(f"Error in AI Logic block {block_id}: {e}")
-                context[f"{block_id}.output"] = f"Error: {e}"
-                LOCAL_STATUS[doc_id] = "failed"
-                return # GRACEFUL ABORT
-
-    LOCAL_STATUS[doc_id] = "completed"
 
 def start_local_api(port=8764):
     """Starts the local API server in a daemon thread."""

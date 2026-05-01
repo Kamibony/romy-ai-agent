@@ -22,3 +22,4 @@ PLAYBOOK_RULES_ENDPOINT = f"{BACKEND_BASE_URL}/api/playbook_rules"
 
 # Firebase Configuration
 FIREBASE_API_KEY = os.environ.get("FIREBASE_API_KEY")
+FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "romy-ai-agent")
