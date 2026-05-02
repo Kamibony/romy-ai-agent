@@ -2550,6 +2550,10 @@ class AgentStateMachine:
                 prompt_text = ""
                 image_to_send = ""
 
+                # Detect if the failed intent was an observation (extraction) intent
+                failed_intent = self.sub_tasks[self.current_sub_task_index]
+                is_extraction = any(kw in failed_intent.lower() for kw in ["find", "read", "extract", "get", "verify"])
+
                 if intersecting_boxes:
                     intersecting_boxes.sort(key=lambda item: item["area"])
                     target_box = intersecting_boxes[0]["el"]
@@ -2559,7 +2563,9 @@ class AgentStateMachine:
                     prompt_text = (f"The human operator intervened and clicked on SoM Box ID [{target_id}]. "
                                    f"You failed to execute this step correctly in the previous iteration. "
                                    f"Analyze the visual features and semantic context of Box [{target_id}] "
-                                   f"and generate a universal visual rule for the Playbook.")
+                                   f"and generate a universal visual rule for the Playbook. ")
+                    if is_extraction:
+                        prompt_text += "Since the intent was to find or read data, the rule MUST explicitly instruct the agent to use the EXTRACT_DATA action on this element, not CLICK or TYPE."
                     image_to_send_bytes = getattr(self, "current_annotated_screenshot", self.current_clean_screenshot)
                     image_to_send = base64.b64encode(image_to_send_bytes).decode('utf-8') if image_to_send_bytes else ""
                 else:
@@ -2567,7 +2573,9 @@ class AgentStateMachine:
                     prompt_text = (f"The human operator intervened and clicked exactly at coordinates (X: {css_x}, Y: {css_y}). "
                                    f"There was no numbered SoM box at this location (AOM failure). "
                                    f"Analyze the raw visual area inside the green crosshair I have drawn at those coordinates "
-                                   f"and generate a universal visual rule for the Playbook.")
+                                   f"and generate a universal visual rule for the Playbook. ")
+                    if is_extraction:
+                        prompt_text += "Since the intent was to find or read data, the rule MUST explicitly instruct the agent to use the EXTRACT_DATA action on these coordinates, not CLICK or TYPE."
                     # HITL click coordinates are CSS, image is Physical
                     current_dpr = getattr(self, "current_dpr", 1.0)
                     phys_x = int(css_x * current_dpr)
@@ -2608,22 +2616,26 @@ class AgentStateMachine:
                     logging.error(f"Error calling Synthesizer API: {e}")
 
                 try:
-                    if self.intent == "WEB":
-                        logging.info(f"Executing HITL Ghost Click natively via Bridge at ({css_x}, {css_y})")
-                        exec_payload = {
-                            "action_type": "EXECUTE_ACTION",
-                            "action": {
-                                "action": "CLICK",
-                                "coordinates": [css_x, css_y]
-                            },
-                            "iteration": self.iteration
-                        }
-                        exec_result = bridge.delegate_command(exec_payload)
-                        if not exec_result.get("success"):
-                            logging.error(f"Failed to execute Bridge click for HITL: {exec_result.get('error')}")
+                    if is_extraction:
+                        logging.info("Intent was observation (EXTRACT_DATA); skipping physical execution of Ghost Click.")
+                        self.command_text += f"\n[System Note: Human Operator indicated the data to observe is at ({css_x}, {css_y}). A rule has been added to memory.]"
                     else:
-                        logging.info(f"Executing HITL Ghost Click natively via DesktopEnv at ({css_x}, {css_y})")
-                        await desktop_env.click(int(css_x), int(css_y))
+                        if self.intent == "WEB":
+                            logging.info(f"Executing HITL Ghost Click natively via Bridge at ({css_x}, {css_y})")
+                            exec_payload = {
+                                "action_type": "EXECUTE_ACTION",
+                                "action": {
+                                    "action": "CLICK",
+                                    "coordinates": [css_x, css_y]
+                                },
+                                "iteration": self.iteration
+                            }
+                            exec_result = bridge.delegate_command(exec_payload)
+                            if not exec_result.get("success"):
+                                logging.error(f"Failed to execute Bridge click for HITL: {exec_result.get('error')}")
+                        else:
+                            logging.info(f"Executing HITL Ghost Click natively via DesktopEnv at ({css_x}, {css_y})")
+                            await desktop_env.click(int(css_x), int(css_y))
                 except Exception as e:
                     logging.error(f"Failed to execute click for HITL: {e}")
             else:

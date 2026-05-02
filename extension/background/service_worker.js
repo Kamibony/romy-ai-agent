@@ -35,6 +35,7 @@ let reconnectTimeout = null;
 let reconnectAttempts = 0;
 let isConnecting = false;
 let heartbeatInterval = null;
+const MAX_RECONNECT_ATTEMPTS = 30;
 
 // Keep service worker alive dynamically
 chrome.alarms.create("keepAlive", { periodInMinutes: 0.5 });
@@ -172,6 +173,11 @@ function connectLocalBridge() {
             if (heartbeatInterval) clearInterval(heartbeatInterval);
             reconnectAttempts++;
 
+            if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+                console.error("Max WebSocket reconnect attempts reached. Agent is likely down. Stopping reconnects to allow SW to sleep.");
+                return;
+            }
+
             // Adjust backoff: initially fast retries, maxing out at 5 seconds to catch Python agent restarts quickly
             const backoff = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 5000);
             console.log(`WebSocket connection closed. Reconnecting in ${backoff}ms...`);
@@ -194,6 +200,12 @@ function connectLocalBridge() {
         isConnecting = false;
         console.error("Error setting up WebSocket:", e);
         reconnectAttempts++;
+
+        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+            console.error("Max WebSocket reconnect attempts reached. Agent is likely down. Stopping reconnects to allow SW to sleep.");
+            return;
+        }
+
         const backoff = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 5000);
         if (reconnectTimeout) clearTimeout(reconnectTimeout);
         reconnectTimeout = setTimeout(connectLocalBridge, backoff);
