@@ -2606,7 +2606,9 @@ class AgentStateMachine:
                     }
 
                     synth_url = config.SYNTHESIZE_PLAYBOOK_ENDPOINT
-                    response = authenticated_request("POST", synth_url, json=synth_payload, headers=headers)
+                    response = await asyncio.to_thread(
+                        authenticated_request, "POST", synth_url, json=synth_payload, headers=headers
+                    )
 
                     if response.ok:
                         logging.info("Synthesizer Agent successfully generated a new Playbook Rule!")
@@ -2663,7 +2665,9 @@ class AgentStateMachine:
                         }
 
                         synth_url = config.SYNTHESIZE_PLAYBOOK_ENDPOINT
-                        response = authenticated_request("POST", synth_url, json=synth_payload, headers=headers)
+                        response = await asyncio.to_thread(
+                            authenticated_request, "POST", synth_url, json=synth_payload, headers=headers
+                        )
                         if response.ok:
                             logging.info("Synthesizer Agent successfully generated a new Playbook Rule for semantic guidance!")
                         else:
@@ -3895,27 +3899,81 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
             RECORDING_MODE = True
             RECORDED_STEPS.clear()
 
-            # Start FFmpeg background recording logic
-            if BACKGROUND_RECORDER_PROCESS is None:
-                try:
+            # Start mss + FFmpeg background recording logic
+            if getattr(self, "_recording_thread", None) is None:
+                def recording_loop():
+                    global BACKGROUND_RECORDER_PROCESS, RECORDING_MODE
                     import subprocess
-                    # Using absolute path for ffmpeg if available or rely on system PATH
-                    # Record the entire screen (assuming Windows for direct dshow, modify if cross-platform is needed)
-                    # Use a unique filename
+                    from PIL import Image, ImageDraw, ImageFont
+                    import mss
+                    import io
+                    import time
+
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     output_filename = f"ROMY_MISSION_RECORDING_{timestamp}.mp4"
-                    cmd = [
-                        "ffmpeg", "-y", "-f", "gdigrab", "-framerate", "10",
-                        "-i", "desktop", "-c:v", "libx264", "-preset", "ultrafast",
-                        "-pix_fmt", "yuv420p", output_filename
-                    ]
-                    # We don't block the agent loop
-                    env = os.environ.copy()
-                    env["PYTHONIOENCODING"] = "utf-8"
-                    BACKGROUND_RECORDER_PROCESS = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, encoding='utf-8', errors='replace')
-                    logging.info(f"Background FFmpeg recording started: {output_filename}")
-                except Exception as e:
-                    logging.error(f"Failed to start FFmpeg recording: {e}")
+
+                    try:
+                        with mss.mss() as sct:
+                            monitor = sct.monitors[1]
+                            width, height = monitor["width"], monitor["height"]
+
+                            cmd = [
+                                "ffmpeg", "-y", "-f", "rawvideo", "-vcodec", "rawvideo",
+                                "-s", f"{width}x{height}", "-pix_fmt", "bgra", "-r", "10",
+                                "-i", "-", "-c:v", "libx264", "-preset", "ultrafast",
+                                "-pix_fmt", "yuv420p", output_filename
+                            ]
+
+                            env = os.environ.copy()
+                            env["PYTHONIOENCODING"] = "utf-8"
+                            BACKGROUND_RECORDER_PROCESS = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+                            logging.info(f"Background mss + FFmpeg recording started: {output_filename}")
+
+                            while RECORDING_MODE and BACKGROUND_RECORDER_PROCESS and BACKGROUND_RECORDER_PROCESS.poll() is None:
+                                screenshot = sct.grab(monitor)
+                                frame_bytes = screenshot.bgra
+
+                                # Add overlay
+                                if global_state_machine:
+                                    img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
+                                    draw = ImageDraw.Draw(img)
+                                    state_str = getattr(global_state_machine, "state", AgentState.INITIALIZING).name
+
+                                    # Simple overlay text
+                                    try:
+                                        # Use default font if custom font not available
+                                        font = ImageFont.load_default()
+                                        draw.text((50, 50), f"STATE: {state_str}", fill=(255, 0, 0), font=font)
+                                    except Exception as e:
+                                        pass
+
+                                    # Convert back to bgra
+                                    r, g, b = img.split()
+                                    a = Image.new("L", img.size, 255)
+                                    bgra_img = Image.merge("RGBA", (b, g, r, a))
+                                    frame_bytes = bgra_img.tobytes()
+
+                                BACKGROUND_RECORDER_PROCESS.stdin.write(frame_bytes)
+                                time.sleep(0.1)
+
+                    except Exception as e:
+                        logging.error(f"Error in recording loop: {e}")
+                    finally:
+                        if BACKGROUND_RECORDER_PROCESS and BACKGROUND_RECORDER_PROCESS.stdin:
+                            try:
+                                BACKGROUND_RECORDER_PROCESS.stdin.close()
+                            except:
+                                pass
+                        if BACKGROUND_RECORDER_PROCESS:
+                            try:
+                                BACKGROUND_RECORDER_PROCESS.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                BACKGROUND_RECORDER_PROCESS.kill()
+                            BACKGROUND_RECORDER_PROCESS = None
+
+                import threading
+                self._recording_thread = threading.Thread(target=recording_loop, daemon=True)
+                self._recording_thread.start()
 
             self.send_response(HTTPStatus.OK)
             self.send_header('Content-type', 'application/json')
@@ -3925,19 +3983,10 @@ class LocalAPIHandler(http.server.BaseHTTPRequestHandler):
         elif self.path == '/api/recording/stop':
             RECORDING_MODE = False
 
-            if BACKGROUND_RECORDER_PROCESS is not None:
-                try:
-                    import subprocess
-                    BACKGROUND_RECORDER_PROCESS.terminate()
-                    BACKGROUND_RECORDER_PROCESS.wait(timeout=5)
-                    logging.info("Background FFmpeg recording stopped gracefully.")
-                except subprocess.TimeoutExpired:
-                    BACKGROUND_RECORDER_PROCESS.kill()
-                    logging.warning("Background FFmpeg recording forcefully killed.")
-                except Exception as e:
-                    logging.error(f"Error stopping FFmpeg recording: {e}")
-                finally:
-                    BACKGROUND_RECORDER_PROCESS = None
+            if getattr(self, "_recording_thread", None) is not None:
+                self._recording_thread.join(timeout=5)
+                self._recording_thread = None
+                logging.info("Background mss + FFmpeg recording stopped gracefully.")
 
             self.send_response(HTTPStatus.OK)
             self.send_header('Content-type', 'application/json')
