@@ -89,6 +89,7 @@ class AgentState(Enum):
 
 ABORT_AGENT = False
 PAUSE_AGENT = False
+AGENT_WAKE_EVENT = threading.Event()
 ACTIVE_DOC_ID = None
 
 LOCAL_STATUS = {} # Dictionary to store local task statuses mapping doc_id to status
@@ -146,6 +147,7 @@ def toggle_pause() -> bool:
     """Toggles the pause state of the agent loops. Returns the new state."""
     global PAUSE_AGENT
     PAUSE_AGENT = not PAUSE_AGENT
+    AGENT_WAKE_EVENT.set()
     if PAUSE_AGENT:
         logging.info("Agent execution paused by user.")
     else:
@@ -246,6 +248,7 @@ def set_firebase_token(token: str) -> None:
     """Sets the global Firebase token."""
     global CURRENT_TOKEN
     CURRENT_TOKEN = token
+    AGENT_WAKE_EVENT.set()
 
 _GLOBAL_SESSION = None
 
@@ -485,7 +488,8 @@ def start_remote_listener() -> None:
 
         while True:
             if not CURRENT_TOKEN or PAUSE_AGENT:
-                time.sleep(3)
+                AGENT_WAKE_EVENT.wait(3)
+                AGENT_WAKE_EVENT.clear()
                 continue
 
             payload = {
@@ -513,7 +517,8 @@ def start_remote_listener() -> None:
             try:
                 response = session.post(url, json=payload, headers=headers, timeout=10)
                 if response.status_code == 401:
-                    time.sleep(3)
+                    AGENT_WAKE_EVENT.wait(3)
+                    AGENT_WAKE_EVENT.clear()
                     continue
                 if response.status_code == 200:
                     results = response.json()
@@ -564,7 +569,8 @@ def start_remote_listener() -> None:
                                 logging.error(f"Error handling task_session command {doc_id}: {e}")
             except Exception as e:
                 pass
-            time.sleep(2)
+            AGENT_WAKE_EVENT.wait(2)
+            AGENT_WAKE_EVENT.clear()
 
     def _poll_loop():
         global _GLOBAL_SESSION
@@ -580,11 +586,13 @@ def start_remote_listener() -> None:
 
         while True:
             if not CURRENT_TOKEN:
-                time.sleep(3)
+                AGENT_WAKE_EVENT.wait(3)
+                AGENT_WAKE_EVENT.clear()
                 continue
 
             if PAUSE_AGENT:
-                time.sleep(3)
+                AGENT_WAKE_EVENT.wait(3)
+                AGENT_WAKE_EVENT.clear()
                 continue
 
             loop_counter += 1
@@ -618,7 +626,8 @@ def start_remote_listener() -> None:
                 if response.status_code == 401:
                     logging.error("Unauthorized in start_remote_listener. Handling token expiry.")
                     handle_token_expiry()
-                    time.sleep(3)
+                    AGENT_WAKE_EVENT.wait(3)
+                    AGENT_WAKE_EVENT.clear()
                     continue
 
                 response.raise_for_status()
@@ -676,7 +685,8 @@ def start_remote_listener() -> None:
 
             # Dynamic backoff based on error count (max 15s)
             sleep_time = min(3 * (2 ** max(0, error_count - 1)), 15) if error_count > 0 else 3
-            time.sleep(sleep_time)
+            AGENT_WAKE_EVENT.wait(sleep_time)
+            AGENT_WAKE_EVENT.clear()
 
     # Start the polling loops in background threads
     t1 = threading.Thread(target=_poll_loop, daemon=True)
@@ -692,6 +702,7 @@ def handle_token_expiry():
 
     # Clear global token to stop polling loop
     CURRENT_TOKEN = None
+    AGENT_WAKE_EVENT.set()
 
     # 1. Delete token.json from local AppData
     local_app_data = os.environ.get("LOCALAPPDATA", "")
