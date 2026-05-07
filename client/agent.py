@@ -2185,13 +2185,20 @@ class AgentStateMachine:
                      self.command_text += f"\n[System Note: Last action {action_type} failed: {error_msg}]"
 
                      if action_type not in ["REPLY", "DONE", "SUB_TASK_COMPLETE"]:
-                         # Enter Self-Healing
-                         self.any_subtask_failed = True
-                         logging.info("Entering Phase 4: Self-Healing due to action failure.")
-                         self.failed_action = action_to_take
-                         self.failed_error = error_msg
-                         self.state = AgentState.SELF_HEALING
-                         return
+                         if exec_result.get("is_unsupported"):
+                             logging.warning(f"Action '{action_type}' is permanently unsupported by the extension. Bypassing Self-Healing.")
+                             self.any_subtask_failed = True
+                             self.help_reason = f"Action '{action_type}' is unsupported by the native extension."
+                             self.state = AgentState.SUSPENDED_HITL
+                             return
+                         else:
+                             # Enter Self-Healing
+                             self.any_subtask_failed = True
+                             logging.info("Entering Phase 4: Self-Healing due to action failure.")
+                             self.failed_action = action_to_take
+                             self.failed_error = error_msg
+                             self.state = AgentState.SELF_HEALING
+                             return
 
                      bail_out = True
                      break
@@ -2465,7 +2472,7 @@ class AgentStateMachine:
 
             import config
             global CURRENT_TOKEN
-            backend_url = f"{config.BACKEND_API_URL}/api/v1/agent/rescue"
+            backend_url = f"{config.BACKEND_BASE_URL}/api/v1/agent/rescue"
             headers = {
                 "Authorization": f"Bearer {CURRENT_TOKEN}",
                 "Content-Type": "application/json"
@@ -2495,7 +2502,7 @@ class AgentStateMachine:
                             "action": str(self.failed_action),
                             "rule": f"Element moved. Old selector: {failed_selector}. New selector: {new_selector}. Intent: {thought}"
                         }
-                        rule_url = f"{config.BACKEND_API_URL}/api/v1/playbook/rules"
+                        rule_url = f"{config.BACKEND_BASE_URL}/api/v1/playbook/rules"
                         await asyncio.to_thread(authenticated_request, "POST", rule_url, json=rule_payload, headers=headers, timeout=5)
                     except Exception as e:
                         logging.warning(f"Failed to save semantic recall rule to ChromaDB: {e}")

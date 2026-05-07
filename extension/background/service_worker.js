@@ -1418,9 +1418,12 @@ async function handleExecuteNativeAction(payload) {
             sendTelemetryLog(`Executing explicit WAIT for ${seconds} seconds...`);
             await new Promise(r => setTimeout(r, seconds * 1000));
             return { success: true };
+        } else if (['EXTRACT_DATA', 'SUB_TASK_COMPLETE', 'DONE', 'ASK_HUMAN', 'WAIT_FOR'].includes(actionType)) {
+            sendTelemetryLog(`Cognitive/Observation action acknowledged: ${actionType}`);
+            return { success: true };
         } else {
              sendTelemetryLog(`Unsupported native action type: ${actionType}`);
-             return { success: false, error: `Unsupported action type: ${actionType}` };
+             return { success: false, error: `Unsupported action type: ${actionType}`, is_unsupported: true };
         }
 
         // Trap A: Enforce Post-Action Stabilization to allow SPA DOM/Network to settle dynamically
