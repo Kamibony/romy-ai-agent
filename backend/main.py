@@ -55,8 +55,6 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"detail": "Internal Server Error. Please check the server logs."},
     )
 
-from typing import Optional, List, Dict, Any
-
 class AgentCommandRequest(BaseModel):
     ui_elements: List[Dict[str, Any]]
     raw_ui_elements: Optional[List[Dict[str, Any]]] = None
