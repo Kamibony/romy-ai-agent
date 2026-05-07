@@ -35,10 +35,21 @@ let reconnectTimeout = null;
 let reconnectAttempts = 0;
 let isConnecting = false;
 let heartbeatInterval = null;
-const MAX_RECONNECT_ATTEMPTS = 30;
 
-// Keep service worker alive dynamically
-chrome.alarms.create("keepAlive", { periodInMinutes: 0.5 });
+// Perpetual Independent Heartbeat to prevent MV3 Service Worker from sleeping
+setInterval(() => {
+    chrome.runtime.getPlatformInfo(() => {
+        const _ = chrome.runtime.lastError; // Suppress any error silently
+    });
+}, 20000);
+
+// Keep service worker alive dynamically (Safe Alarm Registration)
+chrome.alarms.get("keepAlive", (alarm) => {
+    if (!alarm) {
+        chrome.alarms.create("keepAlive", { periodInMinutes: 0.5 });
+    }
+});
+
 chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === "keepAlive") {
         if (!localBridgeWs || localBridgeWs.readyState !== WebSocket.OPEN) {
@@ -173,12 +184,7 @@ function connectLocalBridge() {
             if (heartbeatInterval) clearInterval(heartbeatInterval);
             reconnectAttempts++;
 
-            if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-                console.error("Max WebSocket reconnect attempts reached. Agent is likely down. Stopping reconnects to allow SW to sleep.");
-                return;
-            }
-
-            // Adjust backoff: initially fast retries, maxing out at 5 seconds to catch Python agent restarts quickly
+            // Infinite Capped Backoff
             const backoff = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 5000);
             console.log(`WebSocket connection closed. Reconnecting in ${backoff}ms...`);
             if (reconnectTimeout) clearTimeout(reconnectTimeout);
@@ -200,11 +206,6 @@ function connectLocalBridge() {
         isConnecting = false;
         console.error("Error setting up WebSocket:", e);
         reconnectAttempts++;
-
-        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-            console.error("Max WebSocket reconnect attempts reached. Agent is likely down. Stopping reconnects to allow SW to sleep.");
-            return;
-        }
 
         const backoff = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 5000);
         if (reconnectTimeout) clearTimeout(reconnectTimeout);
@@ -409,7 +410,7 @@ async function waitForTabStable(tabId, maxTimeoutMs = 10000) {
         const resolveSafe = (tId) => {
             chrome.tabs.get(tId, (t) => {
                 if (chrome.runtime.lastError) {
-                    // Ignore error on final resolve, just resolve null/undefined or current state if possible
+                    let _ = chrome.runtime.lastError;
                 }
                 resolve(t);
             });
@@ -918,11 +919,15 @@ async function handleExecuteNativeAction(payload) {
 
                     chrome.tabs.sendMessage(activeSessionTabId, { type: 'WAIT_FOR_STABILITY', debounceMs: 500, timeoutMs: 3000 }, (response) => {
                         if (isResolved) {
-                            let _ = chrome.runtime.lastError; // Suppress unchecked error warning
+                            if (chrome.runtime.lastError) {
+                                let _ = chrome.runtime.lastError;
+                            }
                             return;
                         }
                         cleanup();
-                        let _ = chrome.runtime.lastError; // ignore errors from sendMessage (e.g. if content script isn't fully ready or port closed)
+                        if (chrome.runtime.lastError) {
+                            let _ = chrome.runtime.lastError;
+                        }
                         resolve();
                     });
                 });
@@ -1445,7 +1450,9 @@ async function handleExecuteNativeAction(payload) {
 
                     chrome.tabs.sendMessage(activeSessionTabId, { type: 'WAIT_FOR_STABILITY', debounceMs: 500, timeoutMs: 5000 }, (response) => {
                         if (isResolved) {
-                            let _ = chrome.runtime.lastError; // Suppress unchecked error warning
+                            if (chrome.runtime.lastError) {
+                                let _ = chrome.runtime.lastError;
+                            }
                             return;
                         }
                         cleanup();
