@@ -1256,6 +1256,21 @@ def verify_action_natively(action, before_state, after_state):
     before_ui = before_state.get("ui_elements", []) or []
     after_ui = after_state.get("ui_elements", []) or []
 
+    # UNIVERSAL CONTEXT SHIFT DETECTION
+    # If the URL/Window changed, a context shift definitely occurred.
+    context_shifted = False
+    if before_url != after_url and after_url:
+        context_shifted = True
+
+    # If DOM/UI Tree changed significantly (e.g., elements appeared/disappeared)
+    before_ids = {el.get("target_id", el.get("id")) for el in before_ui if el.get("target_id", el.get("id"))}
+    after_ids = {el.get("target_id", el.get("id")) for el in after_ui if el.get("target_id", el.get("id"))}
+    before_names = {el.get("name") for el in before_ui if el.get("name")}
+    after_names = {el.get("name") for el in after_ui if el.get("name")}
+
+    if before_ids != after_ids or before_names != after_names:
+        context_shifted = True
+
     if action_type in ["NAVIGATE", "OPEN_TAB"]:
         if before_url != after_url and after_url:
             return {"success": True, "reason": "URL changed natively verified."}
@@ -1278,6 +1293,10 @@ def verify_action_natively(action, before_state, after_state):
         if not text_to_type:
             return {"success": True, "reason": "No text to verify, returning true."}
 
+        # If a context shift occurred (e.g. form submitted), assume typing was successful
+        if context_shifted:
+            return {"success": True, "reason": "Context shift detected after typing, natively verified."}
+
         # Check if typed text exists in the new UI elements natively
         for el in after_ui:
             # Check value or text attributes mapped by DOMSnapshot (Web) or Name (OS)
@@ -1291,25 +1310,14 @@ def verify_action_natively(action, before_state, after_state):
         return {"success": False, "reason": f"Text '{text_to_type}' not found natively in new state."}
 
     elif action_type == "CLICK":
-        # If URL (or Window Name) changed, click definitely did something
-        if before_url != after_url and after_url:
-            return {"success": True, "reason": "Context (URL/Window) changed after click natively verified."}
-
-        # If DOM/UI Tree changed significantly (e.g. elements appeared/disappeared)
-# Check by target_id as well
-        before_ids = {el.get("target_id", el.get("id")) for el in before_ui if el.get("target_id", el.get("id"))}
-        after_ids = {el.get("target_id", el.get("id")) for el in after_ui if el.get("target_id", el.get("id"))}
-
-        before_names = {el.get("name") for el in before_ui if el.get("name")}
-        after_names = {el.get("name") for el in after_ui if el.get("name")}
-
-        # If new elements appeared or old ones disappeared, the state changed
-        if before_ids != after_ids or before_names != after_names:
-             return {"success": True, "reason": "UI state changed after click natively verified."}
+        # If context shifted, click definitely did something
+        if context_shifted:
+            return {"success": True, "reason": "Context shifted after click natively verified."}
 
         # Soft verification for async transitions
         return {"success": True, "reason": "Click executed, assuming async state transition."}
 
+    # As per AGENTS.md / Memory: Include EXTRACT_DATA, WAIT_FOR, ASK_HUMAN, etc.
     elif action_type in ["RESET_VIEW", "SCROLL", "PRESS_ENTER", "PRESS", "PRESS_KEY", "HOVER", "REPLY", "LAUNCH_APP", "DRAG_AND_DROP", "EXECUTE_JS", "EXTRACT_DATA", "WAIT_FOR", "WAIT", "ASK_HUMAN", "SUB_TASK_COMPLETE", "DONE"]:
         return {"success": True, "reason": f"{action_type} natively verified as NON_VISUAL or inherently self-resolving."}
 
