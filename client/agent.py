@@ -1310,7 +1310,7 @@ def verify_action_natively(action, before_state, after_state):
         # Soft verification for async transitions
         return {"success": True, "reason": "Click executed, assuming async state transition."}
 
-    elif action_type in ["RESET_VIEW", "SCROLL", "PRESS_ENTER", "PRESS", "PRESS_KEY", "HOVER", "REPLY", "LAUNCH_APP", "DRAG_AND_DROP", "EXECUTE_JS"]:
+    elif action_type in ["RESET_VIEW", "SCROLL", "PRESS_ENTER", "PRESS", "PRESS_KEY", "HOVER", "REPLY", "LAUNCH_APP", "DRAG_AND_DROP", "EXECUTE_JS", "EXTRACT_DATA", "WAIT_FOR", "WAIT", "ASK_HUMAN", "SUB_TASK_COMPLETE", "DONE"]:
         return {"success": True, "reason": f"{action_type} natively verified as NON_VISUAL or inherently self-resolving."}
 
     # For other actions or complex semantic checks, return False to fallback to LLM Critic
@@ -2026,7 +2026,7 @@ class AgentStateMachine:
         bail_out = False
         has_mutated_state = False
         mutating_actions = {"CLICK", "TYPE", "PRESS", "PRESS_KEY", "PRESS_ENTER", "DRAG_AND_DROP", "SCROLL", "LAUNCH_APP", "EXECUTE_JS", "NAVIGATE", "OPEN_TAB"}
-        non_visual_actions = {"RESET_VIEW", "SCROLL", "PRESS_ENTER", "PRESS", "PRESS_KEY", "HOVER", "REPLY", "LAUNCH_APP", "DRAG_AND_DROP", "EXECUTE_JS"}
+        non_visual_actions = {"RESET_VIEW", "SCROLL", "PRESS_ENTER", "PRESS", "PRESS_KEY", "HOVER", "REPLY", "LAUNCH_APP", "DRAG_AND_DROP", "EXECUTE_JS", "EXTRACT_DATA", "WAIT_FOR", "WAIT", "ASK_HUMAN", "SUB_TASK_COMPLETE", "DONE"}
 
         # Look-Ahead Flagging
         has_mutating_action = any(str(act.get("action", "")).upper() in mutating_actions for act in self.actions_to_execute)
