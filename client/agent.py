@@ -1297,6 +1297,27 @@ def verify_action_natively(action, before_state, after_state):
         if context_shifted:
             return {"success": True, "reason": "Context shift detected after typing, natively verified."}
 
+        # Opaque Window Bypass (Focus Fallback check)
+        if action.get("_used_focus_fallback", False):
+            # Check if focus was retained - this is a rudimentary check to ensure we didn't crash
+            # Since we used fallback, getting here without exception is a "Soft Success"
+            logging.info("Opaque Window Bypass triggered: Focus Fallback used for TYPE action.")
+            return {"success": True, "reason": "Soft Success via Opaque Window Bypass (Focus Fallback). Semantic verification delegated to Critic."}
+
+        # If we have a specific target ID, check if it's an opaque class before general search
+        target_id = str(action.get("target_id", ""))
+
+        if target_id:
+            for el in after_ui:
+                el_id = str(el.get("target_id", el.get("id", "")))
+                if el_id == target_id:
+                    el_class = el.get("class_name", "") or ""
+                    # Check if the target element is an opaque window class (e.g., ConsoleWindowClass)
+                    if "consolewindowclass" in el_class.lower():
+                        logging.info(f"Opaque Window Bypass triggered: Target is opaque class ({el_class}).")
+                        return {"success": True, "reason": f"Soft Success via Opaque Window Bypass ({el_class}). Semantic verification delegated to Critic."}
+                    break
+
         # Check if typed text exists in the new UI elements natively
         for el in after_ui:
             # Check value or text attributes mapped by DOMSnapshot (Web) or Name (OS)
@@ -2325,19 +2346,54 @@ class AgentStateMachine:
                          elif "x" in action_to_take and "y" in action_to_take:
                              await desktop_env.type(int(action_to_take["x"]), int(action_to_take["y"]), text, action_to_take.get("submit", False), target_id=None, dpr=getattr(self, 'current_dpr', 1.0))
                          else:
-                             logging.info("TYPE action missing target_id and coordinates. Using Active Window Center Fallback.")
+                             logging.info("TYPE action missing target_id and coordinates or targeting root window. Using Global Keyboard Injection Fallback.")
+                             # Try to get active window and ensure it has focus before injecting
                              active_window = auto.GetForegroundControl()
+
                              if not active_window:
                                  active_window = auto.GetRootControl()
-                             rect = active_window.BoundingRectangle
-                             if rect and rect.width() > 0 and rect.height() > 0:
-                                 center_x = rect.left + rect.width() // 2
-                                 center_y = rect.top + rect.height() // 2
-                                 await desktop_env.type(center_x, center_y, text, action_to_take.get("submit", False), target_id=None, dpr=1.0)
-                             else:
-                                 logging.warning("Active Window Center Fallback failed (no bounding rectangle). Bailing out.")
+
+                             # Use pygetwindow to guarantee absolute focus
+                             focused = False
+                             try:
+                                 import pygetwindow as gw
+                                 import time
+
+                                 # We try to activate the window by its title if possible
+                                 # If UIA can get a localized name/title, try that
+                                 win_title = active_window.Name if active_window else None
+                                 if win_title:
+                                     windows = gw.getWindowsWithTitle(win_title)
+                                     if windows:
+                                         target_win = windows[0]
+                                         if not target_win.isActive:
+                                             target_win.activate()
+                                             time.sleep(0.5) # Give it a moment to gain focus
+                                         focused = True
+                             except Exception as e:
+                                 logging.warning(f"Failed to guarantee focus with pygetwindow: {e}")
+
+                             if not focused and active_window:
+                                 # Fallback to UIA SetFocus if pygetwindow failed (e.g. on Linux)
+                                 try:
+                                     active_window.SetFocus()
+                                     focused = True
+                                 except Exception as e:
+                                     logging.warning(f"Failed to set focus via UIA: {e}")
+
+                             if not focused:
+                                 logging.warning("Could not guarantee window focus. Aborting global keyboard injection to prevent unintended input.")
                                  bail_out = True
                                  break
+
+                             # Now inject the text using pyautogui
+                             import pyautogui
+                             pyautogui.write(text, interval=0.01)
+                             if action_to_take.get("submit", False):
+                                 pyautogui.press('enter')
+
+                             # Mark it so verify_action_natively knows we used the fallback
+                             action_to_take["_used_focus_fallback"] = True
                      elif action_type == "DRAG_AND_DROP":
                          start_x = action_to_take.get("start_x")
                          start_y = action_to_take.get("start_y")

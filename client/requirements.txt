@@ -10,3 +10,4 @@ plyer
 uiautomation
 websockets
 pydantic
+pygetwindow
