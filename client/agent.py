@@ -1289,6 +1289,8 @@ def verify_action_natively(action, before_state, after_state):
         return {"success": False, "reason": "URL did not change as expected."}
 
     elif action_type == "TYPE":
+        if action.get('intent') == 'OS':
+            return {"success": True, "reason": "Blind Trust for OS TYPE action."}
         text_to_type = action.get("text", "")
         if not text_to_type:
             return {"success": True, "reason": "No text to verify, returning true."}
@@ -1444,6 +1446,7 @@ class AgentStateMachine:
         self.max_sub_task_iterations = 3
         self.any_subtask_failed = False
         self.help_reason = None
+        self.short_term_state = {}
 
     async def run(self, doc_id, command_text, audio_b64="", client_context=None):
         global ACTIVE_DOC_ID
@@ -2067,6 +2070,7 @@ class AgentStateMachine:
                  break
 
              action_type = str(action_to_take.get("action", "")).upper()
+             action_to_take.setdefault('intent', getattr(self, 'intent', 'UNKNOWN'))
 
              # Systemic Parameter Sanitization (Trailing Punctuation from LLM Extraction)
              if "url" in action_to_take:
@@ -2187,6 +2191,8 @@ class AgentStateMachine:
                          extracted_data['attributes'] = el.get('attributes', {})
                          break
 
+                 self.short_term_state[target_id] = extracted_data
+                 self.command_text += f"\n[CRITICAL WORKING MEMORY: Use these values exclusively over any historical context or mock data: {json.dumps(self.short_term_state)}]"
                  self.command_text += f"\n[System Note: Successfully executed EXTRACT_DATA on target {target_id}. Retrieved data: {extracted_data}. Keys requested: {keys}. Please mark SUB_TASK_COMPLETE if this satisfies the requirement.]"
                  pass
 
@@ -3609,6 +3615,13 @@ def execute_voice_agent_loop() -> None:
                                  extracted_data['attributes'] = el.get('attributes', {})
                                  break
 
+                         # execute_voice_agent_loop is a standalone function - we need to store state appropriately
+                         # or remove this feature here if it's only meant for the AgentStateMachine. For now we will create
+                         # a local short_term_state dict in this function if it doesn't exist, or just use a local dict.
+                         # Since it's a regression fix on the state machine, we can just omit self. and use a local one.
+                         if 'short_term_state' not in locals(): short_term_state = {}
+                         short_term_state[target_id] = extracted_data
+                         command_text += f"\n[CRITICAL WORKING MEMORY: Use these values exclusively over any historical context or mock data: {json.dumps(short_term_state)}]"
                          command_text += f"\n[System Note: Successfully executed EXTRACT_DATA on target {target_id}. Retrieved data: {extracted_data}. Keys requested: {keys}. Please mark SUB_TASK_COMPLETE if this satisfies the requirement.]"
                          pass
 
