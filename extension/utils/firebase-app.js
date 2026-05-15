@@ -2310,21 +2310,26 @@ function extractHeartbeatsForHeader(heartbeatsCache, maxSize = MAX_HEADER_BYTES)
     // Heartbeats grouped by user agent in the standard format to be sent in
     // the header.
     const heartbeatsToSend = [];
-    // Single date format heartbeats that are not sent.
-    let unsentEntries = heartbeatsCache.slice();
-    for (const singleDateHeartbeat of heartbeatsCache) {
+    // A map to look up existing heartbeat entries by agent for faster access.
+    const heartbeatMap = new Map();
+    let i = 0;
+    for (; i < heartbeatsCache.length; i++) {
+        const singleDateHeartbeat = heartbeatsCache[i];
         // Look for an existing entry with the same user agent.
-        const heartbeatEntry = heartbeatsToSend.find(hb => hb.agent === singleDateHeartbeat.agent);
+        let heartbeatEntry = heartbeatMap.get(singleDateHeartbeat.agent);
         if (!heartbeatEntry) {
             // If no entry for this user agent exists, create one.
-            heartbeatsToSend.push({
+            heartbeatEntry = {
                 agent: singleDateHeartbeat.agent,
                 dates: [singleDateHeartbeat.date]
-            });
+            };
+            heartbeatsToSend.push(heartbeatEntry);
+            heartbeatMap.set(singleDateHeartbeat.agent, heartbeatEntry);
             if (countBytes(heartbeatsToSend) > maxSize) {
                 // If the header would exceed max size, remove the added heartbeat
                 // entry and stop adding to the header.
                 heartbeatsToSend.pop();
+                heartbeatMap.delete(singleDateHeartbeat.agent);
                 break;
             }
         }
@@ -2337,13 +2342,10 @@ function extractHeartbeatsForHeader(heartbeatsCache, maxSize = MAX_HEADER_BYTES)
                 break;
             }
         }
-        // Pop unsent entry from queue. (Skipped if adding the entry exceeded
-        // quota and the loop breaks early.)
-        unsentEntries = unsentEntries.slice(1);
     }
     return {
         heartbeatsToSend,
-        unsentEntries
+        unsentEntries: heartbeatsCache.slice(i)
     };
 }
 class HeartbeatStorageImpl {
