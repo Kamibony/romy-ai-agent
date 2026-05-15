@@ -2175,12 +2175,19 @@ class AgentStateMachine:
                  self.intent = "OS"
                  force_os = True
              elif action_type == "EXTRACT_DATA":
-                 # Handled silently as an observation, log it
-                 logging.info(f"Observation Action (EXTRACT_DATA): {action_to_take.get('keys', [])} from target {action_to_take.get('target_id', 'unknown')}")
-                 self.command_text += f"\n[System Note: Observed data via EXTRACT_DATA action: {action_to_take.get('keys', [])}]"
-                 # It doesn't mutate state physically, so we just acknowledge it and continue
-                 # For actual reading, it should ideally grab from current_ui_elements, but
-                 # the fact it was extracted is part of thought reasoning.
+                 # Extract data directly from current UI state and commit to semantic memory
+                 target_id = str(action_to_take.get('target_id', 'unknown'))
+                 keys = action_to_take.get('keys', [])
+                 logging.info(f"Observation Action (EXTRACT_DATA): {keys} from target {target_id}")
+
+                 extracted_data = {}
+                 for el in getattr(self, 'current_ui_elements', []):
+                     if str(el.get('target_id', el.get('id', ''))) == target_id:
+                         extracted_data['text'] = el.get('text', '')
+                         extracted_data['attributes'] = el.get('attributes', {})
+                         break
+
+                 self.command_text += f"\n[System Note: Successfully executed EXTRACT_DATA on target {target_id}. Retrieved data: {extracted_data}. Keys requested: {keys}. Please mark SUB_TASK_COMPLETE if this satisfies the requirement.]"
                  pass
 
              if action_type in ["NAVIGATE", "OPEN_TAB"]:
@@ -3590,10 +3597,19 @@ def execute_voice_agent_loop() -> None:
                             logging.error(f"Error executing click via PyAutoGUI: {click_e}.")
 
                     elif action_upper == "EXTRACT_DATA":
-                         # Handled silently as an observation, log it
-                         logging.info(f"Observation Action (EXTRACT_DATA): {act.get('keys', [])} from target {act.get('target_id', 'unknown')}")
-                         self.command_text += f"\n[System Note: Observed data via EXTRACT_DATA action: {act.get('keys', [])}]"
-                         # Voice loop handle
+                         # Extract data directly from current UI state and commit to semantic memory
+                         target_id = str(act.get('target_id', 'unknown'))
+                         keys = act.get('keys', [])
+                         logging.info(f"Observation Action (EXTRACT_DATA): {keys} from target {target_id}")
+
+                         extracted_data = {}
+                         for el in ui_elements:
+                             if str(el.get('target_id', el.get('id', ''))) == target_id:
+                                 extracted_data['text'] = el.get('text', '')
+                                 extracted_data['attributes'] = el.get('attributes', {})
+                                 break
+
+                         command_text += f"\n[System Note: Successfully executed EXTRACT_DATA on target {target_id}. Retrieved data: {extracted_data}. Keys requested: {keys}. Please mark SUB_TASK_COMPLETE if this satisfies the requirement.]"
                          pass
 
                     elif action_upper == "TYPE":
