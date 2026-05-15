@@ -136,12 +136,16 @@
 
             unsubscribeActivity = onSnapshot(q, (snapshot) => {
                 if (snapshot.empty) {
-                    activityFeed.innerHTML = '<p class="text-gray-400 italic text-center mt-4">No activity yet.</p>';
+                    activityFeed.innerHTML = '';
+                    const emptyMsg = document.createElement('p');
+                    emptyMsg.className = 'text-gray-400 italic text-center mt-4';
+                    emptyMsg.textContent = 'No activity yet.';
+                    activityFeed.appendChild(emptyMsg);
                     activeTaskId = null;
                     return;
                 }
 
-                let html = '';
+                const fragment = document.createDocumentFragment();
                 let firstTask = true;
                 snapshot.forEach((doc) => {
                     const data = doc.data();
@@ -176,24 +180,45 @@
                     if (status === "help_needed" || status === "AWAITING_HUMAN_INPUT") statusColor = "text-orange-600";
                     if (status === "pending") statusColor = "text-yellow-600";
 
-                    // Sanitize command text to prevent XSS
-                    const tempDiv = document.createElement('div');
-                    tempDiv.textContent = command;
-                    const sanitizedCommand = tempDiv.innerHTML;
+                    const container = document.createElement('div');
+                    container.className = 'border-b border-gray-100 pb-2 mb-2';
 
-                    let displayMessage = `Command: "${sanitizedCommand}"`;
+                    const timeSpan = document.createElement('span');
+                    timeSpan.className = 'font-semibold text-gray-500';
+                    timeSpan.textContent = time;
+                    container.appendChild(timeSpan);
+                    container.appendChild(document.createElement('br'));
+
+                    const commandText = document.createTextNode(`Command: "${command}"`);
+                    container.appendChild(commandText);
+
                     if (telemetryHistory[doc.id] && telemetryHistory[doc.id].length > 0) {
-                        let teleLogs = telemetryHistory[doc.id].map(t => {
-                            const tempTele = document.createElement('div');
-                            tempTele.textContent = t;
-                            return `<div class="mt-1 ml-2 border-l-2 border-indigo-200 pl-2 text-xs"><span class="text-indigo-600 font-bold">[Telemetry]</span> ${tempTele.innerHTML}</div>`;
-                        }).join('');
-                        displayMessage += teleLogs;
+                        telemetryHistory[doc.id].forEach(t => {
+                            const teleDiv = document.createElement('div');
+                            teleDiv.className = 'mt-1 ml-2 border-l-2 border-indigo-200 pl-2 text-xs';
+
+                            const teleLabel = document.createElement('span');
+                            teleLabel.className = 'text-indigo-600 font-bold';
+                            teleLabel.textContent = '[Telemetry] ';
+
+                            teleDiv.appendChild(teleLabel);
+                            teleDiv.appendChild(document.createTextNode(t));
+                            container.appendChild(teleDiv);
+                        });
                     }
 
-                    html += `<div class="border-b border-gray-100 pb-2 mb-2"><span class="font-semibold text-gray-500">${time}</span><br>${displayMessage}<br>Status: <span class="${statusColor} font-semibold">${status}</span></div>`;
+                    container.appendChild(document.createElement('br'));
+                    container.appendChild(document.createTextNode('Status: '));
+
+                    const statusSpan = document.createElement('span');
+                    statusSpan.className = `${statusColor} font-semibold`;
+                    statusSpan.textContent = status;
+                    container.appendChild(statusSpan);
+
+                    fragment.appendChild(container);
                 });
-                activityFeed.innerHTML = html;
+                activityFeed.innerHTML = '';
+                activityFeed.appendChild(fragment);
             }, (error) => {
                 console.warn("Firestore error on activity feed:", error);
             });
