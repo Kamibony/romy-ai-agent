@@ -2,14 +2,13 @@ import os
 import subprocess
 import shutil
 import sys
+import importlib.util
 
 def build():
     print("Building ROMY AI Agent Desktop Client...")
 
     # Ensure PyInstaller is installed
-    try:
-        import PyInstaller
-    except ImportError:
+    if importlib.util.find_spec("PyInstaller") is None:
         print("PyInstaller not found. Installing...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])
 
