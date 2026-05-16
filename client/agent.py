@@ -38,8 +38,8 @@ except:
 from scipy.io.wavfile import write as wav_write
 try:
     import pyautogui
-except:
-    pass
+except ImportError as e:
+    logging.warning(f"Could not import pyautogui: {e}")
 from plyer import notification
 try:
     import winsound
@@ -2400,7 +2400,6 @@ class AgentStateMachine:
                                  break
 
                              # Now inject the text using pyautogui
-                             import pyautogui
                              pyautogui.write(text, interval=0.01)
                              if action_to_take.get("submit", False):
                                  pyautogui.press('enter')
