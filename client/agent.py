@@ -1288,49 +1288,54 @@ def verify_action_natively(action, before_state, after_state):
 
         return {"success": False, "reason": "URL did not change as expected."}
 
-    elif action_type == "TYPE":
+    elif action_type in ["TYPE", "PRESS_KEY", "PRESS", "HOTKEY"]:
         if action.get('intent') == 'OS':
-            return {"success": True, "reason": "Blind Trust for OS TYPE action."}
-        text_to_type = action.get("text", "")
-        if not text_to_type:
-            return {"success": True, "reason": "No text to verify, returning true."}
+            return {"success": True, "reason": f"Blind Trust for OS {action_type} action."}
 
-        # If a context shift occurred (e.g. form submitted), assume typing was successful
-        if context_shifted:
-            return {"success": True, "reason": "Context shift detected after typing, natively verified."}
+        if action_type in ["PRESS_KEY", "PRESS", "HOTKEY"]:
+            pass # these fall through to the final check if not OS
 
-        # Opaque Window Bypass (Focus Fallback check)
-        if action.get("_used_focus_fallback", False):
-            # Check if focus was retained - this is a rudimentary check to ensure we didn't crash
-            # Since we used fallback, getting here without exception is a "Soft Success"
-            logging.info("Opaque Window Bypass triggered: Focus Fallback used for TYPE action.")
-            return {"success": True, "reason": "Soft Success via Opaque Window Bypass (Focus Fallback). Semantic verification delegated to Critic."}
+        elif action_type == "TYPE":
+            text_to_type = action.get("text", "")
+            if not text_to_type:
+                return {"success": True, "reason": "No text to verify, returning true."}
 
-        # If we have a specific target ID, check if it's an opaque class before general search
-        target_id = str(action.get("target_id", ""))
+            # If a context shift occurred (e.g. form submitted), assume typing was successful
+            if context_shifted:
+                return {"success": True, "reason": "Context shift detected after typing, natively verified."}
 
-        if target_id:
+            # Opaque Window Bypass (Focus Fallback check)
+            if action.get("_used_focus_fallback", False):
+                # Check if focus was retained - this is a rudimentary check to ensure we didn't crash
+                # Since we used fallback, getting here without exception is a "Soft Success"
+                logging.info("Opaque Window Bypass triggered: Focus Fallback used for TYPE action.")
+                return {"success": True, "reason": "Soft Success via Opaque Window Bypass (Focus Fallback). Semantic verification delegated to Critic."}
+
+            # If we have a specific target ID, check if it's an opaque class before general search
+            target_id = str(action.get("target_id", ""))
+
+            if target_id:
+                for el in after_ui:
+                    el_id = str(el.get("target_id", el.get("id", "")))
+                    if el_id == target_id:
+                        el_class = el.get("class_name", "") or ""
+                        # Check if the target element is an opaque window class (e.g., ConsoleWindowClass)
+                        if "consolewindowclass" in el_class.lower():
+                            logging.info(f"Opaque Window Bypass triggered: Target is opaque class ({el_class}).")
+                            return {"success": True, "reason": f"Soft Success via Opaque Window Bypass ({el_class}). Semantic verification delegated to Critic."}
+                        break
+
+            # Check if typed text exists in the new UI elements natively
             for el in after_ui:
-                el_id = str(el.get("target_id", el.get("id", "")))
-                if el_id == target_id:
-                    el_class = el.get("class_name", "") or ""
-                    # Check if the target element is an opaque window class (e.g., ConsoleWindowClass)
-                    if "consolewindowclass" in el_class.lower():
-                        logging.info(f"Opaque Window Bypass triggered: Target is opaque class ({el_class}).")
-                        return {"success": True, "reason": f"Soft Success via Opaque Window Bypass ({el_class}). Semantic verification delegated to Critic."}
-                    break
+                # Check value or text attributes mapped by DOMSnapshot (Web) or Name (OS)
+                el_text = el.get("text", "") or ""
+                el_value = el.get("attributes", {}).get("value", "") or ""
+                el_name = el.get("name", "") or "" # For OS elements
 
-        # Check if typed text exists in the new UI elements natively
-        for el in after_ui:
-            # Check value or text attributes mapped by DOMSnapshot (Web) or Name (OS)
-            el_text = el.get("text", "") or ""
-            el_value = el.get("attributes", {}).get("value", "") or ""
-            el_name = el.get("name", "") or "" # For OS elements
+                if text_to_type.lower() in str(el_text).lower() or text_to_type.lower() in str(el_value).lower() or text_to_type.lower() in str(el_name).lower():
+                    return {"success": True, "reason": f"Text '{text_to_type}' natively verified in state."}
 
-            if text_to_type.lower() in str(el_text).lower() or text_to_type.lower() in str(el_value).lower() or text_to_type.lower() in str(el_name).lower():
-                return {"success": True, "reason": f"Text '{text_to_type}' natively verified in state."}
-
-        return {"success": False, "reason": f"Text '{text_to_type}' not found natively in new state."}
+            return {"success": False, "reason": f"Text '{text_to_type}' not found natively in new state."}
 
     elif action_type == "CLICK":
         # If context shifted, click definitely did something
