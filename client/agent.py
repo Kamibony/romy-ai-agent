@@ -1730,6 +1730,16 @@ class AgentStateMachine:
                 logging.info(f"Native verification succeeded: {native_res.get('reason')}")
                 self.command_text += f"\n[System Note: Action {self.previous_action.get('action', 'UNKNOWN')} verified successfully natively: {native_res.get('reason')}]"
 
+                # If this is an OS intent and we used Blind Trust, short-circuit Sub-Task Evaluation
+                if getattr(self, "intent", "OS") == "OS" and "Blind Trust" in native_res.get("reason", ""):
+                    logging.info("OS Domain Blind Trust success detected. Short-circuiting sub-task evaluation to mark as COMPLETE.")
+                    self.command_text += f"\n[System Note: Sub-task '{current_sub_task}' auto-completed via OS Domain Blind Trust.]"
+                    self.current_sub_task_index += 1
+                    self.sub_task_iteration = 0
+                    self.previous_action = None
+                    self.history.clear()
+                    return
+
                 # Smart Circuit Breaker Reset
                 # If we natively verified a state change, we reset the iteration counter
                 # to prevent premature timeouts, but we do NOT force task completion.
@@ -3031,6 +3041,16 @@ def execute_voice_agent_loop() -> None:
                         if native_res.get("success"):
                             logging.info(f"Native verification succeeded: {native_res.get('reason')}")
                             command_text += f"\n[System Note: Action {previous_action.get('action', 'UNKNOWN')} verified successfully natively: {native_res.get('reason')}]"
+
+                            if intent == "OS" and "Blind Trust" in native_res.get("reason", ""):
+                                logging.info("OS Domain Blind Trust success detected in React loop. Short-circuiting sub-task evaluation.")
+                                command_text += f"\n[System Note: Sub-task '{current_sub_task}' auto-completed via OS Domain Blind Trust.]"
+                                sub_task_idx += 1
+                                sub_task_iteration = 0
+                                previous_action = None
+                                history.clear()
+                                break_outer = True
+                                break
                         else:
                             logging.info(f"Native verification didn't match: {native_res.get('reason')}")
 
