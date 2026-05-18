@@ -62,7 +62,9 @@ def run_process(name, cmd, cwd, color_code):
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
-            universal_newlines=True
+            universal_newlines=True,
+            encoding='utf-8',
+            errors='replace'
         )
         processes.append((name, process))
 
