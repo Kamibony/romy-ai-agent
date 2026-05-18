@@ -207,6 +207,13 @@ def agent_worker_loop() -> None:
                 audio_b64 = task.get("audio_b64", "")
                 client_context = task.get("client_context")
                 run_remote_agent_loop(doc_id, command_text, audio_b64, client_context)
+                # Check status before sending TERMINATED
+                try:
+                    doc = firestore_get_document("remote_commands", doc_id)
+                    if doc and doc.get("status") not in ["failed", "AWAITING_HUMAN_INPUT"]:
+                        firestore_update_document("remote_commands", doc_id, {"status": "TERMINATED"})
+                except Exception as e:
+                    logging.error(f"Failed to push TERMINATED status to remote_commands for doc_id {doc_id}: {e}")
             elif task_type == "voice":
                 execute_voice_agent_loop()
             elif task_type == "mission_block":
@@ -1487,6 +1494,10 @@ class AgentStateMachine:
                 if ABORT_AGENT:
                     logging.info("Emergency abort triggered. Stopping state machine.")
                     self.state = AgentState.TERMINATED
+                    try:
+                        await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {"status": "failed", "error": "Agent execution aborted"})
+                    except Exception as e:
+                        logging.error(f"Failed to update task status after abort: {e}")
                     break
                 if PAUSE_AGENT:
                     await asyncio.sleep(1)
@@ -1601,7 +1612,7 @@ class AgentStateMachine:
         if self.current_sub_task_index >= len(self.sub_tasks):
             logging.info("All sub-tasks completed.")
             self.state = AgentState.TERMINATED
-            await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {"status": "completed"})
+            await asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {"status": "TERMINATED"})
             return
 
         current_sub_task = self.sub_tasks[self.current_sub_task_index]
@@ -2097,7 +2108,7 @@ class AgentStateMachine:
                  logging.info(f"Terminal action {action_type} encountered. Concluding execution loop.")
                  self.state = AgentState.TERMINATED
                  try:
-                     asyncio.create_task(asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {"status": "completed"}))
+                     asyncio.create_task(asyncio.to_thread(firestore_update_document, "remote_commands", self.doc_id, {"status": "TERMINATED"}))
                  except:
                      pass
                  bail_out = True
@@ -2928,7 +2939,7 @@ def execute_voice_agent_loop() -> None:
             import uuid
             iteration = 0
             doc_id = f"voice_session_{uuid.uuid4().hex[:8]}"
-            final_status = "completed"
+            final_status = "TERMINATED"
 
             # Create or ensure the document exists
             try:
@@ -3298,7 +3309,7 @@ def execute_voice_agent_loop() -> None:
                     final_status = "failed"
                     break
 
-                if final_status != "completed":
+                if final_status != "TERMINATED":
                     break
 
             # Update final document status
@@ -3320,7 +3331,7 @@ def execute_voice_agent_loop() -> None:
         import uuid
         iteration = 0
         doc_id = f"voice_session_{uuid.uuid4().hex[:8]}"
-        final_status = "completed"
+        final_status = "TERMINATED"
 
         # Pre-flight Check
         logging.info("Running Pre-Flight check...")
