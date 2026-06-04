@@ -1,3 +1,37 @@
+
+// DEV LOG FORWARDING OVERRIDE
+(function() {
+    const originalLog = console.log;
+    const originalWarn = console.warn;
+    const originalError = console.error;
+
+    function forwardLog(type, args) {
+        try {
+            const message = Array.from(args).map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+            fetch('http://127.0.0.1:8765/log', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type: type, message: message, source: 'EXT' })
+            }).catch(e => {}); // Ignore network errors quietly
+        } catch (e) {}
+    }
+
+    console.log = function() {
+        forwardLog('INFO', arguments);
+        originalLog.apply(console, arguments);
+    };
+
+    console.warn = function() {
+        forwardLog('WARN', arguments);
+        originalWarn.apply(console, arguments);
+    };
+
+    console.error = function() {
+        forwardLog('ERROR', arguments);
+        originalError.apply(console, arguments);
+    };
+})();
+
 import { API_ENDPOINTS, API_CONFIG } from '../utils/api.js';
 import { MESSAGE_TYPES } from '../utils/message_types.js';
 import { getAuthToken } from '../utils/auth.js';

@@ -1,0 +1,7 @@
+textual
+rich
+typer
+playwright
+pytest
+aiohttp
+pyyaml
