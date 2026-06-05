@@ -1,0 +1,9 @@
+mission_id: "scenario_login_01"
+name: "E2E Login Test"
+blocks:
+  - block_id: "nav_and_login"
+    type: "AUTOMATION"
+    instruction: "Navigate to the mock login page and login with admin/admin."
+    inputs: {}
+    outputs: []
+execution_order: ["nav_and_login"]
