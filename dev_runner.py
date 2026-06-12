@@ -164,6 +164,7 @@ class MonorepoDashboardApp(App):
             self.backend_pane.write_log("Setup complete.")
 
         os.environ["LOCAL_DEV"] = "True"
+        os.environ["ROMY_TEST_MODE"] = "1"
 
         backend_python = get_python_cmd(BACKEND_VENV)
         client_python = get_python_cmd(CLIENT_VENV)
