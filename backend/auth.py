@@ -22,7 +22,7 @@ def verify_firebase_token(credentials: HTTPAuthorizationCredentials = Depends(se
     token = credentials.credentials
 
     # Bypass for local development
-    if token == "local-dev-token" and (os.environ.get("LOCAL_DEV") == "True" or os.environ.get("ROMY_TEST_MODE") == "1"):
+    if token in ["local-dev-token", "dummy_cli_user"] and (os.environ.get("LOCAL_DEV") == "True" or os.environ.get("ROMY_TEST_MODE") == "1"):
         return "local-dev-uid"
 
     try:
