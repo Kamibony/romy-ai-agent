@@ -10,10 +10,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'backend')))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-import firebase_admin
 sys.modules['firebase_admin'] = MagicMock()
 sys.modules['firebase_admin.credentials'] = MagicMock()
 sys.modules['firebase_admin.firestore'] = MagicMock()
+import firebase_admin
 import chromadb
 sys.modules['chromadb'] = MagicMock()
 
